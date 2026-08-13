@@ -156,7 +156,7 @@ available -> cancelled
 `pending` is the unbound queue state created for an ingress event. Routing may
 bind it directly when one agent matches, fan it out into multiple `available`
 items, or mark it `unhandled`. Each bound item stores its target agent, session
-id, input event cursor, and project generation before execution starts.
+id, input event cursor, and project revision before execution starts.
 
 The claim query does not pass an earlier non-terminal item in the same session.
 The input event cursor defines this order. A retry keeps the same queue item and
@@ -199,7 +199,7 @@ owner from conflicting history.
 
 A user can start a session with the packaged `zeta.master` agent or with a
 named authored agent. The master follows the normal authored-agent path. It
-does not bypass project generation, capability selection, prompt compilation,
+does not bypass project revision, capability selection, prompt compilation,
 or the attempt coordinator.
 
 A user message creates `session.message.requested` and a directly bound queue
@@ -214,7 +214,7 @@ It does not cancel another wait or create another queue item.
 
 The `sessions start` and `sessions send` CLI commands stop after this
 transaction. The `session.start` and `session.send` IPC methods do the same.
-They record the selected project generation before they queue the message. A
+They record the selected project revision before they queue the message. A
 client can disconnect after it receives `queued`. The normal worker owns the
 claim, attempt, retry, and completion.
 
@@ -290,7 +290,7 @@ transaction, the coordinator appends `runtime.wait.created` between
 
 The `waits` projection stores the active condition, exact top-level payload
 fields, optional absolute deadline, source session, agent, queue item, and
-project generation. One session may own one active wait. A second request is a
+project revision. One session may own one active wait. A second request is a
 permanent attempt failure and leaves the existing wait unchanged.
 
 Inspect active and terminal waits with:
@@ -309,7 +309,7 @@ Before a worker claims queue work, it expires one due deadline. Expiry appends
 `runtime.wait.timed_out` and a directly targeted queue item in one transaction.
 Matching and expiry both require an active row, so only one can win.
 
-The continuation uses the stored agent, session, and project generation. A
+The continuation uses the stored agent, session, and project revision. A
 matched continuation renders the agent prompt with the original event type and
 payload. A projection rebuild restores the terminal wait and continuation from
 the lifecycle facts.

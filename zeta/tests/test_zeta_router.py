@@ -34,7 +34,7 @@ def _route_from_vector(value: dict) -> AgentRoute:
         agent_id=value["agent_id"],
         accepts=tuple(EventPattern(pattern) for pattern in value["accepts"]),
         session=value.get("session", "per-event"),
-        project_generation=value.get("project_generation"),
+        project_revision=value.get("project_revision"),
     )
 
 
@@ -50,7 +50,7 @@ def test_event_router_matches_dispatch_route_vectors_in_declaration_order() -> N
                 "agent_id": decision.route.agent_id,
                 "queue_item_id": decision.queue_item.queue_item_id,
                 "session_id": decision.queue_item.session_id,
-                "project_generation": decision.queue_item.project_generation,
+                "project_revision": decision.queue_item.project_revision,
             }
             for decision in plan.decisions
         ]
@@ -90,7 +90,7 @@ def test_event_router_builds_deterministic_route_plan() -> None:
             AgentRoute(
                 "triage",
                 (EventPattern("github.issue.*"),),
-                project_generation="project:one",
+                project_revision="project:one",
             ),
             AgentRoute("release", (EventPattern("github.release.*"),)),
         )
@@ -101,7 +101,7 @@ def test_event_router_builds_deterministic_route_plan() -> None:
     assert plan.handled is True
     assert len(plan.decisions) == 1
     assert plan.decisions[0].queue_item.queue_item_id == "qi_evt_1_triage"
-    assert plan.decisions[0].queue_item.project_generation == "project:one"
+    assert plan.decisions[0].queue_item.project_revision == "project:one"
 
 
 def test_event_router_returns_unhandled_plan_without_side_effects() -> None:

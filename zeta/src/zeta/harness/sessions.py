@@ -85,7 +85,7 @@ def start_master_session(
     store: RuntimeEventStore,
     *,
     message: str,
-    project_generation: str,
+    project_revision: str,
     idempotency_key: str | None = None,
 ) -> dict[str, Any]:
     durable_key = (
@@ -96,7 +96,7 @@ def start_master_session(
         message=message,
         agent_id=MASTER_AGENT_ID,
         session_id=ids.claimed_session_id(),
-        project_generation=project_generation,
+        project_revision=project_revision,
         durable_key=durable_key,
     )
 
@@ -107,7 +107,7 @@ def submit_session_message(
     message: str,
     agent_id: str,
     session_id: str,
-    project_generation: str,
+    project_revision: str,
     idempotency_key: str | None = None,
 ) -> dict[str, Any]:
     """Store one addressed turn and its queue binding in one transaction."""
@@ -121,7 +121,7 @@ def submit_session_message(
         message=message,
         agent_id=agent_id,
         session_id=session_id,
-        project_generation=project_generation,
+        project_revision=project_revision,
         durable_key=durable_key,
     )
 
@@ -147,13 +147,13 @@ def _store_session_message(
     message: str,
     agent_id: str,
     session_id: str,
-    project_generation: str,
+    project_revision: str,
     durable_key: str | None,
 ) -> dict[str, Any]:
     if not message:
         raise ValueError("session message must not be empty")
-    if not agent_id or not session_id or not project_generation:
-        raise ValueError("agent, session, and project generation are required")
+    if not agent_id or not session_id or not project_revision:
+        raise ValueError("agent, session, and project revision are required")
     with store.transaction():
         requested = _existing_session_message(store, durable_key)
         if requested is None:
@@ -190,7 +190,7 @@ def _store_session_message(
                     "queue_item_id": queue_item_id,
                     "event_id": requested.id,
                     "target_agent": stored_agent_id,
-                    "project_generation": project_generation,
+                    "project_revision": project_revision,
                     "session_id": stored_session_id,
                     "status": "available",
                 },

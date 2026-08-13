@@ -4725,7 +4725,7 @@ def test_zeta_ipc_queues_and_queries_authored_sessions(tmp_path: Path) -> None:
         content_address="master",
     )
     snapshot = SimpleNamespace(
-        generation_id="generation-1",
+        revision_id="revision-1",
         project=SimpleNamespace(specs=(master,)),
         manifest={"generation": 1},
     )
@@ -4733,7 +4733,7 @@ def test_zeta_ipc_queues_and_queries_authored_sessions(tmp_path: Path) -> None:
         connection=None,
         session=session,
         dispatcher=harness_dispatch.QueueingDispatcher(event_store),
-        project_snapshot=cast(Any, snapshot),
+        project_revision=cast(Any, snapshot),
     )
     router = ipc_routes.build_ipc_router(client)
 
@@ -4804,7 +4804,7 @@ def test_zeta_ipc_reports_unknown_and_conflicting_sessions(tmp_path: Path) -> No
         for agent_id in ("agent-a", "agent-b", "zeta.master")
     )
     snapshot = SimpleNamespace(
-        generation_id="generation-1",
+        revision_id="revision-1",
         project=SimpleNamespace(specs=specs),
         manifest={"generation": 1},
     )
@@ -4841,7 +4841,7 @@ def test_zeta_ipc_reports_unknown_and_conflicting_sessions(tmp_path: Path) -> No
         connection=None,
         session=session,
         dispatcher=harness_dispatch.QueueingDispatcher(event_store),
-        project_snapshot=cast(Any, snapshot),
+        project_revision=cast(Any, snapshot),
     )
     router = ipc_routes.build_ipc_router(client)
 
@@ -5465,7 +5465,7 @@ def test_zeta_ipc_session_cancel_records_a_durable_request(tmp_path: Path) -> No
         message="Long task",
         agent_id="zeta.master",
         session_id="session-1",
-        project_generation="generation-1",
+        project_revision="revision-1",
     )
     requested = event_store.get(queued["event_id"])
     assert requested is not None
@@ -5514,7 +5514,7 @@ def test_zeta_ipc_session_cancel_survives_a_new_client(tmp_path: Path) -> None:
         message="Queued task",
         agent_id="zeta.master",
         session_id="session-1",
-        project_generation="generation-1",
+        project_revision="revision-1",
     )
     session = zeta_runtime_context.RuntimeContext(
         session_id="new-client",
@@ -7449,7 +7449,7 @@ def test_zeta_cli_cancel_handles_any_supported_resource(tmp_path: Path) -> None:
                 "fields": {"number": 7},
                 "deadline": None,
                 "source_queue_item_id": "qi-source",
-                "project_generation": "generation-1",
+                "project_revision": "revision-1",
             },
             idempotency_key="agent.wait:qi-source:0",
             session_id="session-1",
@@ -7460,7 +7460,7 @@ def test_zeta_cli_cancel_handles_any_supported_resource(tmp_path: Path) -> None:
         message="Cancel from the CLI",
         agent_id="zeta.master",
         session_id="session-2",
-        project_generation="generation-1",
+        project_revision="revision-1",
     )
     event_store.close()
 
@@ -7547,7 +7547,7 @@ def test_zeta_cli_waits_lists_active_waits(tmp_path: Path) -> None:
                 "fields": {"number": 7},
                 "deadline": None,
                 "source_queue_item_id": "qi-source",
-                "project_generation": "generation-1",
+                "project_revision": "revision-1",
             },
             idempotency_key="agent.wait:qi-source:0",
             session_id="session-1",
@@ -9085,7 +9085,7 @@ def test_zeta_local_runtime_run_once_resumes_a_due_wait(
                 "fields": {"issue": 5},
                 "deadline": "1970-01-01T00:00:02+00:00",
                 "source_queue_item_id": "qi-source",
-                "project_generation": None,
+                "project_revision": None,
             },
             idempotency_key="agent.wait:qi-source:0",
             caused_by="attempt-completed-1",

@@ -46,7 +46,7 @@ class EventRouter:
                         queue_item_id=ids.queue_item_id(event.id, route.agent_id),
                         event_id=event.id,
                         target_agent=route.agent_id,
-                        project_generation=route.project_generation,
+                        project_revision=route.project_revision,
                         session_id=agent_session_id(
                             route.agent_id,
                             route.session,

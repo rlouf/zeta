@@ -53,7 +53,7 @@ separate deferred-publication concern.
 The native crate currently exposes this host operation without a native worker
 loop. `zeta up` therefore means that the native process and control plane are
 ready; application requests return `runtime_not_available`. A later worker
-slice must construct `Scheduler` for the active project generation and call
+slice must construct `Scheduler` for the active project revision and call
 `tick` before deferred publications, wait timeouts, and queue claims, matching
 the existing Python worker order.
 

@@ -845,7 +845,7 @@ size, and collisions. This check tests correctness. It is not a security
 sandbox.
 
 The tool cannot change the current run's tool schema. Zeta activates the tool
-in the next project generation after the run succeeds. The owner agent gets
+in the next project revision after the run succeeds. The owner agent gets
 the tool automatically. The generation records the exact source, schema, and
 content object id.
 

@@ -64,7 +64,7 @@ pub struct QueueItem {
     pub(crate) id: QueueItemId,
     pub(crate) event_id: String,
     pub(crate) target_agent: String,
-    pub(crate) project_generation: Option<String>,
+    pub(crate) project_revision: Option<String>,
     pub(crate) session_id: Option<SessionId>,
     pub(crate) lock_keys: Vec<String>,
     pub(crate) input_cursor: u64,
@@ -96,9 +96,9 @@ impl QueueItem {
         &self.target_agent
     }
 
-    /// Returns the authored project generation selected during routing.
-    pub fn project_generation(&self) -> Option<&str> {
-        self.project_generation.as_deref()
+    /// Returns the authored project revision selected during routing.
+    pub fn project_revision(&self) -> Option<&str> {
+        self.project_revision.as_deref()
     }
 
     /// Returns the session resolved before execution.
@@ -183,7 +183,7 @@ pub struct Attempt {
     pub(crate) error: Option<String>,
     pub(crate) session_id: Option<SessionId>,
     pub(crate) run_id: Option<RunId>,
-    pub(crate) project_generation: Option<String>,
+    pub(crate) project_revision: Option<String>,
 }
 
 impl Attempt {
@@ -247,9 +247,9 @@ impl Attempt {
         self.run_id.as_ref()
     }
 
-    /// Returns the authored project generation selected during routing.
-    pub fn project_generation(&self) -> Option<&str> {
-        self.project_generation.as_deref()
+    /// Returns the authored project revision selected during routing.
+    pub fn project_revision(&self) -> Option<&str> {
+        self.project_revision.as_deref()
     }
 }
 
@@ -366,7 +366,7 @@ pub struct Wait {
     pub(crate) fields: Map<String, Value>,
     pub(crate) deadline_ms: Option<i64>,
     pub(crate) source_queue_item_id: QueueItemId,
-    pub(crate) project_generation: Option<String>,
+    pub(crate) project_revision: Option<String>,
     pub(crate) created_event_id: String,
     pub(crate) status: WaitStatus,
     pub(crate) matched_event_id: Option<String>,
@@ -410,9 +410,9 @@ impl Wait {
         &self.source_queue_item_id
     }
 
-    /// Returns the generation used for its continuation.
-    pub fn project_generation(&self) -> Option<&str> {
-        self.project_generation.as_deref()
+    /// Returns the revision used for its continuation.
+    pub fn project_revision(&self) -> Option<&str> {
+        self.project_revision.as_deref()
     }
 
     /// Returns the lifecycle fact that created the wait.
@@ -580,7 +580,7 @@ pub struct SessionMessageRequest {
     pub(crate) message: String,
     pub(crate) agent_id: String,
     pub(crate) session_id: SessionId,
-    pub(crate) project_generation: String,
+    pub(crate) project_revision: String,
     pub(crate) run_id: RunId,
     pub(crate) idempotency_key: Option<String>,
 }
@@ -591,14 +591,14 @@ impl SessionMessageRequest {
         message: impl Into<String>,
         agent_id: impl Into<String>,
         session_id: SessionId,
-        project_generation: impl Into<String>,
+        project_revision: impl Into<String>,
         run_id: RunId,
     ) -> Self {
         SessionMessageRequest {
             message: message.into(),
             agent_id: agent_id.into(),
             session_id,
-            project_generation: project_generation.into(),
+            project_revision: project_revision.into(),
             run_id,
             idempotency_key: None,
         }
@@ -625,9 +625,9 @@ impl SessionMessageRequest {
         &self.session_id
     }
 
-    /// Returns the authored generation used by the queued turn.
-    pub fn project_generation(&self) -> &str {
-        &self.project_generation
+    /// Returns the authored revision used by the queued turn.
+    pub fn project_revision(&self) -> &str {
+        &self.project_revision
     }
 
     /// Returns the public invocation identity reserved for this turn.

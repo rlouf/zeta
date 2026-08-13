@@ -14,7 +14,7 @@ from zeta.cli.rendering import (
 )
 from zeta.events import DraftEvent
 from zeta.harness import worker
-from zeta.harness.project import record_project_snapshot
+from zeta.harness.project import record_project_revision
 from zeta.harness.protocols import CancellationError
 from zeta.harness.sessions import (
     SessionNotFound,
@@ -68,16 +68,16 @@ def sessions_start(
         tool_registry=cli_tool_registry(),
     )
     try:
-        snapshot = runtime.project_snapshot
+        revision = runtime.project_revision
         session_owner_for_submission(
             {"agent_id": MASTER_AGENT_ID},
-            snapshot.project.specs,
+            revision.project.specs,
         )
-        record_project_snapshot(runtime.events, snapshot)
+        record_project_revision(runtime.events, revision)
         result = start_master_session(
             runtime.events,
             message=message,
-            project_generation=snapshot.generation_id,
+            project_revision=revision.revision_id,
             idempotency_key=idempotency_key,
         )
     except SessionOwnerUnavailable as error:
@@ -116,16 +116,16 @@ def sessions_send(
         tool_registry=cli_tool_registry(),
     )
     try:
-        snapshot = runtime.project_snapshot
+        revision = runtime.project_revision
         session = runtime.events.session_status(session_id)
-        agent_id = session_owner_for_submission(session, snapshot.project.specs)
-        record_project_snapshot(runtime.events, snapshot)
+        agent_id = session_owner_for_submission(session, revision.project.specs)
+        record_project_revision(runtime.events, revision)
         result = submit_session_message(
             runtime.events,
             message=message,
             agent_id=agent_id,
             session_id=session_id,
-            project_generation=snapshot.generation_id,
+            project_revision=revision.revision_id,
             idempotency_key=idempotency_key,
         )
     except (SessionNotFound, SessionOwnerConflict, SessionOwnerUnavailable) as error:

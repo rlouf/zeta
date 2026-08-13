@@ -101,7 +101,7 @@ class AgentDefinition:
     session: str = "per-event"
     lock_keys: tuple[str, ...] = ()
     retry_policy: RetryPolicy | None = None
-    project_generation: str | None = None
+    project_revision: str | None = None
     execution_manifest: Mapping[str, Any] | None = None
     tool_executor: ExecutorSpec = field(default_factory=ExecutorSpec)
     publishable_events: Mapping[str, dict[str, Any] | None] = field(
@@ -178,7 +178,7 @@ class AgentRoute:
     accepts: tuple[EventPattern, ...]
     session: str = "per-event"
     lock_keys: tuple[str, ...] = ()
-    project_generation: str | None = None
+    project_revision: str | None = None
 
     @classmethod
     def from_definition(cls, definition: AgentDefinition) -> AgentRoute:
@@ -187,7 +187,7 @@ class AgentRoute:
             accepts=definition.triggers,
             session=definition.session,
             lock_keys=definition.lock_keys,
-            project_generation=definition.project_generation,
+            project_revision=definition.project_revision,
         )
 
     def matches(self, event: Event) -> bool:
@@ -219,7 +219,7 @@ def compile_agent_definition(
     agent_loop: AgentLoop | None = None,
     event_registry: EventRegistry | None = None,
     structured_output: StructuredOutputRunner | None = None,
-    project_generation: str | None = None,
+    project_revision: str | None = None,
     execution_manifest: Mapping[str, Any] | None = None,
 ) -> ExecutableAgent:
     """Compile a single-accept spec into an in-process runtime agent."""
@@ -235,7 +235,7 @@ def compile_agent_definition(
         agent_loop=agent_loop,
         event_registry=event_registry,
         structured_output=structured_output,
-        project_generation=project_generation,
+        project_revision=project_revision,
         execution_manifest=execution_manifest,
     )[0]
 
@@ -249,7 +249,7 @@ def compile_agent_definitions(
     agent_loop: AgentLoop | None = None,
     event_registry: EventRegistry | None = None,
     structured_output: StructuredOutputRunner | None = None,
-    project_generation: str | None = None,
+    project_revision: str | None = None,
     execution_manifest: Mapping[str, Any] | None = None,
 ) -> list[ExecutableAgent]:
     """Compile one authored spec into runtime definitions for each accepted event."""
@@ -269,7 +269,7 @@ def compile_agent_definitions(
                 session=spec.session,
                 lock_keys=runtime_lock_keys(spec),
                 retry_policy=retry_policy_for_spec(spec),
-                project_generation=project_generation,
+                project_revision=project_revision,
                 execution_manifest=execution_manifest,
                 tool_executor=spec.executor,
                 publishable_events={

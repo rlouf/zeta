@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{BufRead as _, BufReader as StdBufReader};
+use std::io::{BufRead as _, BufReader as StdBufReader, Read as _};
 use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixListener as StdUnixListener;
 use std::path::{Path, PathBuf};
@@ -20,7 +20,7 @@ use zeta::runtime_services::{
 use zeta::{
     prepare_agent, CallbackDraftRecorder, CallbackObserver, CancellationToken, ExecutorSelection,
     InvocationInputs, LocalSocketConfig, LocalSocketServer, ProcessExecutor, ProcessLaunch,
-    ProjectGeneration, Scheduler, SystemClock, UuidIdSource,
+    Project, Scheduler, SystemClock, UuidIdSource,
 };
 use zeta_agent::{
     native_capabilities, resolve_capabilities, AgentInvocation, AgentRunResult, AgentRunner,
@@ -858,10 +858,10 @@ fn authored_project_routes_use_slug_order_and_exact_accepts() {
     assert_eq!(decisions[0].agent_id(), "alpha");
     assert_eq!(decisions[0].session_id().as_str(), "agent/alpha");
     assert_eq!(decisions[0].lock_keys(), ["repo:zeta"]);
-    let project_generation = manifest.id.to_string();
+    let project_revision = manifest.id.to_string();
     assert_eq!(
-        decisions[0].project_generation(),
-        Some(project_generation.as_str())
+        decisions[0].project_revision(),
+        Some(project_revision.as_str())
     );
 
     let literal_wildcard = Event {
@@ -1495,7 +1495,7 @@ fn lifecycle_cli_detaches_reports_status_and_stops_idempotently() {
         12
     );
     assert_eq!(report["schema"], "zeta.status");
-    assert_eq!(report["version"], 1);
+    assert_eq!(report["version"], 2);
     assert_eq!(report["status"], "running");
     assert!(report["pid"].is_number());
     assert_eq!(
@@ -1671,6 +1671,7 @@ impl ForegroundRuntime {
             .spawn()
             .expect("foreground up must start");
         let stdout = child.stdout.take().expect("up must expose readiness");
+        let mut stderr = child.stderr.take();
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
             let mut line = String::new();
@@ -1681,10 +1682,13 @@ impl ForegroundRuntime {
             .recv_timeout(Duration::from_secs(5))
             .expect("foreground up must become ready")
             .expect("foreground readiness must be readable");
-        assert!(
-            readiness == "Runtime is running.\n",
-            "unexpected readiness: {readiness:?}"
-        );
+        if readiness != "Runtime is running.\n" {
+            let mut diagnostic = String::new();
+            if let Some(stderr) = stderr.take() {
+                let _read = StdBufReader::new(stderr).read_to_string(&mut diagnostic);
+            }
+            panic!("unexpected readiness: {readiness:?}; stderr: {diagnostic}");
+        }
         Self { child }
     }
 
@@ -1717,10 +1721,13 @@ impl Drop for ForegroundRuntime {
 
 fn activate_lifecycle_project(project: &Path, state: &Path) {
     write_lifecycle_agent(project, "worker");
-    let generation = ProjectGeneration::load(project).expect("project generation must load");
+    let revision = Project::open(project)
+        .expect("project must open")
+        .revision()
+        .expect("project revision must load");
     let paths = RuntimePaths::new(state);
     let lease = RuntimeLease::acquire(paths.clone()).expect("project state lease");
-    generation
+    revision
         .write(paths.active_project())
         .expect("active project must write");
     drop(lease);

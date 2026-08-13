@@ -205,15 +205,15 @@ if [ "$SKILL_OID1" = "$SKILL_OID2" ] || [ "$TR1" = "$TR2" ]; then
   exit 1
 fi
 echo
-echo "Every project generation that ever ran is also journaled with the skill"
-echo "revision it pinned (runtime.project_snapshot.recorded):"
+echo "Every project revision that ever ran is also journaled with the skill"
+echo "revision it pinned (runtime.project_revision.recorded):"
 echo
-ZETA events list --type-prefix runtime.project_snapshot --json | PYRUN '
+ZETA events list --type-prefix runtime.project_revision --json | PYRUN '
 import json, sys
 for e in json.load(sys.stdin):
     p = e["payload"]
     skill = (p["manifest"].get("skills") or {}).get("triage-policy") or {}
-    gen = p["generation_id"][:28]
+    gen = p["revision_id"][:28]
     oid = skill.get("object_id", "?")
     print("  generation " + gen + "...  triage-policy " + oid)
 '

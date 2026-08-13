@@ -228,7 +228,7 @@ impl Dispatch {
                 error: None,
                 session_id: queue_item.session_id,
                 run_id: Some(run_id),
-                project_generation: queue_item.project_generation,
+                project_revision: queue_item.project_revision,
             },
             events,
         })
@@ -589,10 +589,10 @@ fn started_attempt_event(
         "worker_name".to_owned(),
         Value::String(fields.worker_name.to_owned()),
     );
-    if let Some(project_generation) = &queue_item.project_generation {
+    if let Some(project_revision) = &queue_item.project_revision {
         payload.insert(
-            "project_generation".to_owned(),
-            Value::String(project_generation.clone()),
+            "project_revision".to_owned(),
+            Value::String(project_revision.clone()),
         );
     }
     Event {
@@ -992,9 +992,9 @@ fn completion_control_event(
                 Value::String(queue_item.id.to_string()),
             );
             wait.insert(
-                "project_generation".to_owned(),
+                "project_revision".to_owned(),
                 queue_item
-                    .project_generation
+                    .project_revision
                     .as_ref()
                     .map(|value| Value::String(value.clone()))
                     .unwrap_or(Value::Null),
@@ -1237,10 +1237,10 @@ pub(super) fn attempt_payload(attempt: &Attempt, status: AttemptStatus) -> Map<S
     if let Some(worker_name) = &attempt.worker_name {
         payload.insert("worker_name".to_owned(), Value::String(worker_name.clone()));
     }
-    if let Some(project_generation) = &attempt.project_generation {
+    if let Some(project_revision) = &attempt.project_revision {
         payload.insert(
-            "project_generation".to_owned(),
-            Value::String(project_generation.clone()),
+            "project_revision".to_owned(),
+            Value::String(project_revision.clone()),
         );
     }
     payload
@@ -1272,16 +1272,16 @@ pub(super) fn index_attempt(connection: &Connection, event: &Event) -> Result<()
     let supplied_run_id =
         optional_payload_string(event, "run_id")?.or_else(|| event.run_id.clone());
     validate_optional_runtime_id(event, "run_id", supplied_run_id.as_deref())?;
-    let supplied_project_generation = optional_payload_string(event, "project_generation")?;
+    let supplied_project_revision = optional_payload_string(event, "project_revision")?;
     validate_optional_runtime_id(
         event,
-        "project_generation",
-        supplied_project_generation.as_deref(),
+        "project_revision",
+        supplied_project_revision.as_deref(),
     )?;
     let previous = connection
         .query_row(
             "SELECT queue_item_id, event_id, attempt_number, target_agent,
-                    status, started_at, session_id, run_id, project_generation
+                    status, started_at, session_id, run_id, project_revision
              FROM attempts WHERE attempt_id = ?1",
             params![attempt_id.as_str()],
             |row| {
@@ -1294,13 +1294,13 @@ pub(super) fn index_attempt(connection: &Connection, event: &Event) -> Result<()
                     started_at: row.get(5)?,
                     session_id: row.get(6)?,
                     run_id: row.get(7)?,
-                    project_generation: row.get(8)?,
+                    project_revision: row.get(8)?,
                 })
             },
         )
         .optional()
         .map_err(|error| database_error("read attempt transition", error))?;
-    let (previous_status, started_at, session_id, run_id, project_generation) = match previous {
+    let (previous_status, started_at, session_id, run_id, project_revision) = match previous {
         Some(previous) => {
             if previous.queue_item_id != queue_item_id.as_str()
                 || previous.event_id != input_event_id
@@ -1321,9 +1321,9 @@ pub(super) fn index_attempt(connection: &Connection, event: &Event) -> Result<()
                 || supplied_run_id
                     .as_deref()
                     .is_some_and(|value| Some(value) != previous.run_id.as_deref())
-                || supplied_project_generation
+                || supplied_project_revision
                     .as_deref()
-                    .is_some_and(|value| Some(value) != previous.project_generation.as_deref())
+                    .is_some_and(|value| Some(value) != previous.project_revision.as_deref())
             {
                 return Err(DispatchError::InvalidLifecycleEvent {
                     event_id: event.id.clone(),
@@ -1341,7 +1341,7 @@ pub(super) fn index_attempt(connection: &Connection, event: &Event) -> Result<()
                 previous.started_at,
                 previous.session_id,
                 previous.run_id,
-                previous.project_generation,
+                previous.project_revision,
             )
         }
         None => {
@@ -1356,7 +1356,7 @@ pub(super) fn index_attempt(connection: &Connection, event: &Event) -> Result<()
                 started_at,
                 supplied_session_id,
                 supplied_run_id,
-                supplied_project_generation,
+                supplied_project_revision,
             )
         }
     };
@@ -1387,7 +1387,7 @@ pub(super) fn index_attempt(connection: &Connection, event: &Event) -> Result<()
                 attempt_id, queue_item_id, event_id, attempt_number,
                 target_agent, worker_name, claim_token, status, started_at,
                 heartbeat_at, finished_at, error, session_id, run_id,
-                project_generation
+                project_revision
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
              ON CONFLICT(attempt_id) DO UPDATE SET
                 claim_token = CASE
@@ -1404,9 +1404,9 @@ pub(super) fn index_attempt(connection: &Connection, event: &Event) -> Result<()
                 error = excluded.error,
                 session_id = excluded.session_id,
                 run_id = excluded.run_id,
-                project_generation = COALESCE(
-                    excluded.project_generation,
-                    attempts.project_generation
+                project_revision = COALESCE(
+                    excluded.project_revision,
+                    attempts.project_revision
                 )",
             params![
                 attempt_id.as_str(),
@@ -1423,7 +1423,7 @@ pub(super) fn index_attempt(connection: &Connection, event: &Event) -> Result<()
                 error,
                 session_id,
                 run_id,
-                project_generation,
+                project_revision,
             ],
         )
         .map_err(|error| database_error("project attempt lifecycle", error))?;
@@ -1449,7 +1449,7 @@ struct StoredAttemptIdentity {
     started_at: String,
     session_id: Option<String>,
     run_id: Option<String>,
-    project_generation: Option<String>,
+    project_revision: Option<String>,
 }
 
 fn lifecycle_attempt_status(event: &Event) -> Result<AttemptStatus, DispatchError> {
@@ -1512,7 +1512,7 @@ const ATTEMPT_COLUMNS: &str = "attempt.attempt_id, attempt.queue_item_id,
     attempt.event_id, attempt.attempt_number, attempt.target_agent,
     attempt.worker_name, attempt.status, attempt.started_at,
     attempt.finished_at, attempt.error, attempt.session_id, attempt.run_id,
-    attempt.project_generation";
+    attempt.project_revision";
 
 pub(super) fn load_attempts(connection: &Connection) -> Result<Vec<Attempt>, DispatchError> {
     let sql = format!(
@@ -1602,7 +1602,7 @@ struct StoredAttempt {
     error: Option<String>,
     session_id: Option<String>,
     run_id: Option<String>,
-    project_generation: Option<String>,
+    project_revision: Option<String>,
 }
 
 impl StoredAttempt {
@@ -1620,7 +1620,7 @@ impl StoredAttempt {
             error: row.get(9)?,
             session_id: row.get(10)?,
             run_id: row.get(11)?,
-            project_generation: row.get(12)?,
+            project_revision: row.get(12)?,
         })
     }
 
@@ -1659,7 +1659,7 @@ impl StoredAttempt {
             error: self.error,
             session_id,
             run_id,
-            project_generation: self.project_generation,
+            project_revision: self.project_revision,
         })
     }
 }

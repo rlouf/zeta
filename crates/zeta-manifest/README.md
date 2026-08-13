@@ -137,13 +137,13 @@ let execution = zeta_manifest::execution_manifest(
     &project_manifest.id,
     "worker",
 )?;
-assert_eq!(execution.project_generation, project_manifest.id);
+assert_eq!(execution.project_revision, project_manifest.id);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 Manifest ids hash the substrate canonical JSON of the typed body. Restoration
 rejects unknown fields, unsupported schema versions, non-normalized values,
-tampered skill identities, mismatched project generations, and altered
+tampered skill identities, mismatched project revisions, and altered
 execution projections. Manifests contain declarations and stable
 implementation fingerprints, never connector launch commands, reflected
 Python callables, source paths, environment state, or secrets.

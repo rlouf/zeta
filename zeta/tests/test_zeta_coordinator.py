@@ -858,7 +858,7 @@ def test_attempt_coordinator_records_wait_inside_success_barrier() -> None:
         AgentDefinition(
             "worker",
             (EventPattern("work.requested"),),
-            project_generation="generation-1",
+            project_revision="revision-1",
         ),
         run,
     )
@@ -883,7 +883,7 @@ def test_attempt_coordinator_records_wait_inside_success_barrier() -> None:
         "fields": {"repository": "zeta"},
         "deadline": "2030-01-02T03:04:05+00:00",
         "source_queue_item_id": "qi_1",
-        "project_generation": "generation-1",
+        "project_revision": "revision-1",
     }
 
 
@@ -931,7 +931,7 @@ def test_attempt_coordinator_applies_cancel_before_a_later_wait(tmp_path) -> Non
                 "fields": {},
                 "deadline": None,
                 "source_queue_item_id": "qi-existing",
-                "project_generation": None,
+                "project_revision": None,
             },
             session_id="agent/worker/evt_1",
         )
@@ -1025,7 +1025,7 @@ def test_attempt_coordinator_does_not_apply_cancel_from_cancelled_attempt(
                 "fields": {},
                 "deadline": None,
                 "source_queue_item_id": "qi-existing",
-                "project_generation": None,
+                "project_revision": None,
             },
             session_id="agent/worker/evt_1",
         )
@@ -1094,7 +1094,7 @@ def test_attempt_coordinator_rejects_a_second_active_wait(tmp_path) -> None:
                 "fields": {},
                 "deadline": None,
                 "source_queue_item_id": "qi-existing",
-                "project_generation": None,
+                "project_revision": None,
             },
             session_id="agent/worker/evt_1",
         )
@@ -1165,7 +1165,7 @@ def test_dispatch_completion_script_preserves_result_and_control_order(
         AgentDefinition(
             case["agent_id"],
             (EventPattern(case["triggering_event"]["event_type"]),),
-            project_generation=case["project_generation"],
+            project_revision=case["project_revision"],
         ),
         run,
     )

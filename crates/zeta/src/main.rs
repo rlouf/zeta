@@ -23,8 +23,8 @@ use zeta::runtime_services::{
     RuntimePhase,
 };
 use zeta::{
-    ActiveProjectStatus, LocalSocketConfig, LocalSocketServer, ProjectGeneration, ReactiveRuntime,
-    ReactiveRuntimeStatus,
+    ActiveProjectStatus, LocalSocketConfig, LocalSocketServer, NativeAgentExecutor, Project,
+    ProjectRevision, Runtime, RuntimeStatus,
 };
 use zeta_ipc::{
     Action, ErrorObject, InitializeParams, Message, PeerIdentity, Request, RequestId, Retryability,
@@ -49,7 +49,7 @@ enum StatusOutput {
 #[command(
     name = "zeta",
     about = "Run one explicit Zeta agent project.",
-    long_about = "Run one explicit Zeta agent project.\n\nReload validates source and activates one immutable project generation. The runtime uses that generation until the next successful reload.",
+    long_about = "Run one explicit Zeta agent project.\n\nReload validates source and activates one immutable project revision. The runtime uses that revision until the next successful reload.",
     version,
     arg_required_else_help = true,
     disable_help_subcommand = true,
@@ -64,31 +64,31 @@ struct Cli {
 enum CliCommand {
     /// Validate project source without runtime changes.
     #[command(
-        long_about = "Validate Markdown agent files in agents/. This command does not change the active generation or start the runtime.",
+        long_about = "Validate Markdown agent files in agents/. This command does not change the active revision or start the runtime.",
         after_help = "EXAMPLE:\n  zeta check --project-root ~/my-project"
     )]
     Check(ProjectArgs),
-    /// Validate source and activate a new project generation.
+    /// Validate source and activate a new project revision.
     #[command(
-        long_about = "Validate Markdown agent files in agents/ and atomically activate one project generation. A running runtime adopts it immediately. A failed reload keeps the prior generation active.",
+        long_about = "Validate Markdown agent files in agents/ and atomically activate one project revision. A running runtime adopts it immediately. A failed reload keeps the prior revision active.",
         after_help = "EXAMPLES:\n  zeta reload --project-root ~/my-project\n  zeta reload --project-root ~/my-project --state-dir /var/lib/zeta"
     )]
     Reload(ReloadArgs),
-    /// Start the runtime with the active project generation.
+    /// Start the runtime with the active project revision.
     #[command(
-        long_about = "Start the runtime with the active project generation. Run 'zeta reload' first. This command does not read draft agent files.",
+        long_about = "Start the runtime with the active project revision. Run 'zeta reload' first. This command does not read draft agent files.",
         after_help = "EXAMPLES:\n  zeta up --project-root ~/my-project\n  zeta up --detach --project-root ~/my-project"
     )]
     Up(UpArgs),
-    /// Stop the runtime and preserve its active generation.
+    /// Stop the runtime and preserve its active revision.
     #[command(
-        long_about = "Stop the runtime. This command keeps the active project generation. Use 'zeta up' to start that generation again.",
+        long_about = "Stop the runtime. This command keeps the active project revision. Use 'zeta up' to start that revision again.",
         after_help = "EXAMPLE:\n  zeta down"
     )]
     Down(StateArgs),
-    /// Show runtime, generation, and agent status.
+    /// Show runtime, revision, and agent status.
     #[command(
-        long_about = "Show the runtime state. A running runtime also reports its active project generation and agents. Use --json for script input.",
+        long_about = "Show the runtime state. A running runtime also reports its active project revision and agents. Use --json for script input.",
         after_help = "EXAMPLES:\n  zeta status\n  zeta status --json | jq '.active_project.agents[].slug'"
     )]
     Status(StatusArgs),
@@ -99,7 +99,7 @@ struct UpArgs {
     /// Start in the background and return after readiness.
     #[arg(short = 'd', long)]
     detach: bool,
-    /// Find the active project generation from this directory.
+    /// Find the active project revision from this directory.
     #[arg(long, value_name = "DIR", default_value = ".")]
     project_root: PathBuf,
     /// Read runtime state from this directory.
@@ -119,7 +119,7 @@ struct ReloadArgs {
     /// Read authored project files from this directory.
     #[arg(long, value_name = "DIR", default_value = ".")]
     project_root: PathBuf,
-    /// Store the active project generation in this directory.
+    /// Store the active project revision in this directory.
     #[arg(long, value_name = "DIR")]
     state_dir: Option<PathBuf>,
 }
@@ -316,7 +316,7 @@ async fn main() -> ExitCode {
 
 fn print_command_error(error: &str) {
     eprintln!("error: {error}");
-    let hint = if error.contains("no active project generation") {
+    let hint = if error.contains("no active project revision") {
         Some("Run 'zeta reload --project-root <PROJECT_ROOT>' first.")
     } else if error.contains("different project root") {
         Some("Use the same --project-root and --state-dir for each command.")
@@ -600,7 +600,7 @@ fn invalid_state_marker(path: &Path) -> PathError {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum RuntimeStatus {
+enum DaemonStatus {
     Running,
     Stopping,
     Stopped,
@@ -612,7 +612,7 @@ enum RuntimeStatus {
 struct StatusReport {
     schema: &'static str,
     version: u64,
-    status: RuntimeStatus,
+    status: DaemonStatus,
     pid: Option<u32>,
     instance_id: Option<String>,
     project_root: Option<PathBuf>,
@@ -623,19 +623,19 @@ struct StatusReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     active_project: Option<ActiveProjectStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    dispatch: Option<ReactiveRuntimeStatus>,
+    dispatch: Option<RuntimeStatus>,
 }
 
 impl StatusReport {
     fn from_metadata(
-        status: RuntimeStatus,
+        status: DaemonStatus,
         paths: &RuntimePaths,
         metadata: RuntimeMetadata,
         detail: Option<String>,
     ) -> Self {
         Self {
             schema: "zeta.status",
-            version: 1,
+            version: 2,
             status,
             pid: Some(metadata.pid),
             instance_id: Some(metadata.instance_id),
@@ -650,13 +650,13 @@ impl StatusReport {
     }
 
     fn without_metadata(
-        status: RuntimeStatus,
+        status: DaemonStatus,
         paths: &RuntimePaths,
         detail: Option<String>,
     ) -> Self {
         Self {
             schema: "zeta.status",
-            version: 1,
+            version: 2,
             status,
             pid: None,
             instance_id: None,
@@ -722,10 +722,11 @@ async fn execute_command(command: ResolvedCommand) -> Result<ExitCode, String> {
 }
 
 fn run_check(project_root: PathBuf) -> Result<ExitCode, String> {
-    let generation = ProjectGeneration::load(&project_root).map_err(|error| error.to_string())?;
+    let project = Project::open(&project_root).map_err(|error| error.to_string())?;
+    let revision = project.revision().map_err(|error| error.to_string())?;
     println!("Project check passed.");
     println!("Project: {}", project_root.display());
-    print_agents(&generation.status());
+    print_agents(&revision.status());
     Ok(ExitCode::SUCCESS)
 }
 
@@ -733,7 +734,7 @@ async fn run_reload(project_root: PathBuf, state_dir: PathBuf) -> Result<ExitCod
     let paths = RuntimePaths::new(state_dir);
     let report = probe_runtime(&paths).await;
     match report.status {
-        RuntimeStatus::Running => {
+        DaemonStatus::Running => {
             if report.project_root.as_deref() != Some(project_root.as_path()) {
                 return Err("the running runtime belongs to a different project root".to_owned());
             }
@@ -744,25 +745,25 @@ async fn run_reload(project_root: PathBuf, state_dir: PathBuf) -> Result<ExitCod
             let mut client = ControlClient::connect(paths.socket()).await?;
             client.verify_instance(instance_id)?;
             let project = client.reload_project().await?;
-            println!("Project reloaded. The runtime now uses this generation.");
+            println!("Project reloaded. The runtime now uses this revision.");
             print_project_summary(&project_root, &project);
             Ok(ExitCode::SUCCESS)
         }
-        RuntimeStatus::Stopped | RuntimeStatus::Stale => {
-            let generation =
-                ProjectGeneration::load(&project_root).map_err(|error| error.to_string())?;
+        DaemonStatus::Stopped | DaemonStatus::Stale => {
+            let project = Project::open(&project_root).map_err(|error| error.to_string())?;
+            let revision = project.revision().map_err(|error| error.to_string())?;
             let lease = RuntimeLease::acquire(paths.clone()).map_err(|error| error.to_string())?;
-            generation
+            revision
                 .write(paths.active_project())
                 .map_err(|error| error.to_string())?;
             drop(lease);
-            println!("Project reloaded. Start the runtime to use this generation.");
-            print_project_summary(&project_root, &generation.status());
+            println!("Project reloaded. Start the runtime to use this revision.");
+            print_project_summary(&project_root, &revision.status());
             println!("Next: zeta up --project-root {}", project_root.display());
             Ok(ExitCode::SUCCESS)
         }
-        RuntimeStatus::Stopping => Err("the runtime is stopping".to_owned()),
-        RuntimeStatus::Degraded => Err(report
+        DaemonStatus::Stopping => Err("the runtime is stopping".to_owned()),
+        DaemonStatus::Degraded => Err(report
             .detail
             .unwrap_or_else(|| "the runtime is degraded".to_owned())),
     }
@@ -771,7 +772,7 @@ async fn run_reload(project_root: PathBuf, state_dir: PathBuf) -> Result<ExitCod
 async fn run_status(state_dir: PathBuf, output: StatusOutput) -> Result<ExitCode, String> {
     let paths = RuntimePaths::new(state_dir);
     let mut report = probe_runtime(&paths).await;
-    if report.status == RuntimeStatus::Running {
+    if report.status == DaemonStatus::Running {
         let query = async {
             let instance_id = report
                 .instance_id
@@ -790,19 +791,19 @@ async fn run_status(state_dir: PathBuf, output: StatusOutput) -> Result<ExitCode
                 report.dispatch = Some(dispatch);
             }
             Err(error) => {
-                report.status = RuntimeStatus::Degraded;
+                report.status = DaemonStatus::Degraded;
                 report.detail = Some(error);
             }
         }
     } else {
-        match ProjectGeneration::read(paths.active_project()) {
+        match ProjectRevision::read(paths.active_project()) {
             Ok(Some(project)) => {
                 report.project_root = Some(project.project_root().to_path_buf());
                 report.active_project = Some(project.status());
             }
             Ok(None) => {}
             Err(error) => {
-                report.status = RuntimeStatus::Degraded;
+                report.status = DaemonStatus::Degraded;
                 report.detail = Some(error.to_string());
             }
         }
@@ -814,7 +815,7 @@ async fn run_status(state_dir: PathBuf, output: StatusOutput) -> Result<ExitCode
             println!("{serialized}");
         }
     }
-    if report.status == RuntimeStatus::Running {
+    if report.status == DaemonStatus::Running {
         Ok(ExitCode::SUCCESS)
     } else {
         Ok(ExitCode::from(1))
@@ -836,6 +837,10 @@ fn print_human_status(report: &StatusReport) {
         println!("Detail: {detail}");
     }
     if let Some(dispatch) = &report.dispatch {
+        println!(
+            "Agent lane: {}/{} active",
+            dispatch.active_agents, dispatch.agent_capacity
+        );
         let queue = dispatch
             .queue
             .iter()
@@ -848,7 +853,7 @@ fn print_human_status(report: &StatusReport) {
             println!("Next deadline: {}", format_timestamp(deadline));
         }
     }
-    if report.status == RuntimeStatus::Stopped {
+    if report.status == DaemonStatus::Stopped {
         println!("Next: zeta up --project-root <PROJECT_ROOT>");
     }
 }
@@ -867,7 +872,7 @@ fn print_project_summary(project_root: &Path, project: &ActiveProjectStatus) {
 }
 
 fn print_active_project_summary(project: &ActiveProjectStatus) {
-    println!("Generation: {}", project.generation_id);
+    println!("Revision: {}", project.revision_id);
     print_agents(project);
 }
 
@@ -878,13 +883,13 @@ fn print_agents(project: &ActiveProjectStatus) {
     }
 }
 
-fn status_name(status: RuntimeStatus) -> &'static str {
+fn status_name(status: DaemonStatus) -> &'static str {
     match status {
-        RuntimeStatus::Running => "running",
-        RuntimeStatus::Stopping => "stopping",
-        RuntimeStatus::Stopped => "stopped",
-        RuntimeStatus::Degraded => "degraded",
-        RuntimeStatus::Stale => "stale",
+        DaemonStatus::Running => "running",
+        DaemonStatus::Stopping => "stopping",
+        DaemonStatus::Stopped => "stopped",
+        DaemonStatus::Degraded => "degraded",
+        DaemonStatus::Stale => "stale",
     }
 }
 
@@ -892,11 +897,11 @@ async fn probe_runtime(paths: &RuntimePaths) -> StatusReport {
     let state_metadata = match fs::symlink_metadata(paths.state_dir()) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return StatusReport::without_metadata(RuntimeStatus::Stopped, paths, None);
+            return StatusReport::without_metadata(DaemonStatus::Stopped, paths, None);
         }
         Err(error) => {
             return StatusReport::without_metadata(
-                RuntimeStatus::Degraded,
+                DaemonStatus::Degraded,
                 paths,
                 Some(error.to_string()),
             );
@@ -904,7 +909,7 @@ async fn probe_runtime(paths: &RuntimePaths) -> StatusReport {
     };
     if !state_metadata.is_dir() && !state_metadata.file_type().is_symlink() {
         return StatusReport::without_metadata(
-            RuntimeStatus::Stale,
+            DaemonStatus::Stale,
             paths,
             Some("the runtime state path is not a directory".to_owned()),
         );
@@ -912,7 +917,7 @@ async fn probe_runtime(paths: &RuntimePaths) -> StatusReport {
     let lease = match probe_lease(paths) {
         Ok(lease) => lease,
         Err(error) => {
-            return StatusReport::without_metadata(RuntimeStatus::Degraded, paths, Some(error));
+            return StatusReport::without_metadata(DaemonStatus::Degraded, paths, Some(error));
         }
     };
     if lease == LeaseProbe::Free {
@@ -920,9 +925,9 @@ async fn probe_runtime(paths: &RuntimePaths) -> StatusReport {
             .into_iter()
             .any(|path| fs::symlink_metadata(path).is_ok());
         let status = if has_artifacts {
-            RuntimeStatus::Stale
+            DaemonStatus::Stale
         } else {
-            RuntimeStatus::Stopped
+            DaemonStatus::Stopped
         };
         return StatusReport::without_metadata(status, paths, None);
     }
@@ -930,14 +935,14 @@ async fn probe_runtime(paths: &RuntimePaths) -> StatusReport {
         Ok(Some(metadata)) => metadata,
         Ok(None) => {
             return StatusReport::without_metadata(
-                RuntimeStatus::Degraded,
+                DaemonStatus::Degraded,
                 paths,
                 Some("the runtime lease is held without owner metadata".to_owned()),
             );
         }
         Err(error) => {
             return StatusReport::without_metadata(
-                RuntimeStatus::Degraded,
+                DaemonStatus::Degraded,
                 paths,
                 Some(error.to_string()),
             );
@@ -945,7 +950,7 @@ async fn probe_runtime(paths: &RuntimePaths) -> StatusReport {
     };
     if metadata.schema_version != 1 || uuid::Uuid::parse_str(&metadata.instance_id).is_err() {
         return StatusReport::from_metadata(
-            RuntimeStatus::Degraded,
+            DaemonStatus::Degraded,
             paths,
             metadata,
             Some("owner metadata has an unsupported identity or schema".to_owned()),
@@ -956,14 +961,14 @@ async fn probe_runtime(paths: &RuntimePaths) -> StatusReport {
         || metadata.control_socket != paths.control_socket()
     {
         return StatusReport::from_metadata(
-            RuntimeStatus::Degraded,
+            DaemonStatus::Degraded,
             paths,
             metadata,
             Some("owner metadata does not match the resolved lifecycle paths".to_owned()),
         );
     }
     if metadata.phase == RuntimePhase::Stopping {
-        return StatusReport::from_metadata(RuntimeStatus::Stopping, paths, metadata, None);
+        return StatusReport::from_metadata(DaemonStatus::Stopping, paths, metadata, None);
     }
     let health = tokio::time::timeout(
         Duration::from_secs(1),
@@ -971,12 +976,12 @@ async fn probe_runtime(paths: &RuntimePaths) -> StatusReport {
     )
     .await;
     match health {
-        Ok(Ok(())) => StatusReport::from_metadata(RuntimeStatus::Running, paths, metadata, None),
+        Ok(Ok(())) => StatusReport::from_metadata(DaemonStatus::Running, paths, metadata, None),
         Ok(Err(error)) => {
-            StatusReport::from_metadata(RuntimeStatus::Degraded, paths, metadata, Some(error))
+            StatusReport::from_metadata(DaemonStatus::Degraded, paths, metadata, Some(error))
         }
         Err(_elapsed) => StatusReport::from_metadata(
-            RuntimeStatus::Degraded,
+            DaemonStatus::Degraded,
             paths,
             metadata,
             Some("the control endpoint did not answer in time".to_owned()),
@@ -1022,16 +1027,16 @@ async fn run_down(state_dir: PathBuf) -> Result<ExitCode, String> {
     let paths = RuntimePaths::new(state_dir);
     let report = probe_runtime(&paths).await;
     match report.status {
-        RuntimeStatus::Stopped => {
+        DaemonStatus::Stopped => {
             println!("Runtime is stopped.");
             Ok(ExitCode::SUCCESS)
         }
-        RuntimeStatus::Stale => {
+        DaemonStatus::Stale => {
             clean_stale_runtime(paths)?;
             println!("Runtime is stopped.");
             Ok(ExitCode::SUCCESS)
         }
-        RuntimeStatus::Running => {
+        DaemonStatus::Running => {
             let instance_id = report
                 .instance_id
                 .as_deref()
@@ -1043,12 +1048,12 @@ async fn run_down(state_dir: PathBuf) -> Result<ExitCode, String> {
             println!("Runtime is stopped.");
             Ok(ExitCode::SUCCESS)
         }
-        RuntimeStatus::Stopping => {
+        DaemonStatus::Stopping => {
             wait_until_stopped(&paths).await?;
             println!("Runtime is stopped.");
             Ok(ExitCode::SUCCESS)
         }
-        RuntimeStatus::Degraded => Err(report
+        DaemonStatus::Degraded => Err(report
             .detail
             .unwrap_or_else(|| "the runtime is degraded".to_owned())),
     }
@@ -1083,7 +1088,7 @@ async fn wait_until_stopped(paths: &RuntimePaths) -> Result<(), String> {
     loop {
         if probe_lease(paths)? == LeaseProbe::Free {
             let report = probe_runtime(paths).await;
-            if report.status == RuntimeStatus::Stale {
+            if report.status == DaemonStatus::Stale {
                 clean_stale_runtime(paths.clone())?;
             }
             return Ok(());
@@ -1098,22 +1103,22 @@ async fn wait_until_stopped(paths: &RuntimePaths) -> Result<(), String> {
 struct ApplicationState {
     project_root: PathBuf,
     active_project_path: PathBuf,
-    generation: Mutex<ProjectGeneration>,
-    reactive: ReactiveRuntime,
+    revision: Mutex<ProjectRevision>,
+    runtime: Runtime,
 }
 
 impl ApplicationState {
     fn new(
         project_root: PathBuf,
         active_project_path: PathBuf,
-        generation: ProjectGeneration,
-        reactive: ReactiveRuntime,
+        revision: ProjectRevision,
+        runtime: Runtime,
     ) -> Self {
         Self {
             project_root,
             active_project_path,
-            generation: Mutex::new(generation),
-            reactive,
+            revision: Mutex::new(revision),
+            runtime,
         }
     }
 
@@ -1143,7 +1148,7 @@ impl ApplicationState {
     }
 
     fn active_project(&self) -> Result<Value, ErrorObject> {
-        let generation = self.generation.lock().map_err(|_error| {
+        let revision = self.revision.lock().map_err(|_error| {
             ErrorObject::application(
                 SERVER_ERROR,
                 "project_state_poisoned",
@@ -1151,7 +1156,7 @@ impl ApplicationState {
                 Retryability::Final,
             )
         })?;
-        serde_json::to_value(generation.status()).map_err(|error| {
+        serde_json::to_value(revision.status()).map_err(|error| {
             ErrorObject::application(
                 SERVER_ERROR,
                 "project_status_encoding_failed",
@@ -1162,7 +1167,15 @@ impl ApplicationState {
     }
 
     fn reload(&self) -> Result<Value, ErrorObject> {
-        let replacement = ProjectGeneration::load(&self.project_root).map_err(|error| {
+        let project = Project::open(&self.project_root).map_err(|error| {
+            ErrorObject::application(
+                SERVER_ERROR,
+                "project_reload_rejected",
+                error.to_string(),
+                Retryability::Final,
+            )
+        })?;
+        let replacement = project.revision().map_err(|error| {
             ErrorObject::application(
                 SERVER_ERROR,
                 "project_reload_rejected",
@@ -1178,7 +1191,7 @@ impl ApplicationState {
                 Retryability::Final,
             )
         })?;
-        let mut generation = self.generation.lock().map_err(|_error| {
+        let mut revision = self.revision.lock().map_err(|_error| {
             ErrorObject::application(
                 SERVER_ERROR,
                 "project_state_poisoned",
@@ -1196,7 +1209,7 @@ impl ApplicationState {
                     Retryability::Final,
                 )
             })?;
-        self.reactive.reload(replacement.clone()).map_err(|error| {
+        self.runtime.reload(replacement.clone()).map_err(|error| {
             ErrorObject::application(
                 SERVER_ERROR,
                 "project_runtime_reload_failed",
@@ -1204,8 +1217,8 @@ impl ApplicationState {
                 Retryability::Final,
             )
         })?;
-        *generation = replacement;
-        serde_json::to_value(generation.status()).map_err(|error| {
+        *revision = replacement;
+        serde_json::to_value(revision.status()).map_err(|error| {
             ErrorObject::application(
                 SERVER_ERROR,
                 "project_status_encoding_failed",
@@ -1217,12 +1230,12 @@ impl ApplicationState {
 
     fn publish(&self, params: Map<String, Value>) -> Result<Value, ErrorObject> {
         // Serialize ingress with reload. The actor then observes either the
-        // previous generation or the complete replacement generation.
-        let _generation = self.generation.lock().map_err(|_error| {
+        // previous revision or the complete replacement revision.
+        let _revision = self.revision.lock().map_err(|_error| {
             ErrorObject::application(
                 SERVER_ERROR,
                 "project_runtime_unavailable",
-                "the active project generation is unavailable",
+                "the active project revision is unavailable",
                 Retryability::Final,
             )
         })?;
@@ -1244,7 +1257,7 @@ impl ApplicationState {
             }
         };
         let result = self
-            .reactive
+            .runtime
             .ingest(DraftEvent {
                 event_type: event_type.to_owned(),
                 source: "zeta:ipc".to_owned(),
@@ -1274,7 +1287,7 @@ impl ApplicationState {
     }
 
     fn runtime_status(&self) -> Result<Value, ErrorObject> {
-        let status = self.reactive.status().map_err(|error| {
+        let status = self.runtime.status().map_err(|error| {
             ErrorObject::application(
                 SERVER_ERROR,
                 "dispatch_status_unavailable",
@@ -1293,7 +1306,7 @@ impl ApplicationState {
     }
 
     fn shutdown(&self) -> Result<(), String> {
-        self.reactive.shutdown().map_err(|error| error.to_string())
+        self.runtime.shutdown().map_err(|error| error.to_string())
     }
 }
 
@@ -1316,7 +1329,7 @@ async fn run_owner(
         Ok(lease) => lease,
         Err(error) if error.kind() == RuntimeLifecycleErrorKind::LeaseHeld => {
             let report = probe_runtime(&paths).await;
-            if report.status != RuntimeStatus::Running {
+            if report.status != DaemonStatus::Running {
                 return Err(report
                     .detail
                     .unwrap_or_else(|| format!("the runtime is {}", status_name(report.status))));
@@ -1332,19 +1345,23 @@ async fn run_owner(
     lease
         .reconcile_stale_sockets()
         .map_err(|error| error.to_string())?;
-    let generation = ProjectGeneration::read(paths.active_project())
+    let revision = ProjectRevision::read(paths.active_project())
         .map_err(|error| error.to_string())?
-        .ok_or_else(|| "no active project generation; run zeta reload first".to_owned())?;
-    if generation.project_root() != project_root.as_path() {
-        return Err("the active project generation belongs to a different project root".to_owned());
+        .ok_or_else(|| "no active project revision; run zeta reload first".to_owned())?;
+    if revision.project_root() != project_root.as_path() {
+        return Err("the active project revision belongs to a different project root".to_owned());
     }
-    let reactive = ReactiveRuntime::start(paths.dispatch(), generation.clone())
-        .map_err(|error| error.to_string())?;
+    let runtime = Runtime::start_with_agent_executor(
+        paths.dispatch(),
+        revision.clone(),
+        Arc::new(NativeAgentExecutor),
+    )
+    .map_err(|error| error.to_string())?;
     let application_state = Arc::new(ApplicationState::new(
         project_root.clone(),
         paths.active_project().to_path_buf(),
-        generation,
-        reactive,
+        revision,
+        runtime,
     ));
     if matches!(readiness, Readiness::Daemon { .. }) {
         redirect_daemon_stderr(&paths)?;
@@ -1804,7 +1821,7 @@ impl ControlClient {
             .map_err(|error| format!("the runtime returned an invalid reload result: {error}"))
     }
 
-    async fn runtime_status(&mut self) -> Result<ReactiveRuntimeStatus, String> {
+    async fn runtime_status(&mut self) -> Result<RuntimeStatus, String> {
         let actions = self.request("runtime.status", Map::new())?;
         let response = self.resolve(actions).await?;
         serde_json::from_value(response)
@@ -2049,7 +2066,7 @@ mod tests {
             .clone()
             .render_long_help()
             .to_string();
-        assert!(reload.contains("A failed reload keeps the prior generation active."));
+        assert!(reload.contains("A failed reload keeps the prior revision active."));
         assert!(reload.contains("zeta reload --project-root ~/my-project"));
     }
 
@@ -2120,21 +2137,24 @@ mod tests {
     }
 
     #[test]
-    fn application_state_lists_the_deployed_generation_until_reload() {
+    fn application_state_lists_the_deployed_revision_until_reload() {
         let temporary = TempDir::new().expect("temporary directory");
         write_agent(temporary.path(), "alpha", "Reports alpha.");
-        let active = ProjectGeneration::load(temporary.path()).expect("active generation");
+        let active = Project::open(temporary.path())
+            .expect("active project")
+            .revision()
+            .expect("active revision");
         let state_directory = temporary.path().join("state");
         fs::create_dir(&state_directory).expect("state directory");
         let active_path = state_directory.join("active-project.json");
         active.write(&active_path).expect("active project write");
-        let reactive = ReactiveRuntime::start(state_directory.join("zeta.sqlite3"), active.clone())
-            .expect("reactive runtime");
+        let runtime = Runtime::start(state_directory.join("zeta.sqlite3"), active.clone())
+            .expect("runtime runtime");
         let application = ApplicationState::new(
             fs::canonicalize(temporary.path()).expect("project root"),
             active_path,
             active,
-            reactive,
+            runtime,
         );
 
         write_agent(temporary.path(), "bravo", "Reports bravo.");

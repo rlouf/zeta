@@ -55,7 +55,7 @@ RESERVED_RUNTIME_EVENT_PREFIXES = (
     "runtime.attempt.",
     "runtime.egress.",
     "runtime.effect.",
-    "runtime.project_snapshot.",
+    "runtime.project_revision.",
 )
 CANCELLATION_POLL_INTERVAL_SECONDS = 0.1
 
@@ -277,7 +277,7 @@ class _QueueingDispatcher:
             )
         executor = self._executor_for_id(
             routed_queue_item.target_agent,
-            project_generation=routed_queue_item.project_generation,
+            project_revision=routed_queue_item.project_revision,
             triggering_event=triggering_event,
         )
         if executor is None:
@@ -300,13 +300,13 @@ class _QueueingDispatcher:
         )
         retry_policy = policy or self._retry_policy_for_agent(
             routed_queue_item.target_agent,
-            project_generation=routed_queue_item.project_generation,
+            project_revision=routed_queue_item.project_revision,
         )
         previous_attempt_number = max(next_attempt_number - 1, 1)
         not_before = current_time_ms() + retry_policy.delay_ms(previous_attempt_number)
-        generation_payload = (
-            {"project_generation": routed_queue_item.project_generation}
-            if routed_queue_item.project_generation is not None
+        revision_payload = (
+            {"project_revision": routed_queue_item.project_revision}
+            if routed_queue_item.project_revision is not None
             else {}
         )
         available = self._append_queue_item_event_for_target(
@@ -318,7 +318,7 @@ class _QueueingDispatcher:
             attempt_number=next_attempt_number,
             session_id=routed_queue_item.session_id,
             not_before=not_before,
-            **generation_payload,
+            **revision_payload,
         )
         self._observe_runtime_metric(
             "runtime.retries_scheduled",
@@ -397,15 +397,15 @@ class _QueueingDispatcher:
         self,
         agent_id: str,
         *,
-        project_generation: str | None = None,
+        project_revision: str | None = None,
         triggering_event: Event | None = None,
     ) -> ExecutableAgent | None:
         for executor in self.executors:
             if executor.agent_id != agent_id:
                 continue
             if (
-                project_generation is not None
-                and executor.definition.project_generation != project_generation
+                project_revision is not None
+                and executor.definition.project_revision != project_revision
             ):
                 continue
             if (
@@ -422,11 +422,11 @@ class _QueueingDispatcher:
         self,
         agent_id: str,
         *,
-        project_generation: str | None = None,
+        project_revision: str | None = None,
     ) -> RetryPolicy:
         executor = self._executor_for_id(
             agent_id,
-            project_generation=project_generation,
+            project_revision=project_revision,
         )
         if executor is None or executor.definition.retry_policy is None:
             return self.retry_policy
@@ -469,12 +469,12 @@ class _QueueingDispatcher:
                 queue_item_id=queue_item.queue_item_id,
                 event_id=queue_item.event_id,
                 target_agent=route.agent_id,
-                project_generation=route.project_generation,
+                project_revision=route.project_revision,
                 session_id=decision.queue_item.session_id,
             )
             executor = self._executor_for_id(
                 route.agent_id,
-                project_generation=route.project_generation,
+                project_revision=route.project_revision,
                 triggering_event=triggering_event,
             )
             if executor is None:

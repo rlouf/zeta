@@ -130,7 +130,7 @@ struct RouteInput {
     session: String,
     #[serde(default)]
     lock_keys: Vec<String>,
-    project_generation: Option<String>,
+    project_revision: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -138,7 +138,7 @@ struct RouteDecisionExpected {
     agent_id: String,
     queue_item_id: String,
     session_id: String,
-    project_generation: Option<String>,
+    project_revision: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -232,7 +232,7 @@ fn route_available_work(
         vec![EventPattern::new(event.event_type.clone())],
         session,
         lock_keys,
-        Some("generation-1".to_owned()),
+        Some("revision-1".to_owned()),
     );
     dispatch
         .route_ingress_event(
@@ -248,7 +248,7 @@ fn route_specific_work(
     event: Event,
     agent_id: &str,
     session_id: &str,
-    project_generation: Option<&str>,
+    project_revision: Option<&str>,
 ) -> zeta_dispatch::QueueItemId {
     dispatch.ingest_event(event.clone()).unwrap();
     let queue_item_id = queue_item_id(&event.id, agent_id);
@@ -260,10 +260,10 @@ fn route_specific_work(
         "status": "available",
     }))
     .unwrap();
-    if let Some(project_generation) = project_generation {
+    if let Some(project_revision) = project_revision {
         payload.insert(
-            "project_generation".to_owned(),
-            Value::String(project_generation.to_owned()),
+            "project_revision".to_owned(),
+            Value::String(project_revision.to_owned()),
         );
     }
     dispatch
@@ -546,7 +546,7 @@ fn runtime_route_vectors_preserve_declaration_order() {
                 patterns,
                 SessionRule::from_str(&route.session).unwrap(),
                 route.lock_keys,
-                route.project_generation,
+                route.project_revision,
             ));
         }
         let decisions = route_event(&case.event, &routes).unwrap();
@@ -571,8 +571,8 @@ fn runtime_route_vectors_preserve_declaration_order() {
                 case.name
             );
             assert_eq!(
-                decision.project_generation(),
-                expected.project_generation.as_deref(),
+                decision.project_revision(),
+                expected.project_revision.as_deref(),
                 "{}",
                 case.name
             );
@@ -1100,7 +1100,7 @@ fn dispatch_routing_vectors_emit_atomic_lifecycle_facts() {
                 patterns,
                 SessionRule::from_str(value["session"].as_str().unwrap()).unwrap(),
                 Vec::new(),
-                value["project_generation"].as_str().map(str::to_owned),
+                value["project_revision"].as_str().map(str::to_owned),
             ));
         }
         let expected_events = case["expected"]["events"].as_array().unwrap();
@@ -1153,8 +1153,8 @@ fn dispatch_routing_vectors_emit_atomic_lifecycle_facts() {
                 "{case_name}"
             );
             assert_eq!(
-                item.project_generation(),
-                expected["project_generation"].as_str(),
+                item.project_revision(),
+                expected["project_revision"].as_str(),
                 "{case_name}"
             );
             assert_eq!(item.status().to_string(), expected["status"], "{case_name}");
@@ -1170,7 +1170,7 @@ fn direct_route_binds_the_pending_identity_durably() {
         vec![EventPattern::new("dispatch.*")],
         SessionRule::PerEvent,
         vec!["repo:zeta".to_owned()],
-        Some("generation-1".to_owned()),
+        Some("revision-1".to_owned()),
     );
     let identity = RuntimeEventIdentity::new("route-direct", 200).unwrap();
     let mut dispatch = Dispatch::open_in_memory().unwrap();
@@ -1199,7 +1199,7 @@ fn direct_route_binds_the_pending_identity_durably() {
         item.session_id().unwrap().as_str(),
         "agent/worker/evt_direct"
     );
-    assert_eq!(item.project_generation(), Some("generation-1"));
+    assert_eq!(item.project_revision(), Some("revision-1"));
     assert_eq!(item.status(), QueueItemStatus::Available);
 }
 
@@ -2042,7 +2042,7 @@ fn queued_cancellation_commits_intent_and_terminal_fact_once() {
                 "queue_item_id": queue_item_id,
                 "event_id": message.id,
                 "target_agent": "master",
-                "project_generation": "generation-1",
+                "project_revision": "revision-1",
                 "session_id": "session-1",
                 "status": "available",
             }))
@@ -2412,7 +2412,7 @@ fn completion_vector_commits_ordered_controls_atomically() {
         event,
         case["agent_id"].as_str().unwrap(),
         "agent/worker/evt_complete",
-        case["project_generation"].as_str(),
+        case["project_revision"].as_str(),
     );
     let claim = dispatch
         .claim_next_queue_item(
@@ -3323,7 +3323,7 @@ fn due_wait_timeout_resumes_session_once() {
                 "fields": {},
                 "deadline": "1970-01-01T00:00:01.250000+00:00",
                 "source_queue_item_id": "qi-timeout-source",
-                "project_generation": "generation-1",
+                "project_revision": "revision-1",
             }))
             .unwrap(),
             idempotency_key: Some("agent.wait:qi-timeout-source:0".to_owned()),
@@ -3384,7 +3384,7 @@ fn due_wait_timeout_resumes_session_once() {
             "agent_id": "issue-agent",
             "session_id": "session-timeout",
             "deadline": "1970-01-01T00:00:01.250000+00:00",
-            "project_generation": "generation-1",
+            "project_revision": "revision-1",
         })
     );
     assert_eq!(timed_out[1].event_type, "runtime.queue_item.available");
@@ -3425,7 +3425,7 @@ fn resource_cancellation_is_authorized_atomic_and_idempotent() {
                 "fields": {},
                 "deadline": null,
                 "source_queue_item_id": "qi-cancel-source",
-                "project_generation": "generation-1",
+                "project_revision": "revision-1",
             }))
             .unwrap(),
             idempotency_key: Some("agent.wait:qi-cancel-source:0".to_owned()),
@@ -3586,7 +3586,7 @@ fn direct_session_message_cancels_wait_and_binds_queue_atomically() {
                 "fields": {},
                 "deadline": null,
                 "source_queue_item_id": "qi-direct-prior",
-                "project_generation": "generation-1",
+                "project_revision": "revision-1",
             }))
             .unwrap(),
             idempotency_key: Some("agent.wait:qi-direct-prior:0".to_owned()),
@@ -3602,7 +3602,7 @@ fn direct_session_message_cancels_wait_and_binds_queue_atomically() {
         "continue now",
         "worker",
         session_id.clone(),
-        "generation-2",
+        "revision-2",
         RunId::from_str("run-direct").unwrap(),
     )
     .with_idempotency_key("session.message:session-direct:request-1");
@@ -3653,8 +3653,8 @@ fn direct_session_message_cancels_wait_and_binds_queue_atomically() {
         })
     );
     assert_eq!(
-        submitted.events()[2].payload["project_generation"],
-        "generation-2"
+        submitted.events()[2].payload["project_revision"],
+        "revision-2"
     );
     assert_eq!(
         dispatch.list_waits().unwrap()[0].status(),
@@ -3733,7 +3733,7 @@ fn direct_session_message_owner_conflict_writes_nothing() {
         "continue",
         "intruder",
         session_id,
-        "generation-2",
+        "revision-2",
         RunId::from_str("run-conflict").unwrap(),
     );
 
@@ -3838,7 +3838,7 @@ fn next_deadline_and_advance_due_are_durable_timer_primitives() {
             "fields": {},
             "deadline": "1970-01-01T00:00:02Z",
             "source_queue_item_id": "qi_deadline_source",
-            "project_generation": "project:test"
+            "project_revision": "project:test"
         })
         .as_object()
         .unwrap()
@@ -4715,7 +4715,7 @@ fn append_session_wait(dispatch: &mut Dispatch) {
         "source_queue_item_id".to_owned(),
         Value::String("qi_waiting".to_owned()),
     );
-    payload.insert("project_generation".to_owned(), Value::Null);
+    payload.insert("project_revision".to_owned(), Value::Null);
     dispatch
         .append_trusted_event(Event {
             id: "session-wait-active".to_owned(),

@@ -23,16 +23,17 @@ use zeta_ipc::{
 use zeta_journal::Event;
 
 pub mod process_executor;
-pub mod project_runtime;
-pub mod reactive_runtime;
+pub mod project_revision;
+pub mod runtime;
 pub mod runtime_services;
 
 pub use process_executor::{ProcessExecutor, ProcessExecutorConfig, ProcessLaunch};
-pub use project_runtime::{
-    ActiveAgent, ActiveProjectStatus, ProjectGeneration, ProjectRuntimeError,
+pub use project_revision::{
+    ActiveAgent, ActiveProjectStatus, Project, ProjectError, ProjectRevision, ProjectRevisionStore,
 };
-pub use reactive_runtime::{
-    IngressResult, ReactiveRuntime, ReactiveRuntimeError, ReactiveRuntimeStatus, RuntimeWake,
+pub use runtime::{
+    AgentExecution, AgentExecutionError, AgentExecutor, AgentTask, IngressResult,
+    NativeAgentExecutor, Runtime, RuntimeError, RuntimeStatus, RuntimeWake,
 };
 pub use runtime_services::{
     prepare_agent, CallbackDraftRecorder, CallbackObserver, CancellationToken, ExecutorSelection,
@@ -1022,7 +1023,7 @@ fn optional_string_value(value: Option<&String>) -> Value {
 /// # Errors
 ///
 /// Returns [`zeta_manifest::ManifestError`] when the manifest body does not
-/// match its canonical project generation or violates its schema contract.
+/// match its canonical project revision or violates its schema contract.
 pub fn routes_from_project(
     manifest: &zeta_manifest::ProjectManifest,
 ) -> Result<Vec<zeta_dispatch::Route>, zeta_manifest::ManifestError> {

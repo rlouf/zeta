@@ -1537,7 +1537,7 @@ fn execution_manifests_select_only_agent_relevant_declarations() {
         .id
         .to_string()
         .starts_with("execution_manifest:b3:"));
-    assert_eq!(manifest.project_generation, project_manifest.id);
+    assert_eq!(manifest.project_revision, project_manifest.id);
     assert_eq!(
         manifest
             .events

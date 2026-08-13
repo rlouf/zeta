@@ -46,7 +46,7 @@ class RoutedQueueItem:
     queue_item_id: str
     event_id: str
     target_agent: str
-    project_generation: str | None = None
+    project_revision: str | None = None
     session_id: str | None = None
 
 
@@ -172,7 +172,7 @@ def routed_queue_item_from_event(event: Event) -> RoutedQueueItem:
         queue_item_id=queue_item_id,
         event_id=event_id,
         target_agent=target_agent,
-        project_generation=_optional_string(event.payload.get("project_generation")),
+        project_revision=_optional_string(event.payload.get("project_revision")),
         session_id=_optional_string(event.payload.get("session_id"))
         or event.session_id,
     )
@@ -183,7 +183,7 @@ def queue_item_from_record(record: Mapping[str, Any]) -> RoutedQueueItem:
         queue_item_id=str(record["queue_item_id"]),
         event_id=str(record["event_id"]),
         target_agent=str(record["target_agent"]),
-        project_generation=_optional_string(record.get("project_generation")),
+        project_revision=_optional_string(record.get("project_revision")),
         session_id=_optional_string(record.get("session_id")),
     )
 

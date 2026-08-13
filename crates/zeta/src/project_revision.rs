@@ -1,10 +1,10 @@
-//! Loads and persists one explicit native project generation.
+//! Loads a project and persists its immutable revisions.
 
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -15,17 +15,17 @@ use zeta_manifest::{load_agent, parse_agent, AgentSpec};
 use zeta_substrate::{canonical_json, hash_bytes};
 
 const ACTIVE_PROJECT_SCHEMA: &str = "zeta.active_project";
-const ACTIVE_PROJECT_VERSION: u64 = 1;
+const ACTIVE_PROJECT_VERSION: u64 = 2;
 
 static NEXT_TEMPORARY_ID: AtomicU64 = AtomicU64::new(0);
 
-/// Reports a project-source or active-generation failure.
+/// Reports a project-source or revision failure.
 #[derive(Debug)]
-pub struct ProjectRuntimeError {
+pub struct ProjectError {
     detail: String,
 }
 
-impl ProjectRuntimeError {
+impl ProjectError {
     fn new(detail: impl Into<String>) -> Self {
         Self {
             detail: detail.into(),
@@ -33,15 +33,53 @@ impl ProjectRuntimeError {
     }
 }
 
-impl fmt::Display for ProjectRuntimeError {
+impl fmt::Display for ProjectError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.detail)
     }
 }
 
-impl std::error::Error for ProjectRuntimeError {}
+impl std::error::Error for ProjectError {}
 
-/// Describes one enabled agent in the active project generation.
+/// Locates the editable source directory for one project.
+#[derive(Clone, Debug)]
+pub struct Project {
+    root: PathBuf,
+}
+
+impl Project {
+    /// Opens one existing project source directory.
+    pub fn open(root: impl AsRef<Path>) -> Result<Self, ProjectError> {
+        let root = root.as_ref();
+        let metadata = fs::symlink_metadata(root).map_err(|error| {
+            ProjectError::new(format!(
+                "cannot inspect project '{}': {error}",
+                root.display()
+            ))
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(ProjectError::new(format!(
+                "project is not a directory: {}",
+                root.display()
+            )));
+        }
+        Ok(Self {
+            root: root.to_path_buf(),
+        })
+    }
+
+    /// Returns the editable project directory.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Loads the current immutable revision from project source.
+    pub fn revision(&self) -> Result<ProjectRevision, ProjectError> {
+        ProjectRevision::load(&self.root)
+    }
+}
+
+/// Describes one enabled agent in the active project revision.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct ActiveAgent {
     /// Identifies the agent file and stable runtime identity.
@@ -56,42 +94,83 @@ pub struct ActiveAgent {
     pub source_address: String,
 }
 
-/// Returns a safe public view of the active project generation.
+/// Returns a safe public view of the active project revision.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct ActiveProjectStatus {
-    /// Identifies the immutable active generation.
-    pub generation_id: String,
+    /// Identifies the immutable active revision.
+    pub revision_id: String,
     /// Lists enabled agents in slug order.
     pub agents: Vec<ActiveAgent>,
 }
 
-/// Stores one immutable generation that a native runtime can activate.
+/// Stores immutable project revisions for active and queued work.
+#[derive(Clone, Debug)]
+pub struct ProjectRevisionStore {
+    directory: PathBuf,
+}
+
+impl ProjectRevisionStore {
+    /// Creates a store rooted at one private runtime directory.
+    pub fn new(directory: impl Into<PathBuf>) -> Self {
+        Self {
+            directory: directory.into(),
+        }
+    }
+
+    /// Persists one verified revision under its content identity.
+    pub fn record(&self, revision: &ProjectRevision) -> Result<(), ProjectError> {
+        ensure_archive_directory(&self.directory)?;
+        revision.write(&self.path_for(revision.revision_id()))
+    }
+
+    /// Loads the immutable revision identified by one queued item.
+    pub fn load(&self, revision_id: &str) -> Result<Option<ProjectRevision>, ProjectError> {
+        let path = self.path_for(revision_id);
+        let revision = ProjectRevision::read(&path)?;
+        if let Some(revision) = &revision {
+            if revision.revision_id() != revision_id {
+                return Err(ProjectError::new(format!(
+                    "revision store has a different revision at '{}': {revision_id}",
+                    path.display()
+                )));
+            }
+        }
+        Ok(revision)
+    }
+
+    fn path_for(&self, revision_id: &str) -> PathBuf {
+        self.directory
+            .join(format!("{}.json", hash_bytes(revision_id.as_bytes())))
+    }
+}
+
+/// Stores one immutable project revision that a runtime can activate.
 ///
-/// The source snapshot deliberately retains full agent declarations. Later
+/// The source revision retains full agent declarations. Later
 /// runtime stages can construct execution manifests without rereading draft
 /// project files.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProjectGeneration {
+pub struct ProjectRevision {
     schema: String,
     version: u64,
     project_root: PathBuf,
-    generation_id: String,
+    revision_id: String,
     agents: BTreeMap<String, AgentSpec>,
 }
 
-impl ProjectGeneration {
+impl ProjectRevision {
     /// Loads direct Markdown agent declarations from one project root.
-    pub fn load(project_root: &Path) -> Result<Self, ProjectRuntimeError> {
+    pub(crate) fn load(project_root: &Path) -> Result<Self, ProjectError> {
         let agents_directory = project_root.join("agents");
         let directory_metadata = fs::symlink_metadata(&agents_directory).map_err(|error| {
-            ProjectRuntimeError::new(format!(
+            ProjectError::new(format!(
                 "cannot inspect agents directory '{}': {error}",
                 agents_directory.display()
             ))
         })?;
         if directory_metadata.file_type().is_symlink() || !directory_metadata.is_dir() {
-            return Err(ProjectRuntimeError::new(format!(
+            return Err(ProjectError::new(format!(
                 "agents path is not a directory: {}",
                 agents_directory.display()
             )));
@@ -99,27 +178,27 @@ impl ProjectGeneration {
 
         let mut paths = Vec::new();
         let entries = fs::read_dir(&agents_directory).map_err(|error| {
-            ProjectRuntimeError::new(format!(
+            ProjectError::new(format!(
                 "cannot read agents directory '{}': {error}",
                 agents_directory.display()
             ))
         })?;
         for entry in entries {
             let entry = entry.map_err(|error| {
-                ProjectRuntimeError::new(format!(
+                ProjectError::new(format!(
                     "cannot read an entry in '{}': {error}",
                     agents_directory.display()
                 ))
             })?;
             let path = entry.path();
             let file_type = entry.file_type().map_err(|error| {
-                ProjectRuntimeError::new(format!(
+                ProjectError::new(format!(
                     "cannot inspect agent entry '{}': {error}",
                     path.display()
                 ))
             })?;
             if file_type.is_symlink() {
-                return Err(ProjectRuntimeError::new(format!(
+                return Err(ProjectError::new(format!(
                     "agent entry is a symbolic link: {}",
                     path.display()
                 )));
@@ -130,7 +209,7 @@ impl ProjectGeneration {
         }
         paths.sort();
         if paths.is_empty() {
-            return Err(ProjectRuntimeError::new(format!(
+            return Err(ProjectError::new(format!(
                 "agents directory contains no Markdown agents: {}",
                 agents_directory.display()
             )));
@@ -139,11 +218,11 @@ impl ProjectGeneration {
         let mut agents = BTreeMap::new();
         for path in paths {
             let agent = load_agent(&path).map_err(|error| {
-                ProjectRuntimeError::new(format!("cannot load agent '{}': {error}", path.display()))
+                ProjectError::new(format!("cannot load agent '{}': {error}", path.display()))
             })?;
             let slug = agent.slug.clone();
             if agents.insert(slug.clone(), agent).is_some() {
-                return Err(ProjectRuntimeError::new(format!(
+                return Err(ProjectError::new(format!(
                     "agents directory defines duplicate slug {slug:?}"
                 )));
             }
@@ -152,32 +231,32 @@ impl ProjectGeneration {
     }
 
     /// Reads and verifies the active project document when it exists.
-    pub fn read(path: &Path) -> Result<Option<Self>, ProjectRuntimeError> {
+    pub fn read(path: &Path) -> Result<Option<Self>, ProjectError> {
         let bytes = match fs::read(path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => {
-                return Err(ProjectRuntimeError::new(format!(
+                return Err(ProjectError::new(format!(
                     "cannot read active project '{}': {error}",
                     path.display()
                 )))
             }
         };
-        let generation: ProjectGeneration = serde_json::from_slice(&bytes).map_err(|error| {
-            ProjectRuntimeError::new(format!(
+        let revision: ProjectRevision = serde_json::from_slice(&bytes).map_err(|error| {
+            ProjectError::new(format!(
                 "active project '{}' is invalid JSON: {error}",
                 path.display()
             ))
         })?;
-        generation.validate(path)?;
-        Ok(Some(generation))
+        revision.validate(path)?;
+        Ok(Some(revision))
     }
 
     /// Atomically replaces the active project document.
-    pub fn write(&self, path: &Path) -> Result<(), ProjectRuntimeError> {
+    pub fn write(&self, path: &Path) -> Result<(), ProjectError> {
         self.validate(path)?;
         let mut bytes = serde_json::to_vec(self).map_err(|error| {
-            ProjectRuntimeError::new(format!(
+            ProjectError::new(format!(
                 "cannot encode active project '{}': {error}",
                 path.display()
             ))
@@ -186,12 +265,12 @@ impl ProjectGeneration {
         write_atomic(path, &bytes)
     }
 
-    /// Returns the immutable active-generation identity.
-    pub fn generation_id(&self) -> &str {
-        &self.generation_id
+    /// Returns the immutable revision identity.
+    pub fn revision_id(&self) -> &str {
+        &self.revision_id
     }
 
-    /// Returns the project root that produced this generation.
+    /// Returns the project root that produced this revision.
     pub fn project_root(&self) -> &Path {
         &self.project_root
     }
@@ -211,23 +290,28 @@ impl ProjectGeneration {
             .collect()
     }
 
-    /// Returns the public active-generation view.
+    /// Returns an exact enabled or disabled agent declaration by slug.
+    pub fn agent(&self, slug: &str) -> Option<&AgentSpec> {
+        self.agents.get(slug)
+    }
+
+    /// Returns the public active-revision view.
     pub fn status(&self) -> ActiveProjectStatus {
         ActiveProjectStatus {
-            generation_id: self.generation_id.clone(),
+            revision_id: self.revision_id().to_owned(),
             agents: self.active_agents(),
         }
     }
 
     /// Compiles enabled agent declarations into durable ingress routes.
-    pub fn routes(&self) -> Result<Vec<Route>, ProjectRuntimeError> {
+    pub fn routes(&self) -> Result<Vec<Route>, ProjectError> {
         let mut routes = Vec::new();
         for agent in self.agents.values() {
             if !agent.enabled {
                 continue;
             }
             let session = SessionRule::from_str(&agent.session).map_err(|error| {
-                ProjectRuntimeError::new(format!(
+                ProjectError::new(format!(
                     "agent {:?} has an invalid session rule: {error}",
                     agent.slug
                 ))
@@ -242,7 +326,7 @@ impl ProjectGeneration {
                     .collect(),
                 session,
                 agent.locks.clone(),
-                Some(self.generation_id.clone()),
+                Some(self.revision_id.clone()),
             ));
         }
         Ok(routes)
@@ -251,74 +335,74 @@ impl ProjectGeneration {
     fn from_agents(
         project_root: &Path,
         agents: BTreeMap<String, AgentSpec>,
-    ) -> Result<Self, ProjectRuntimeError> {
+    ) -> Result<Self, ProjectError> {
         let project_root = fs::canonicalize(project_root).map_err(|error| {
-            ProjectRuntimeError::new(format!(
+            ProjectError::new(format!(
                 "cannot resolve project root '{}': {error}",
                 project_root.display()
             ))
         })?;
-        let mut generation = Self {
+        let mut revision = Self {
             schema: ACTIVE_PROJECT_SCHEMA.to_owned(),
             version: ACTIVE_PROJECT_VERSION,
             project_root,
-            generation_id: String::new(),
+            revision_id: String::new(),
             agents,
         };
-        generation.generation_id = generation.expected_id()?;
-        Ok(generation)
+        revision.revision_id = revision.expected_id()?;
+        Ok(revision)
     }
 
-    fn validate(&self, path: &Path) -> Result<(), ProjectRuntimeError> {
+    fn validate(&self, path: &Path) -> Result<(), ProjectError> {
         if self.schema != ACTIVE_PROJECT_SCHEMA || self.version != ACTIVE_PROJECT_VERSION {
-            return Err(ProjectRuntimeError::new(format!(
+            return Err(ProjectError::new(format!(
                 "active project '{}' has unsupported schema or version",
                 path.display()
             )));
         }
         if !self.project_root.is_absolute() {
-            return Err(ProjectRuntimeError::new(format!(
+            return Err(ProjectError::new(format!(
                 "active project '{}' has a relative project root",
                 path.display()
             )));
         }
         if self.agents.is_empty() {
-            return Err(ProjectRuntimeError::new(format!(
+            return Err(ProjectError::new(format!(
                 "active project '{}' has no agents",
                 path.display()
             )));
         }
         for (slug, agent) in &self.agents {
             if agent.slug != *slug {
-                return Err(ProjectRuntimeError::new(format!(
+                return Err(ProjectError::new(format!(
                     "active project '{}' stores agent {slug:?} under a different slug",
                     path.display()
                 )));
             }
             let parsed = parse_agent(slug, agent.source.as_bytes()).map_err(|error| {
-                ProjectRuntimeError::new(format!(
+                ProjectError::new(format!(
                     "active project '{}' has invalid source for {slug:?}: {error}",
                     path.display()
                 ))
             })?;
             if parsed != *agent {
-                return Err(ProjectRuntimeError::new(format!(
+                return Err(ProjectError::new(format!(
                     "active project '{}' has altered source metadata for {slug:?}",
                     path.display()
                 )));
             }
         }
         let expected = self.expected_id()?;
-        if self.generation_id != expected {
-            return Err(ProjectRuntimeError::new(format!(
-                "active project '{}' has an invalid generation id",
+        if self.revision_id != expected {
+            return Err(ProjectError::new(format!(
+                "active project '{}' has an invalid revision id",
                 path.display()
             )));
         }
         Ok(())
     }
 
-    fn expected_id(&self) -> Result<String, ProjectRuntimeError> {
+    fn expected_id(&self) -> Result<String, ProjectError> {
         let value = serde_json::json!({
             "schema": self.schema,
             "version": self.version,
@@ -326,34 +410,34 @@ impl ProjectGeneration {
             "agents": self.agents,
         });
         let bytes = canonical_json(&value).map_err(|error| {
-            ProjectRuntimeError::new(format!("cannot calculate project generation id: {error}"))
+            ProjectError::new(format!("cannot calculate project revision id: {error}"))
         })?;
         Ok(format!("project:{}", hash_bytes(&bytes)))
     }
 }
 
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ProjectRuntimeError> {
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ProjectError> {
     let parent = path.parent().ok_or_else(|| {
-        ProjectRuntimeError::new(format!(
+        ProjectError::new(format!(
             "active project path has no parent: {}",
             path.display()
         ))
     })?;
     let parent_metadata = fs::metadata(parent).map_err(|error| {
-        ProjectRuntimeError::new(format!(
+        ProjectError::new(format!(
             "cannot inspect active project directory '{}': {error}",
             parent.display()
         ))
     })?;
     if !parent_metadata.is_dir() {
-        return Err(ProjectRuntimeError::new(format!(
+        return Err(ProjectError::new(format!(
             "active project parent is not a directory: {}",
             parent.display()
         )));
     }
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
-            return Err(ProjectRuntimeError::new(format!(
+            return Err(ProjectError::new(format!(
                 "active project path is not a regular file: {}",
                 path.display()
             )))
@@ -361,7 +445,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ProjectRuntimeError> {
         Ok(_metadata) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => {
-            return Err(ProjectRuntimeError::new(format!(
+            return Err(ProjectError::new(format!(
                 "cannot inspect active project '{}': {error}",
                 path.display()
             )))
@@ -372,7 +456,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ProjectRuntimeError> {
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| {
-            ProjectRuntimeError::new(format!(
+            ProjectError::new(format!(
                 "active project path has no UTF-8 name: {}",
                 path.display()
             ))
@@ -389,7 +473,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ProjectRuntimeError> {
             Ok(file) => break (candidate, file),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => {
-                return Err(ProjectRuntimeError::new(format!(
+                return Err(ProjectError::new(format!(
                     "cannot create active project temporary file in '{}': {error}",
                     parent.display()
                 )))
@@ -401,7 +485,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ProjectRuntimeError> {
         .write_all(bytes)
         .and_then(|()| temporary_file.sync_all())
         .map_err(|error| {
-            ProjectRuntimeError::new(format!(
+            ProjectError::new(format!(
                 "cannot write active project temporary file '{}': {error}",
                 temporary_path.display()
             ))
@@ -413,9 +497,54 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ProjectRuntimeError> {
     }
     fs::rename(&temporary_path, path).map_err(|error| {
         let _removed = fs::remove_file(&temporary_path);
-        ProjectRuntimeError::new(format!(
+        ProjectError::new(format!(
             "cannot activate project '{}': {error}",
             path.display()
+        ))
+    })?;
+    Ok(())
+}
+
+fn ensure_archive_directory(directory: &Path) -> Result<(), ProjectError> {
+    match fs::symlink_metadata(directory) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err(ProjectError::new(format!(
+                "revision archive is not a directory: {}",
+                directory.display()
+            )));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir_all(directory).map_err(|error| {
+                ProjectError::new(format!(
+                    "cannot create revision archive '{}': {error}",
+                    directory.display()
+                ))
+            })?;
+        }
+        Err(error) => {
+            return Err(ProjectError::new(format!(
+                "cannot inspect revision archive '{}': {error}",
+                directory.display()
+            )));
+        }
+    }
+    let metadata = fs::symlink_metadata(directory).map_err(|error| {
+        ProjectError::new(format!(
+            "cannot inspect revision archive '{}': {error}",
+            directory.display()
+        ))
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(ProjectError::new(format!(
+            "revision archive is not a directory: {}",
+            directory.display()
+        )));
+    }
+    fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).map_err(|error| {
+        ProjectError::new(format!(
+            "cannot secure revision archive '{}': {error}",
+            directory.display()
         ))
     })?;
     Ok(())
@@ -443,39 +572,39 @@ mod tests {
     }
 
     #[test]
-    fn load_builds_a_stable_generation_and_filters_disabled_agents() {
+    fn load_builds_a_stable_revision_and_filters_disabled_agents() {
         let temporary = TempDir::new().expect("temporary directory");
         write_agent(temporary.path(), "zulu", true);
         write_agent(temporary.path(), "alpha", false);
 
-        let generation = ProjectGeneration::load(temporary.path()).expect("project loads");
-        assert!(generation.generation_id().starts_with("project:b3:"));
+        let revision = ProjectRevision::load(temporary.path()).expect("project loads");
+        assert!(revision.revision_id().starts_with("project:b3:"));
         assert_eq!(
-            generation.status().agents,
+            revision.status().agents,
             vec![ActiveAgent {
                 slug: "zulu".to_owned(),
                 name: "zulu".to_owned(),
                 description: "Reports current state.".to_owned(),
                 schedule_count: 0,
-                source_address: generation.agents["zulu"].content_address.to_string(),
+                source_address: revision.agents["zulu"].content_address.to_string(),
             }]
         );
     }
 
     #[test]
-    fn write_and_read_preserve_the_exact_generation() {
+    fn write_and_read_preserve_the_exact_revision() {
         let temporary = TempDir::new().expect("temporary directory");
         write_agent(temporary.path(), "worker", true);
-        let generation = ProjectGeneration::load(temporary.path()).expect("project loads");
+        let revision = ProjectRevision::load(temporary.path()).expect("project loads");
         let state = temporary.path().join("state");
         fs::create_dir(&state).expect("state directory");
         let active = state.join("active-project.json");
 
-        generation.write(&active).expect("project writes");
-        let restored = ProjectGeneration::read(&active)
+        revision.write(&active).expect("project writes");
+        let restored = ProjectRevision::read(&active)
             .expect("project reads")
             .expect("active project exists");
-        assert_eq!(restored, generation);
+        assert_eq!(restored, revision);
     }
 
     #[test]
@@ -492,12 +621,12 @@ mod tests {
         .expect("external agent");
         symlink(&external, temporary.path().join("agents/linked.md")).expect("agent link");
 
-        let error = ProjectGeneration::load(temporary.path()).expect_err("link must fail");
+        let error = ProjectRevision::load(temporary.path()).expect_err("link must fail");
         assert!(error.to_string().contains("symbolic link"));
     }
 
     #[test]
-    fn routes_preserve_agent_session_locks_and_generation() {
+    fn routes_preserve_agent_session_locks_and_revision() {
         let temporary = TempDir::new().expect("temporary directory");
         let agents = temporary.path().join("agents");
         fs::create_dir(&agents).expect("agents directory");
@@ -506,8 +635,8 @@ mod tests {
             "---\nname: Worker\ndescription: Routes work.\nsession: shared\naccepts: [example.created]\nlocks: [account]\n---\nRoute work.\n",
         )
         .expect("agent source");
-        let generation = ProjectGeneration::load(temporary.path()).expect("project loads");
-        let routes = generation.routes().expect("routes compile");
+        let revision = ProjectRevision::load(temporary.path()).expect("project loads");
+        let routes = revision.routes().expect("routes compile");
         let event = zeta_journal::Event {
             id: "event-1".to_owned(),
             event_type: "example.created".to_owned(),
@@ -528,8 +657,8 @@ mod tests {
         assert_eq!(decisions[0].session_id().as_str(), "agent/worker");
         assert_eq!(decisions[0].lock_keys(), ["account"]);
         assert_eq!(
-            decisions[0].project_generation(),
-            Some(generation.generation_id())
+            decisions[0].project_revision(),
+            Some(revision.revision_id())
         );
     }
 }

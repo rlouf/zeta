@@ -137,7 +137,7 @@ impl Dispatch {
                 target_agent: &request.agent_id,
                 status: QueueItemStatus::Available,
                 session_id: Some(&request.session_id),
-                project_generation: Some(&request.project_generation),
+                project_revision: Some(&request.project_revision),
                 lock_keys: &[],
             },
         );
@@ -163,7 +163,7 @@ fn validate_session_message_request(request: &SessionMessageRequest) -> Result<(
     for (field, value) in [
         ("message", request.message.as_str()),
         ("agent_id", request.agent_id.as_str()),
-        ("project_generation", request.project_generation.as_str()),
+        ("project_revision", request.project_revision.as_str()),
     ] {
         if value.is_empty() {
             return Err(DispatchError::InvalidCoordinationInput { field });

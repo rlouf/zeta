@@ -45,7 +45,7 @@ The existing Python substrate was the design authority:
   graph import.
 - `substrate/sqlite.py::import_object` and derivation import recompute an
   address to verify imported content. `harness/project.py` also reconstructs
-  skill Objects to verify project snapshots. These paths now verify only the
+  skill Objects to verify project revisions. These paths now verify only the
   current BLAKE3 address.
 - Journal graph import delegates verification to the substrate store. It does
   not implement another mint.
@@ -53,7 +53,7 @@ The existing Python substrate was the design authority:
 Phase 0 had live event-, chain-, prompt-, and skill-domain outputs. Event
 addresses identify source retransmissions. Chain addresses identify publish
 and wait handles. Prompt addresses appeared in trace provenance, and skill
-addresses appeared in project snapshots. The blob context had no call sites.
+addresses appeared in project revisions. The blob context had no call sites.
 
 The clean-break ruling removed the prompt and skill mints instead of defining a
 micro-epoch. Prompts and skills are now normal substrate Objects, so `kind`

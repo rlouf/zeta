@@ -10,7 +10,7 @@ from typing import Any
 from zeta.authoring.spec import MASTER_AGENT_ID
 from zeta.events import DraftEvent, Event
 from zeta.harness.dispatch import QueueingDispatcher, ReservedRuntimeEventError
-from zeta.harness.project import ProjectSnapshot, record_project_snapshot
+from zeta.harness.project import ProjectRevision, record_project_revision
 from zeta.harness.protocols import UnauthorizedCancellation
 from zeta.harness.sessions import (
     SessionNotFound,
@@ -37,7 +37,7 @@ class IpcClient:
     session: RuntimeContext
     dispatcher: QueueingDispatcher
     background_tasks: set[asyncio.Task[Any]] = field(default_factory=set)
-    project_snapshot: ProjectSnapshot | None = None
+    project_revision: ProjectRevision | None = None
 
     @property
     def peer_name(self) -> str:
@@ -213,20 +213,20 @@ async def session_start(params: dict[str, Any], client: IpcClient) -> dict[str, 
         params,
         supported={"message", "idempotency_key"},
     )
-    store, snapshot = session_submission_resources(client)
+    store, revision = session_submission_resources(client)
     after_cursor = latest_event_cursor(store)
     try:
         session_owner_for_submission(
             {"agent_id": MASTER_AGENT_ID},
-            snapshot.project.specs,
+            revision.project.specs,
         )
     except SessionOwnerUnavailable as exc:
         raise session_route_error(exc, None) from exc
-    record_project_snapshot(store, snapshot)
+    record_project_revision(store, revision)
     result = start_master_session(
         store,
         message=message,
-        project_generation=snapshot.generation_id,
+        project_revision=revision.revision_id,
         idempotency_key=idempotency_key,
     )
     notify_committed_events(client, store, after_cursor)
@@ -234,26 +234,26 @@ async def session_start(params: dict[str, Any], client: IpcClient) -> dict[str, 
 
 
 async def session_send(params: dict[str, Any], client: IpcClient) -> dict[str, Any]:
-    """Queue one message for the existing session owner in the current generation."""
+    """Queue one message for the existing session owner in the current revision."""
     message, idempotency_key = session_message_params(
         params,
         supported={"session_id", "message", "idempotency_key"},
     )
     session_id = required_session_id(params)
-    store, snapshot = session_submission_resources(client)
+    store, revision = session_submission_resources(client)
     after_cursor = latest_event_cursor(store)
     try:
         session = store.session_status(session_id)
-        agent_id = session_owner_for_submission(session, snapshot.project.specs)
+        agent_id = session_owner_for_submission(session, revision.project.specs)
     except (SessionNotFound, SessionOwnerConflict, SessionOwnerUnavailable) as exc:
         raise session_route_error(exc, session_id) from exc
-    record_project_snapshot(store, snapshot)
+    record_project_revision(store, revision)
     result = submit_session_message(
         store,
         message=message,
         agent_id=agent_id,
         session_id=session_id,
-        project_generation=snapshot.generation_id,
+        project_revision=revision.revision_id,
         idempotency_key=idempotency_key,
     )
     notify_committed_events(client, store, after_cursor)
@@ -283,17 +283,17 @@ async def session_list(params: dict[str, Any], client: IpcClient) -> dict[str, A
 
 def session_submission_resources(
     client: IpcClient,
-) -> tuple[RuntimeEventStore, ProjectSnapshot]:
+) -> tuple[RuntimeEventStore, ProjectRevision]:
     store = session_runtime_store(client)
-    snapshot = client.project_snapshot
-    if snapshot is None:
+    revision = client.project_revision
+    if revision is None:
         raise RpcError(
             -32000,
             "sessions_unavailable",
             "Server error",
             {"message": "session submission is not configured"},
         )
-    return store, snapshot
+    return store, revision
 
 
 def session_runtime_store(client: IpcClient) -> RuntimeEventStore:

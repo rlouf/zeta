@@ -235,7 +235,7 @@ nested agents.
 A Python file in `agents/tools/<agent-slug>/` defines one tool for that agent.
 The file must expose one `RegisteredCapability` as `tool` or through a
 zero-argument `tool()` factory. Zeta validates the file and records its exact
-source in the project generation. See [Zeta Tools](zeta-tools.md#agent-authored-tools).
+source in the project revision. See [Zeta Tools](zeta-tools.md#agent-authored-tools).
 
 The filename stem is the agent slug. It must match `[a-z0-9_-]+`.
 
@@ -327,7 +327,7 @@ Zeta applies the same selection rule to `tools` and `skills`:
 - Use `[]` to select no entries.
 - List names to select only those entries.
 
-Zeta resolves omitted fields when it creates the project generation. The
+Zeta resolves omitted fields when it creates the project revision. The
 generation records the exact tool and skill names. A later catalog change does
 not change an existing generation.
 
@@ -842,7 +842,7 @@ zeta sessions list
 ```
 
 `sessions send` keeps the existing owner agent. It uses that agent's current
-definition and project generation. It fails if the owner is not enabled in the
+definition and project revision. It fails if the owner is not enabled in the
 current project. Use `--idempotency-key` when a client may repeat a start or
 send request.
 

@@ -18,7 +18,7 @@ the runtime's own durable state, in three independent places:
 
 - each run's execution manifest (recorded on the attempt) pins
   `skills.triage-policy` to a content address;
-- each project generation is journaled (`runtime.project_snapshot.recorded`)
+- each project revision is journaled (`runtime.project_revision.recorded`)
   with the skill body and its content address, verified on reload;
 - the policy text the model actually read is stored as a content-addressed
   `tool_result` component inside the decision prompt.
@@ -75,7 +75,7 @@ which is recreated on every run and git-ignored.
 - `==> Run 2` — a fresh equivalent case is now labeled `account_request`
   (asserted). Its manifest pins a different skill content address, its prompt
   carries a different `tool_result` component, and the journal now holds two
-  project generations, each pinning its own revision.
+  project revisions, each pinning its own revision.
 - `==> Operator loop, part 1` — `zeta traces diff` compares the two decision
   prompts component by component; the only substantive change is the policy
   `tool_result`, shown as a unified diff. A plain `diff -u` of the two

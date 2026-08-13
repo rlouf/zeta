@@ -387,7 +387,7 @@ def validate_agent_tool_definition(
 def load_agent_tool_definition(
     definition: AgentToolDefinition,
 ) -> RegisteredCapability:
-    """Compile the exact source stored in an immutable project generation."""
+    """Compile the exact source stored in an immutable project revision."""
 
     namespace: dict[str, Any] = {"__name__": f"zeta_agent_tool_{definition.owner}"}
     try:

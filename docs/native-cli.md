@@ -26,13 +26,13 @@ Start the runtime in the background.
 zeta up --detach --project-root ~/my-project
 ```
 
-Inspect the active generation.
+Inspect the active revision.
 
 ```sh
 zeta status --project-root ~/my-project
 ```
 
-Stop the runtime. The active generation remains available.
+Stop the runtime. The active revision remains available.
 
 ```sh
 zeta down --project-root ~/my-project
@@ -53,12 +53,12 @@ zeta check --project-root ~/my-project
 
 ### `zeta reload`
 
-`reload` validates source and atomically activates a new generation. A running
-runtime uses the new generation after reload completes.
+`reload` validates source and atomically activates a new revision. A running
+runtime uses the new revision after reload completes.
 
 An edited agent keeps its previous active version until a successful reload.
 A new agent remains inactive until a successful reload. A failed reload keeps
-the previous generation.
+the previous revision.
 
 ```sh
 zeta reload --project-root ~/my-project
@@ -66,7 +66,7 @@ zeta reload --project-root ~/my-project
 
 ### `zeta up`
 
-`up` starts the runtime with the active generation. It does not read draft
+`up` starts the runtime with the active revision. It does not read draft
 source. Run `reload` first.
 
 Use `--detach` to start the runtime in the background.
@@ -79,8 +79,8 @@ Without `--detach`, `up` stays in the foreground. Press `Ctrl-C` to stop it.
 
 ### `zeta status`
 
-`status` reports runtime health. It also reports the deployed generation and
-its enabled agents. It reports the deployed generation after `down` too.
+`status` reports runtime health. It also reports the deployed revision and
+its enabled agents. It reports the deployed revision after `down` too.
 
 ```sh
 zeta status --project-root ~/my-project
@@ -95,11 +95,11 @@ zeta status --json --project-root ~/my-project \
 ```
 
 The JSON document has `schema` equal to `zeta.status` and `version` equal to
-`1`. The `status` field is one of `running`, `stopping`, `stopped`, `stale`, or
+`2`. The `status` field is one of `running`, `stopping`, `stopped`, `stale`, or
 `degraded`.
 
-`active_project` is absent if no generation exists. If present, it contains
-`generation_id` and an `agents` list. Each list item has `slug`, `name`,
+`active_project` is absent if no revision exists. If present, it contains
+`revision_id` and an `agents` list. Each list item has `slug`, `name`,
 `description`, `schedule_count`, and `source_address`.
 
 The CLI can add fields in later versions. Scripts must ignore fields they do
@@ -107,13 +107,21 @@ not use. A breaking change requires a new version.
 
 ### `zeta down`
 
-`down` stops the runtime. It preserves the active generation and state.
+`down` stops the runtime. It preserves the active revision and state.
 
 ```sh
 zeta down --project-root ~/my-project
 ```
 
 The command succeeds if the runtime is already stopped.
+
+## State change
+
+This release changes project revision fields and the native dispatch schema.
+It does not open earlier preview state.
+
+Use a new state directory, or back up and remove the old state directory.
+Then run `zeta reload` before `zeta up`.
 
 ## Runtime state
 

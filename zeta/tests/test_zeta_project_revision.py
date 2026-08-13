@@ -11,14 +11,14 @@ from zeta.context.transforms import ContentWorkspace
 from zeta.events import DraftEvent
 from zeta.harness.dispatch import QueueingDispatcher
 from zeta.harness.project import (
-    ProjectSnapshot,
-    ProjectSnapshotUnavailable,
+    ProjectRevision,
+    ProjectRevisionUnavailable,
     agent_from_manifest,
     agent_manifest,
     content_id,
-    load_project_snapshot,
-    load_recorded_project_snapshot,
-    record_project_snapshot,
+    load_project_revision,
+    load_recorded_project_revision,
+    record_project_revision,
 )
 from zeta.harness.routing import (
     AgentDefinition,
@@ -35,7 +35,7 @@ from zeta.substrate import InMemoryStore
 from zeta.tools import register_builtin_tools
 
 
-def write_snapshot_project(root: Path, *, description: str = "Handles work.") -> Path:
+def write_revision_project(root: Path, *, description: str = "Handles work.") -> Path:
     agents = root / "agents"
     events = agents / "events"
     events.mkdir(parents=True)
@@ -70,8 +70,8 @@ Handle the work.
     return agents
 
 
-def load_snapshot(agents: Path):
-    return load_project_snapshot(
+def load_revision(agents: Path):
+    return load_project_revision(
         agents,
         registry=EventConnectorRegistry(),
         tool_registry=CapabilityRegistry(),
@@ -116,26 +116,26 @@ capability = RegisteredCapability(
 '''
 
 
-def test_project_snapshot_generation_is_content_addressed(tmp_path: Path) -> None:
-    agents = write_snapshot_project(tmp_path)
+def test_project_revision_revision_is_content_addressed(tmp_path: Path) -> None:
+    agents = write_revision_project(tmp_path)
 
-    first = load_snapshot(agents)
-    second = load_snapshot(agents)
+    first = load_revision(agents)
+    second = load_revision(agents)
     (agents / "worker.md").write_text(
         (agents / "worker.md")
         .read_text(encoding="utf-8")
         .replace("Handles work.", "Handles changed work."),
         encoding="utf-8",
     )
-    changed = load_snapshot(agents)
+    changed = load_revision(agents)
 
-    assert first.generation_id == second.generation_id
+    assert first.revision_id == second.revision_id
     assert first.manifest == second.manifest
-    assert changed.generation_id != first.generation_id
+    assert changed.revision_id != first.revision_id
 
 
-def test_project_snapshot_inherits_omitted_tools_and_skills(tmp_path: Path) -> None:
-    agents = write_snapshot_project(tmp_path)
+def test_project_revision_inherits_omitted_tools_and_skills(tmp_path: Path) -> None:
+    agents = write_revision_project(tmp_path)
     (agents / "limited.md").write_text(
         """---
 name: Limited
@@ -155,16 +155,16 @@ Handle the work.
     registry = CapabilityRegistry()
     register_builtin_tools(registry)
 
-    snapshot = load_project_snapshot(
+    revision = load_project_revision(
         agents,
         registry=EventConnectorRegistry(),
         tool_registry=registry,
         model_selection=None,
     )
 
-    worker = next(spec for spec in snapshot.project.specs if spec.slug == "worker")
-    limited = next(spec for spec in snapshot.project.specs if spec.slug == "limited")
-    master = next(spec for spec in snapshot.project.specs if spec.slug == "zeta.master")
+    worker = next(spec for spec in revision.project.specs if spec.slug == "worker")
+    limited = next(spec for spec in revision.project.specs if spec.slug == "limited")
+    master = next(spec for spec in revision.project.specs if spec.slug == "zeta.master")
     inherited_tools = tuple(registry.list_capability_ids())
     assert worker.tools == inherited_tools
     assert worker.skills == ("review",)
@@ -173,7 +173,7 @@ Handle the work.
     assert master.accepts == ("session.message.requested",)
     assert limited.tools == ()
     assert limited.skills == ()
-    master_manifest = snapshot.execution_manifest(master)
+    master_manifest = revision.execution_manifest(master)
     assert tuple(master_manifest["capabilities"]) == inherited_tools
     assert tuple(master_manifest["skills"]) == ("review",)
     assert master_manifest["agent"]["tools_inherit"] is True
@@ -181,8 +181,8 @@ Handle the work.
 
 
 def test_direct_message_runs_the_owning_authored_agent(tmp_path: Path) -> None:
-    snapshot = load_snapshot(write_snapshot_project(tmp_path))
-    spec = next(spec for spec in snapshot.project.specs if spec.slug == "worker")
+    revision = load_revision(write_revision_project(tmp_path))
+    spec = next(spec for spec in revision.project.specs if spec.slug == "worker")
     calls: list[tuple[str, str, str]] = []
 
     async def successful_agent_loop(
@@ -200,9 +200,9 @@ def test_direct_message_runs_the_owning_authored_agent(tmp_path: Path) -> None:
     executor = compile_agent_definition(
         spec,
         agent_loop=successful_agent_loop,
-        event_registry=snapshot.project.events,
-        project_generation=snapshot.generation_id,
-        execution_manifest=snapshot.execution_manifest(spec),
+        event_registry=revision.project.events,
+        project_revision=revision.revision_id,
+        execution_manifest=revision.execution_manifest(spec),
     )
     store = RuntimeEventStore.open(tmp_path / "zeta.sqlite3")
     submission = submit_session_message(
@@ -210,7 +210,7 @@ def test_direct_message_runs_the_owning_authored_agent(tmp_path: Path) -> None:
         message="Continue with the new evidence.",
         agent_id=spec.slug,
         session_id="session-existing",
-        project_generation=snapshot.generation_id,
+        project_revision=revision.revision_id,
         idempotency_key="message-1",
     )
     dispatcher = QueueingDispatcher(store, executors=[executor])
@@ -229,8 +229,8 @@ def test_direct_message_runs_the_owning_authored_agent(tmp_path: Path) -> None:
 
 
 def test_packaged_master_runs_through_the_authored_agent_path(tmp_path: Path) -> None:
-    snapshot = load_snapshot(write_snapshot_project(tmp_path))
-    spec = next(spec for spec in snapshot.project.specs if spec.slug == "zeta.master")
+    revision = load_revision(write_revision_project(tmp_path))
+    spec = next(spec for spec in revision.project.specs if spec.slug == "zeta.master")
     calls: list[tuple[str, str]] = []
 
     async def successful_agent_loop(
@@ -249,21 +249,21 @@ def test_packaged_master_runs_through_the_authored_agent_path(tmp_path: Path) ->
     executor = compile_agent_definition(
         spec,
         agent_loop=successful_agent_loop,
-        event_registry=snapshot.project.events,
-        project_generation=snapshot.generation_id,
-        execution_manifest=snapshot.execution_manifest(spec),
+        event_registry=revision.project.events,
+        project_revision=revision.revision_id,
+        execution_manifest=revision.execution_manifest(spec),
     )
     store = RuntimeEventStore.open(tmp_path / "zeta.sqlite3")
     first = start_master_session(
         store,
         message="Inspect this project.",
-        project_generation=snapshot.generation_id,
+        project_revision=revision.revision_id,
         idempotency_key="start-1",
     )
     repeated = start_master_session(
         store,
         message="Inspect this project.",
-        project_generation=snapshot.generation_id,
+        project_revision=revision.revision_id,
         idempotency_key="start-1",
     )
     dispatcher = QueueingDispatcher(store, executors=[executor])
@@ -275,13 +275,13 @@ def test_packaged_master_runs_through_the_authored_agent_path(tmp_path: Path) ->
     assert store.session_status(first["session_id"])["agent_id"] == "zeta.master"
 
 
-def test_project_snapshot_activates_an_agent_content_tool_in_the_next_generation(
+def test_project_revision_activates_an_agent_content_tool_in_the_next_revision(
     tmp_path: Path,
 ) -> None:
-    agents = write_snapshot_project(tmp_path)
+    agents = write_revision_project(tmp_path)
     registry = CapabilityRegistry()
     content = InMemoryStore()
-    before = load_project_snapshot(
+    before = load_project_revision(
         agents,
         registry=EventConnectorRegistry(),
         tool_registry=registry,
@@ -318,7 +318,7 @@ def test_project_snapshot_activates_an_agent_content_tool_in_the_next_generation
 
     assert before.tool_registry.resolve("echo") is None
     workspace.promote(transformed.promotions[0])
-    after = load_project_snapshot(
+    after = load_project_revision(
         agents,
         registry=EventConnectorRegistry(),
         tool_registry=registry,
@@ -326,7 +326,7 @@ def test_project_snapshot_activates_an_agent_content_tool_in_the_next_generation
         content_store=content,
     )
 
-    assert after.generation_id != before.generation_id
+    assert after.revision_id != before.revision_id
     assert after.project.specs[0].tools == ("agent.worker.echo",)
     assert after.tool_registry.invoke("agent.worker.echo", {"text": "hello"}) == {
         "ok": True,
@@ -335,10 +335,10 @@ def test_project_snapshot_activates_an_agent_content_tool_in_the_next_generation
     assert after.manifest["agent_tools"][0]["object_id"] == transformed.output_ids[0]
 
     runtime = RuntimeEventStore.open(tmp_path / "runtime.sqlite3")
-    record_project_snapshot(runtime, after)
-    restored = load_recorded_project_snapshot(
+    record_project_revision(runtime, after)
+    restored = load_recorded_project_revision(
         runtime,
-        after.generation_id,
+        after.revision_id,
         registry=EventConnectorRegistry(),
         tool_registry=registry,
     )
@@ -349,27 +349,27 @@ def test_project_snapshot_activates_an_agent_content_tool_in_the_next_generation
     runtime.close()
 
 
-def test_project_snapshot_compiles_a_file_tool_through_the_agent_tool_path(
+def test_project_revision_compiles_a_file_tool_through_the_agent_tool_path(
     tmp_path: Path,
 ) -> None:
-    agents = write_snapshot_project(tmp_path)
+    agents = write_revision_project(tmp_path)
     tools = agents / "tools" / "worker"
     tools.mkdir(parents=True)
     source = agent_tool_source("worker", "echo", prefix="file:")
     (tools / "echo.py").write_text(source, encoding="utf-8")
 
-    snapshot = load_snapshot(agents)
+    revision = load_revision(agents)
 
-    assert snapshot.project.specs[0].tools == ("agent.worker.echo",)
-    assert snapshot.tool_registry.invoke(
+    assert revision.project.specs[0].tools == ("agent.worker.echo",)
+    assert revision.tool_registry.invoke(
         "agent.worker.echo",
         {"text": "hello"},
     ) == {"ok": True, "echo": "file:hello"}
-    assert snapshot.manifest["agent_tools"] == [
+    assert revision.manifest["agent_tools"] == [
         {
             "owner": "worker",
             "key": "tools/echo",
-            "object_id": snapshot.manifest["agent_tools"][0]["object_id"],
+            "object_id": revision.manifest["agent_tools"][0]["object_id"],
             "name": "echo",
             "capability_id": "agent.worker.echo",
             "source": source,
@@ -377,8 +377,8 @@ def test_project_snapshot_compiles_a_file_tool_through_the_agent_tool_path(
     ]
 
 
-def test_project_snapshot_loads_a_file_tool_factory(tmp_path: Path) -> None:
-    agents = write_snapshot_project(tmp_path)
+def test_project_revision_loads_a_file_tool_factory(tmp_path: Path) -> None:
+    agents = write_revision_project(tmp_path)
     tools = agents / "tools" / "worker"
     tools.mkdir(parents=True)
     (tools / "echo.py").write_text(
@@ -386,16 +386,16 @@ def test_project_snapshot_loads_a_file_tool_factory(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    snapshot = load_snapshot(agents)
+    revision = load_revision(agents)
 
-    assert snapshot.tool_registry.invoke("agent.worker.echo", {"text": "hello"}) == {
+    assert revision.tool_registry.invoke("agent.worker.echo", {"text": "hello"}) == {
         "ok": True,
         "echo": "hello",
     }
 
 
-def test_project_snapshot_rejects_an_invalid_agent_tool_schema(tmp_path: Path) -> None:
-    agents = write_snapshot_project(tmp_path)
+def test_project_revision_rejects_an_invalid_agent_tool_schema(tmp_path: Path) -> None:
+    agents = write_revision_project(tmp_path)
     tools = agents / "tools" / "worker"
     tools.mkdir(parents=True)
     source = agent_tool_source("worker", "echo").replace(
@@ -405,14 +405,14 @@ def test_project_snapshot_rejects_an_invalid_agent_tool_schema(tmp_path: Path) -
     )
     (tools / "echo.py").write_text(source, encoding="utf-8")
 
-    with pytest.raises(ProjectSnapshotUnavailable, match="could not be imported"):
-        load_snapshot(agents)
+    with pytest.raises(ProjectRevisionUnavailable, match="could not be imported"):
+        load_revision(agents)
 
 
-def test_project_snapshot_rejects_duplicate_file_and_content_tools(
+def test_project_revision_rejects_duplicate_file_and_content_tools(
     tmp_path: Path,
 ) -> None:
-    agents = write_snapshot_project(tmp_path)
+    agents = write_revision_project(tmp_path)
     tools = agents / "tools" / "worker"
     tools.mkdir(parents=True)
     (tools / "echo.py").write_text(
@@ -449,8 +449,8 @@ def test_project_snapshot_rejects_duplicate_file_and_content_tools(
     )
     workspace.promote(transformed.promotions[0])
 
-    with pytest.raises(ProjectSnapshotUnavailable, match="already registered"):
-        load_project_snapshot(
+    with pytest.raises(ProjectRevisionUnavailable, match="already registered"):
+        load_project_revision(
             agents,
             registry=EventConnectorRegistry(),
             tool_registry=CapabilityRegistry(),
@@ -459,10 +459,10 @@ def test_project_snapshot_rejects_duplicate_file_and_content_tools(
         )
 
 
-def test_project_snapshot_keeps_each_agent_tool_generation_stable(
+def test_project_revision_keeps_each_agent_tool_revision_stable(
     tmp_path: Path,
 ) -> None:
-    agents = write_snapshot_project(tmp_path)
+    agents = write_revision_project(tmp_path)
     registry = CapabilityRegistry()
     content = InMemoryStore()
     workspace = ContentWorkspace(
@@ -494,7 +494,7 @@ def test_project_snapshot_keeps_each_agent_tool_generation_stable(
         }
     )
     workspace.promote(first_change.promotions[0])
-    first = load_project_snapshot(
+    first = load_project_revision(
         agents,
         registry=EventConnectorRegistry(),
         tool_registry=registry,
@@ -524,7 +524,7 @@ def test_project_snapshot_keeps_each_agent_tool_generation_stable(
     )
     workspace.promote(second_change.promotions[0])
 
-    second = load_project_snapshot(
+    second = load_project_revision(
         agents,
         registry=EventConnectorRegistry(),
         tool_registry=registry,
@@ -532,7 +532,7 @@ def test_project_snapshot_keeps_each_agent_tool_generation_stable(
         content_store=content,
     )
 
-    assert first.generation_id != second.generation_id
+    assert first.revision_id != second.revision_id
     assert first.tool_registry.invoke("echo", {"text": "hello"}) == {
         "ok": True,
         "echo": "one:hello",
@@ -543,19 +543,19 @@ def test_project_snapshot_keeps_each_agent_tool_generation_stable(
     }
 
 
-def test_project_snapshot_round_trips_publishes(tmp_path: Path) -> None:
-    snapshot = load_snapshot(write_snapshot_project(tmp_path))
+def test_project_revision_round_trips_publishes(tmp_path: Path) -> None:
+    revision = load_revision(write_revision_project(tmp_path))
     store = RuntimeEventStore.open(tmp_path / "zeta.sqlite3")
 
-    record_project_snapshot(store, snapshot)
-    restored = load_recorded_project_snapshot(
+    record_project_revision(store, revision)
+    restored = load_recorded_project_revision(
         store,
-        snapshot.generation_id,
+        revision.revision_id,
         registry=EventConnectorRegistry(),
     )
 
-    agent = snapshot.manifest["agents"][0]
-    assert snapshot.manifest["version"] == 5
+    agent = revision.manifest["agents"][0]
+    assert revision.manifest["version"] == 6
     assert "content_address" in agent
     assert agent["publishes"] == ["work.completed"]
     assert "returns" not in agent
@@ -565,27 +565,27 @@ def test_project_snapshot_round_trips_publishes(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("field", "value", "error"),
     [
-        ("schema", "zeta.other_snapshot", "unsupported project snapshot schema"),
-        ("version", 1, "unsupported project snapshot version"),
+        ("schema", "zeta.other_revision", "unsupported project revision schema"),
+        ("version", 1, "unsupported project revision version"),
     ],
 )
-def test_recorded_project_snapshot_rejects_other_formats(
+def test_recorded_project_revision_rejects_other_formats(
     tmp_path: Path,
     field: str,
     value: object,
     error: str,
 ) -> None:
-    current = load_snapshot(write_snapshot_project(tmp_path))
+    current = load_revision(write_revision_project(tmp_path))
     manifest = {**current.manifest, field: value}
-    generation_id = content_id("project", manifest)
-    legacy = ProjectSnapshot(generation_id, current.project, manifest)
+    revision_id = content_id("project", manifest)
+    legacy = ProjectRevision(revision_id, current.project, manifest)
     store = RuntimeEventStore.open(tmp_path / "zeta.sqlite3")
-    record_project_snapshot(store, legacy)
+    record_project_revision(store, legacy)
 
-    with pytest.raises(ProjectSnapshotUnavailable, match=error):
-        load_recorded_project_snapshot(
+    with pytest.raises(ProjectRevisionUnavailable, match=error):
+        load_recorded_project_revision(
             store,
-            generation_id,
+            revision_id,
             registry=EventConnectorRegistry(),
         )
 
@@ -593,9 +593,9 @@ def test_recorded_project_snapshot_rejects_other_formats(
 def test_execution_manifest_contains_publishes_and_relevant_schemas(
     tmp_path: Path,
 ) -> None:
-    snapshot = load_snapshot(write_snapshot_project(tmp_path))
+    revision = load_revision(write_revision_project(tmp_path))
 
-    execution_manifest = snapshot.execution_manifest(snapshot.project.specs[0])
+    execution_manifest = revision.execution_manifest(revision.project.specs[0])
 
     assert execution_manifest["version"] == 4
     assert execution_manifest["agent"]["publishes"] == ["work.completed"]
@@ -616,10 +616,10 @@ def test_execution_manifest_contains_publishes_and_relevant_schemas(
 def test_execution_manifest_preserves_returns_and_relevant_schemas(
     tmp_path: Path,
 ) -> None:
-    snapshot = load_snapshot(write_snapshot_project(tmp_path))
-    spec = replace(snapshot.project.specs[0], returns=("work.completed",))
+    revision = load_revision(write_revision_project(tmp_path))
+    spec = replace(revision.project.specs[0], returns=("work.completed",))
 
-    execution_manifest = snapshot.execution_manifest(spec)
+    execution_manifest = revision.execution_manifest(spec)
     restored = agent_from_manifest(agent_manifest(spec))
 
     assert execution_manifest["agent"]["returns"] == ["work.completed"]
@@ -627,8 +627,8 @@ def test_execution_manifest_preserves_returns_and_relevant_schemas(
     assert restored.returns == ("work.completed",)
 
 
-def test_project_snapshot_preserves_executor_config(tmp_path: Path) -> None:
-    spec = load_snapshot(write_snapshot_project(tmp_path)).project.specs[0]
+def test_project_revision_preserves_executor_config(tmp_path: Path) -> None:
+    spec = load_revision(write_revision_project(tmp_path)).project.specs[0]
     config = {
         "app": "zeta-tools",
         "options": {
@@ -652,8 +652,8 @@ def test_project_snapshot_preserves_executor_config(tmp_path: Path) -> None:
     )
 
 
-def test_project_snapshot_preserves_home_relative_base_dir(tmp_path: Path) -> None:
-    spec = load_snapshot(write_snapshot_project(tmp_path)).project.specs[0]
+def test_project_revision_preserves_home_relative_base_dir(tmp_path: Path) -> None:
+    spec = load_revision(write_revision_project(tmp_path)).project.specs[0]
     spec = replace(spec, base_dir=Path("~/vaults/CEO"))
 
     manifest = agent_manifest(spec)
@@ -663,42 +663,42 @@ def test_project_snapshot_preserves_home_relative_base_dir(tmp_path: Path) -> No
     assert restored.base_dir == Path("~/vaults/CEO")
 
 
-def test_project_snapshot_rejects_non_json_executor_config(tmp_path: Path) -> None:
-    spec = load_snapshot(write_snapshot_project(tmp_path)).project.specs[0]
+def test_project_revision_rejects_non_json_executor_config(tmp_path: Path) -> None:
+    spec = load_revision(write_revision_project(tmp_path)).project.specs[0]
     manifest = agent_manifest(spec)
     manifest["executor"]["config"] = {"threshold": float("nan")}
 
     with pytest.raises(
-        ProjectSnapshotUnavailable,
+        ProjectRevisionUnavailable,
         match="invalid tool executor config",
     ):
         agent_from_manifest(manifest)
 
 
-def test_project_snapshot_is_recorded_once_per_generation(tmp_path: Path) -> None:
-    snapshot = load_snapshot(write_snapshot_project(tmp_path))
+def test_project_revision_is_recorded_once_per_revision(tmp_path: Path) -> None:
+    revision = load_revision(write_revision_project(tmp_path))
     store = RuntimeEventStore.open(tmp_path / "zeta.sqlite3")
 
-    first = record_project_snapshot(store, snapshot)
-    second = record_project_snapshot(store, snapshot)
+    first = record_project_revision(store, revision)
+    second = record_project_revision(store, revision)
 
     assert first.id == second.id
-    assert first.payload["generation_id"] == snapshot.generation_id
+    assert first.payload["revision_id"] == revision.revision_id
     assert len(store.list_events(Filter(event_type=first.event_type))) == 1
 
-    restored = load_recorded_project_snapshot(
+    restored = load_recorded_project_revision(
         store,
-        snapshot.generation_id,
+        revision.revision_id,
         registry=EventConnectorRegistry(),
     )
-    assert restored.generation_id == snapshot.generation_id
-    assert restored.project.specs == snapshot.project.specs
+    assert restored.revision_id == revision.revision_id
+    assert restored.project.specs == revision.project.specs
 
 
 def test_attempt_records_project_and_execution_manifests(tmp_path: Path) -> None:
-    snapshot = load_snapshot(write_snapshot_project(tmp_path))
-    spec = snapshot.project.specs[0]
-    execution_manifest = snapshot.execution_manifest(spec)
+    revision = load_revision(write_revision_project(tmp_path))
+    spec = revision.project.specs[0]
+    execution_manifest = revision.execution_manifest(spec)
 
     async def successful_agent_loop(*_args: object) -> AgentRunResult:
         return AgentRunResult(final_answer="done")
@@ -706,8 +706,8 @@ def test_attempt_records_project_and_execution_manifests(tmp_path: Path) -> None
     executor = compile_agent_definition(
         spec,
         agent_loop=successful_agent_loop,
-        event_registry=snapshot.project.events,
-        project_generation=snapshot.generation_id,
+        event_registry=revision.project.events,
+        project_revision=revision.revision_id,
         execution_manifest=execution_manifest,
     )
     store = RuntimeEventStore.open(tmp_path / "zeta.sqlite3")
@@ -722,10 +722,10 @@ def test_attempt_records_project_and_execution_manifests(tmp_path: Path) -> None
     started = store.list_events(Filter(event_type="runtime.attempt.started"))[0]
 
     assert queue_item["event_id"] == outcome.event.id
-    assert queue_item["project_generation"] == snapshot.generation_id
+    assert queue_item["project_revision"] == revision.revision_id
     assert queue_item["session_id"] == f"agent/{spec.slug}/{outcome.event.id}"
     assert attempt["session_id"] == queue_item["session_id"]
-    assert attempt["project_generation"] == snapshot.generation_id
+    assert attempt["project_revision"] == revision.revision_id
     assert attempt["execution_manifest_id"] == execution_manifest["id"]
     assert attempt["execution_manifest"] == execution_manifest
     assert started.payload["execution_manifest"] == execution_manifest
@@ -745,7 +745,7 @@ def test_attempt_records_project_and_execution_manifests(tmp_path: Path) -> None
     }
 
 
-def test_dispatcher_selects_executor_for_routed_generation(tmp_path: Path) -> None:
+def test_dispatcher_selects_executor_for_routed_revision(tmp_path: Path) -> None:
     calls: list[str] = []
 
     async def run_old(_invocation) -> dict[str, str]:
@@ -760,7 +760,7 @@ def test_dispatcher_selects_executor_for_routed_generation(tmp_path: Path) -> No
         AgentDefinition(
             "worker",
             (EventPattern("work.requested"),),
-            project_generation="project:old",
+            project_revision="project:old",
         ),
         run_old,
     )
@@ -768,7 +768,7 @@ def test_dispatcher_selects_executor_for_routed_generation(tmp_path: Path) -> No
         AgentDefinition(
             "worker",
             (EventPattern("work.requested"),),
-            project_generation="project:current",
+            project_revision="project:current",
         ),
         run_current,
     )

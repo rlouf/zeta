@@ -1,4 +1,4 @@
-"""Immutable compiled-project generation manifests."""
+"""Immutable compiled-project revision manifests."""
 
 from __future__ import annotations
 
@@ -51,22 +51,22 @@ from zeta.journal.store import Filter
 from zeta.models.profiles import ModelSelection
 from zeta.substrate import Object, Store
 
-PROJECT_SNAPSHOT_RECORDED = "runtime.project_snapshot.recorded"
-PROJECT_SNAPSHOT_SCHEMA = "zeta.project_snapshot"
-PROJECT_SNAPSHOT_VERSION = 5
+PROJECT_REVISION_RECORDED = "runtime.project_revision.recorded"
+PROJECT_REVISION_SCHEMA = "zeta.project_revision"
+PROJECT_REVISION_VERSION = 6
 EXECUTION_MANIFEST_SCHEMA = "zeta.execution_manifest"
 EXECUTION_MANIFEST_VERSION = 4
 
 
-class ProjectSnapshotUnavailable(RuntimeError):
-    """Raised when a recorded project generation cannot be executed safely."""
+class ProjectRevisionUnavailable(RuntimeError):
+    """Raised when a recorded project revision cannot be executed safely."""
 
 
 @dataclass(frozen=True)
-class ProjectSnapshot:
+class ProjectRevision:
     """One validated authored project and its content-addressed manifest."""
 
-    generation_id: str
+    revision_id: str
     project: AgentProject
     manifest: dict[str, Any]
     tool_registry: CapabilityRegistry = field(
@@ -93,7 +93,7 @@ class ProjectSnapshot:
         manifest = {
             "schema": EXECUTION_MANIFEST_SCHEMA,
             "version": EXECUTION_MANIFEST_VERSION,
-            "project_generation": self.generation_id,
+            "project_revision": self.revision_id,
             "agent": agent_manifest(spec),
             "events": relevant_events,
             "skills": selected_skills,
@@ -110,7 +110,7 @@ class ProjectSnapshot:
         return {**manifest, "id": content_id("execution_manifest", manifest)}
 
 
-def load_project_snapshot(
+def load_project_revision(
     agents_dir: Path,
     *,
     registry,
@@ -118,73 +118,73 @@ def load_project_snapshot(
     model_selection: ModelSelection | None,
     tool_executors: ToolExecutorProviderRegistry | None = None,
     content_store: Store | None = None,
-) -> ProjectSnapshot:
+) -> ProjectRevision:
     project = load_agent_project(agents_dir, registry=registry)
     definitions = (
         *agent_file_tool_definitions(agents_dir, project),
         *agent_content_tool_definitions(project, content_store),
     )
     validate_agent_tool_counts(project, definitions)
-    snapshot_registry = registry_with_agent_tools(tool_registry, definitions)
+    revision_registry = registry_with_agent_tools(tool_registry, definitions)
     project = project_with_agent_tool_grants(project, definitions)
-    project = project_with_inherited_capabilities(project, snapshot_registry)
+    project = project_with_inherited_capabilities(project, revision_registry)
     validate_agent_project(
         project,
         tool_executors=tool_executor_providers_with_local(tool_executors),
     )
     manifest = project_manifest(
         project,
-        tool_registry=snapshot_registry,
+        tool_registry=revision_registry,
         model_selection=model_selection,
         agent_tools=definitions,
     )
-    return ProjectSnapshot(
-        generation_id=content_id("project", manifest),
+    return ProjectRevision(
+        revision_id=content_id("project", manifest),
         project=project,
         manifest=manifest,
-        tool_registry=snapshot_registry,
+        tool_registry=revision_registry,
     )
 
 
-def record_project_snapshot(
+def record_project_revision(
     events: RuntimeEventStore,
-    snapshot: ProjectSnapshot,
+    revision: ProjectRevision,
 ) -> Event:
     return events.accept(
         DraftEvent(
-            PROJECT_SNAPSHOT_RECORDED,
+            PROJECT_REVISION_RECORDED,
             "zeta",
             {
-                "generation_id": snapshot.generation_id,
-                "manifest": snapshot.manifest,
+                "revision_id": revision.revision_id,
+                "manifest": revision.manifest,
             },
-            idempotency_key=f"project_snapshot:{snapshot.generation_id}",
+            idempotency_key=f"project_revision:{revision.revision_id}",
         )
     ).event
 
 
-def load_recorded_project_snapshot(
+def load_recorded_project_revision(
     events: RuntimeEventStore,
-    generation_id: str,
+    revision_id: str,
     *,
     registry: EventConnectorRegistry | None,
     tool_executors: ToolExecutorProviderRegistry | None = None,
     tool_registry: CapabilityRegistry | None = None,
-) -> ProjectSnapshot:
-    for event in events.list_events(Filter(event_type=PROJECT_SNAPSHOT_RECORDED)):
-        if event.payload.get("generation_id") != generation_id:
+) -> ProjectRevision:
+    for event in events.list_events(Filter(event_type=PROJECT_REVISION_RECORDED)):
+        if event.payload.get("revision_id") != revision_id:
             continue
         manifest = event.payload.get("manifest")
         if not isinstance(manifest, Mapping):
             break
         parsed_manifest = dict(manifest)
-        if not content_id_matches("project", parsed_manifest, generation_id):
-            raise ProjectSnapshotUnavailable(
-                f"recorded project snapshot {generation_id!r} failed verification"
+        if not content_id_matches("project", parsed_manifest, revision_id):
+            raise ProjectRevisionUnavailable(
+                f"recorded project revision {revision_id!r} failed verification"
             )
         project = project_from_manifest(parsed_manifest, registry=registry)
         definitions = agent_tools_from_manifest(parsed_manifest)
-        snapshot_registry = registry_with_agent_tools(
+        revision_registry = registry_with_agent_tools(
             tool_registry or CapabilityRegistry(),
             definitions,
         )
@@ -192,14 +192,14 @@ def load_recorded_project_snapshot(
             project,
             tool_executors=tool_executor_providers_with_local(tool_executors),
         )
-        return ProjectSnapshot(
-            generation_id,
+        return ProjectRevision(
+            revision_id,
             project,
             parsed_manifest,
-            snapshot_registry,
+            revision_registry,
         )
-    raise ProjectSnapshotUnavailable(
-        f"recorded project snapshot {generation_id!r} was not found"
+    raise ProjectRevisionUnavailable(
+        f"recorded project revision {revision_id!r} was not found"
     )
 
 
@@ -211,8 +211,8 @@ def project_manifest(
     agent_tools: tuple[AgentToolDefinition, ...] = (),
 ) -> dict[str, Any]:
     return {
-        "schema": PROJECT_SNAPSHOT_SCHEMA,
-        "version": PROJECT_SNAPSHOT_VERSION,
+        "schema": PROJECT_REVISION_SCHEMA,
+        "version": PROJECT_REVISION_VERSION,
         "agents": [agent_manifest(spec) for spec in project.specs],
         "events": {event_type: schema for event_type, schema in project.events.items()},
         "skills": {
@@ -249,7 +249,7 @@ def agent_content_tool_definitions(
             continue
         revision = content_revision_from_object(store.get_object(current.object_id))
         if revision.owner != spec.slug:
-            raise ProjectSnapshotUnavailable(
+            raise ProjectRevisionUnavailable(
                 f"agent content for {spec.slug!r} belongs to another owner"
             )
         for key in revision.projection_order:
@@ -267,7 +267,7 @@ def agent_content_tool_definitions(
                     )
                 )
             except AgentToolDefinitionError as exc:
-                raise ProjectSnapshotUnavailable(str(exc)) from exc
+                raise ProjectRevisionUnavailable(str(exc)) from exc
     return tuple(definitions)
 
 
@@ -282,12 +282,12 @@ def agent_file_tool_definitions(
         if not owner_dir.exists():
             continue
         if not owner_dir.is_dir():
-            raise ProjectSnapshotUnavailable(
+            raise ProjectRevisionUnavailable(
                 f"agent tool path {owner_dir} is not a directory"
             )
         for path in sorted(owner_dir.glob("*.py")):
             if path.is_symlink() or not path.is_file():
-                raise ProjectSnapshotUnavailable(
+                raise ProjectRevisionUnavailable(
                     f"agent tool path {path} must be a regular file"
                 )
             name = path.stem
@@ -296,7 +296,7 @@ def agent_file_tool_definitions(
             try:
                 source = path.read_text(encoding="utf-8")
             except (OSError, UnicodeError) as exc:
-                raise ProjectSnapshotUnavailable(
+                raise ProjectRevisionUnavailable(
                     f"agent tool source {path} could not be read"
                 ) from exc
             content = {
@@ -318,7 +318,7 @@ def agent_file_tool_definitions(
                     )
                 )
             except AgentToolDefinitionError as exc:
-                raise ProjectSnapshotUnavailable(str(exc)) from exc
+                raise ProjectRevisionUnavailable(str(exc)) from exc
     return tuple(definitions)
 
 
@@ -329,7 +329,7 @@ def validate_agent_tool_counts(
     for spec in project.specs:
         count = sum(definition.owner == spec.slug for definition in definitions)
         if count > 32:
-            raise ProjectSnapshotUnavailable(
+            raise ProjectRevisionUnavailable(
                 f"agent {spec.slug!r} has too many authored tools"
             )
 
@@ -345,7 +345,7 @@ def registry_with_agent_tools(
         try:
             registry.register(load_agent_tool_definition(definition))
         except (AgentToolDefinitionError, ValueError) as exc:
-            raise ProjectSnapshotUnavailable(str(exc)) from exc
+            raise ProjectRevisionUnavailable(str(exc)) from exc
     return registry
 
 
@@ -360,7 +360,7 @@ def project_with_agent_tool_grants(
     for spec in project.specs:
         authored = grants.get(spec.slug, [])
         if authored and spec.executor.provider != "local":
-            raise ProjectSnapshotUnavailable(
+            raise ProjectRevisionUnavailable(
                 f"agent {spec.slug!r} must use the local executor for authored tools"
             )
         specs.append(
@@ -376,7 +376,7 @@ def project_with_inherited_capabilities(
     project: AgentProject,
     registry: CapabilityRegistry,
 ) -> AgentProject:
-    """Resolve inheritance before Zeta hashes and executes a generation."""
+    """Resolve inheritance before Zeta hashes and executes a revision."""
     tools = tuple(registry.list_capability_ids())
     skills = tuple(sorted(project.skills.skills))
     return replace(
@@ -397,11 +397,11 @@ def agent_tools_from_manifest(
 ) -> tuple[AgentToolDefinition, ...]:
     raw_tools = manifest.get("agent_tools")
     if not isinstance(raw_tools, list):
-        raise ProjectSnapshotUnavailable("project snapshot has invalid agent tools")
+        raise ProjectRevisionUnavailable("project revision has invalid agent tools")
     definitions = []
     for raw in raw_tools:
         if not isinstance(raw, Mapping):
-            raise ProjectSnapshotUnavailable("project snapshot has invalid agent tool")
+            raise ProjectRevisionUnavailable("project revision has invalid agent tool")
         try:
             definition = agent_tool_definition_from_content(
                 {
@@ -414,7 +414,7 @@ def agent_tools_from_manifest(
                 object_id=str(raw.get("object_id") or ""),
             )
         except AgentToolDefinitionError as exc:
-            raise ProjectSnapshotUnavailable(str(exc)) from exc
+            raise ProjectRevisionUnavailable(str(exc)) from exc
         definitions.append(definition)
     return tuple(definitions)
 
@@ -425,14 +425,14 @@ def project_from_manifest(
     registry: EventConnectorRegistry | None,
 ) -> AgentProject:
     schema = manifest.get("schema")
-    if schema != PROJECT_SNAPSHOT_SCHEMA:
-        raise ProjectSnapshotUnavailable(
-            f"unsupported project snapshot schema {schema!r}"
+    if schema != PROJECT_REVISION_SCHEMA:
+        raise ProjectRevisionUnavailable(
+            f"unsupported project revision schema {schema!r}"
         )
     version = manifest.get("version")
-    if version != PROJECT_SNAPSHOT_VERSION:
-        raise ProjectSnapshotUnavailable(
-            f"unsupported project snapshot version {version!r}"
+    if version != PROJECT_REVISION_VERSION:
+        raise ProjectRevisionUnavailable(
+            f"unsupported project revision version {version!r}"
         )
     connectors = registry or EventConnectorRegistry()
     recorded_connectors = manifest.get("connectors")
@@ -441,12 +441,12 @@ def project_from_manifest(
         for connector in sorted(connectors.event_connectors(), key=lambda item: item.id)
     ]
     if recorded_connectors != current_connectors:
-        raise ProjectSnapshotUnavailable(
-            "recorded project snapshot connector code is not available"
+        raise ProjectRevisionUnavailable(
+            "recorded project revision connector code is not available"
         )
     raw_events = manifest.get("events")
     if not isinstance(raw_events, Mapping):
-        raise ProjectSnapshotUnavailable("project snapshot has invalid events")
+        raise ProjectRevisionUnavailable("project revision has invalid events")
     events = EventRegistry(
         {
             str(event_type): schema if isinstance(schema, Mapping) else None
@@ -455,7 +455,7 @@ def project_from_manifest(
     )
     raw_skills = manifest.get("skills")
     if not isinstance(raw_skills, Mapping):
-        raise ProjectSnapshotUnavailable("project snapshot has invalid skills")
+        raise ProjectRevisionUnavailable("project revision has invalid skills")
     skills = SkillRegistry(
         {
             str(name): skill_from_manifest(str(name), value)
@@ -464,7 +464,7 @@ def project_from_manifest(
     )
     raw_agents = manifest.get("agents")
     if not isinstance(raw_agents, list):
-        raise ProjectSnapshotUnavailable("project snapshot has invalid agents")
+        raise ProjectRevisionUnavailable("project revision has invalid agents")
     return AgentProject(
         specs=tuple(agent_from_manifest(value) for value in raw_agents),
         events=events,
@@ -475,7 +475,7 @@ def project_from_manifest(
 
 def agent_from_manifest(value: Any) -> AgentSpec:
     if not isinstance(value, Mapping):
-        raise ProjectSnapshotUnavailable("project snapshot has invalid agent")
+        raise ProjectRevisionUnavailable("project revision has invalid agent")
     raw_model = value.get("model")
     model = (
         ModelSpec(name=str(raw_model["name"]), url=str(raw_model["url"]))
@@ -493,7 +493,7 @@ def agent_from_manifest(value: Any) -> AgentSpec:
     )
     raw_executor = value.get("executor")
     if not isinstance(raw_executor, Mapping):
-        raise ProjectSnapshotUnavailable("project snapshot has invalid tool executor")
+        raise ProjectRevisionUnavailable("project revision has invalid tool executor")
     provider = raw_executor.get("provider")
     config = raw_executor.get("config")
     if (
@@ -501,12 +501,12 @@ def agent_from_manifest(value: Any) -> AgentSpec:
         or provider == ""
         or not isinstance(config, Mapping)
     ):
-        raise ProjectSnapshotUnavailable("project snapshot has invalid tool executor")
+        raise ProjectRevisionUnavailable("project revision has invalid tool executor")
     try:
         normalized_config = executor_config(config)
     except ValueError as exc:
-        raise ProjectSnapshotUnavailable(
-            "project snapshot has invalid tool executor config"
+        raise ProjectRevisionUnavailable(
+            "project revision has invalid tool executor config"
         ) from exc
     raw_schedules = value.get("schedules")
     schedules = (
@@ -552,7 +552,7 @@ def agent_from_manifest(value: Any) -> AgentSpec:
 
 def skill_from_manifest(name: str, value: Any) -> SkillResource:
     if not isinstance(value, Mapping):
-        raise ProjectSnapshotUnavailable("project snapshot has invalid skill")
+        raise ProjectRevisionUnavailable("project revision has invalid skill")
     body = str(value["body"])
     recorded = str(value["object_id"])
     minted = Object(
@@ -561,7 +561,7 @@ def skill_from_manifest(name: str, value: Any) -> SkillResource:
         data={"body": body},
     )
     if minted.content_address() != recorded:
-        raise ProjectSnapshotUnavailable(f"recorded skill {name!r} failed verification")
+        raise ProjectRevisionUnavailable(f"recorded skill {name!r} failed verification")
     return SkillResource(name, Path(str(value["path"])), body, recorded)
 
 
@@ -617,8 +617,8 @@ def agent_manifest(spec: AgentSpec) -> dict[str, Any]:
 def connector_manifest(connector: ConnectorManifest) -> dict[str, Any]:
     """Record a connector's describe manifest, not its spawn command.
 
-    The launch vector is machine-local, so it stays out of the generation
-    identity; the schemas and semantics are what a recorded generation must
+    The launch vector is machine-local, so it stays out of the revision
+    identity; the schemas and semantics are what a recorded revision must
     be able to re-validate against.
     """
     return {

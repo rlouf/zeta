@@ -77,9 +77,9 @@ class LifecycleRecorder:
         run_id: str | None = None,
         **payload_extra: Any,
     ) -> Event:
-        if route.project_generation is not None:
+        if route.project_revision is not None:
             payload_extra = {
-                "project_generation": route.project_generation,
+                "project_revision": route.project_revision,
                 **payload_extra,
             }
         return self.queue_item_for_target(
@@ -163,9 +163,9 @@ class LifecycleRecorder:
         )
         if self.worker_name is not None:
             payload_extra = {"worker_name": self.worker_name, **payload_extra}
-        if agent.definition.project_generation is not None:
+        if agent.definition.project_revision is not None:
             payload_extra = {
-                "project_generation": agent.definition.project_generation,
+                "project_revision": agent.definition.project_revision,
                 **payload_extra,
             }
         if agent.definition.execution_manifest is not None:

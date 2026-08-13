@@ -720,7 +720,7 @@
     "language_neutral_contract": true,
     "fixture": "portable_project",
     "expected_project_id": "project:b3:1ae998acedf3dae1aa8c1ebd3ed19c932355ea4db56e2d0c7dd35c69cc93d9ef",
-    "expected_worker_execution_id": "execution_manifest:b3:1676ca151895e1a96845af7418558884397e48f3375bc13c57a99cbcfb16779b",
+    "expected_worker_execution_id": "execution_manifest:b3:1ae9249cd394e778fb5313a714e8ad03107775f8db4b45a3683377c1f06427ea",
     "excluded_fields": ["command", "callable", "source_path"]
   }
 }

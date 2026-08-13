@@ -28,7 +28,7 @@ use zeta_journal::{DraftEvent, Event, EventFilter};
 use zeta_manifest::{
     scheduled_event_type, verify_execution_manifest, verify_project_manifest,
     DeliverySemantics as AuthoredDeliverySemantics, ExecutionManifest, ExecutionManifestId,
-    ImplementationFingerprint, ProjectGenerationId, ProjectManifest, ScheduleEntry,
+    ImplementationFingerprint, ProjectManifest, ProjectRevisionId, ScheduleEntry,
 };
 
 const SCHEDULER_SOURCE: &str = "zeta:scheduler";
@@ -145,7 +145,7 @@ impl RuntimePaths {
         &self.log
     }
 
-    /// Returns the atomically replaced active project generation document.
+    /// Returns the atomically replaced active project revision document.
     pub fn active_project(&self) -> &Path {
         &self.active_project
     }
@@ -1758,7 +1758,7 @@ pub struct InvocationInputs {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PreparedAgent {
     execution_manifest_id: ExecutionManifestId,
-    project_generation_id: ProjectGenerationId,
+    project_revision_id: ProjectRevisionId,
     agent_slug: String,
     agent_description: String,
     capabilities: Vec<ResolvedCapability>,
@@ -1786,17 +1786,17 @@ impl PreparedAgent {
         self.execution_manifest_id
     }
 
-    /// Returns the verified project-generation identity.
+    /// Returns the verified project-revision identity.
     ///
     /// # Examples
     ///
     /// ```
     /// # fn inspect(agent: &zeta::PreparedAgent) {
-    /// let _id: zeta_manifest::ProjectGenerationId = agent.project_generation_id();
+    /// let _id: zeta_manifest::ProjectRevisionId = agent.project_revision_id();
     /// # }
     /// ```
-    pub fn project_generation_id(&self) -> ProjectGenerationId {
-        self.project_generation_id
+    pub fn project_revision_id(&self) -> ProjectRevisionId {
+        self.project_revision_id
     }
 
     /// Returns the authored agent slug.
@@ -1977,7 +1977,7 @@ pub fn prepare_agent(
     let publishable_events = publishable_events(execution)?;
     Ok(PreparedAgent {
         execution_manifest_id: execution.id,
-        project_generation_id: execution.project_generation,
+        project_revision_id: execution.project_revision,
         agent_slug: execution.agent.slug.clone(),
         agent_description: execution.agent.description.clone(),
         capabilities,

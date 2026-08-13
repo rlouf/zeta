@@ -189,7 +189,7 @@ class RuntimeJournalStore(_SqliteBacked):
         rows = self.connection.execute(
             """
             SELECT handle, agent_id, session_id, fields_json,
-                   project_generation
+                   project_revision
             FROM waits
             WHERE status = 'active'
               AND event_type = ?
@@ -259,7 +259,7 @@ class RuntimeJournalStore(_SqliteBacked):
             rows = self.connection.execute(
                 """
                 SELECT handle, agent_id, session_id, event_type, fields_json,
-                       deadline_ms, source_queue_item_id, project_generation,
+                       deadline_ms, source_queue_item_id, project_revision,
                        created_event_id, status, matched_event_id,
                        terminal_event_id, updated_at
                 FROM waits
@@ -423,7 +423,7 @@ class RuntimeJournalStore(_SqliteBacked):
                 row = self.connection.execute(
                     """
                     SELECT handle, agent_id, session_id, deadline_ms,
-                           project_generation, created_event_id
+                           project_revision, created_event_id
                     FROM waits
                     WHERE status = 'active'
                       AND deadline_ms IS NOT NULL
@@ -528,7 +528,7 @@ class RuntimeJournalStore(_SqliteBacked):
                 row = self.connection.execute(
                     """
                     SELECT q.queue_item_id, q.event_id, q.target_agent,
-                           q.project_generation, q.session_id, q.status,
+                           q.project_revision, q.session_id, q.status,
                            q.cancel_requested_event_id,
                            COALESCE(
                              input.run_id,
@@ -706,7 +706,7 @@ class RuntimeJournalStore(_SqliteBacked):
                 row = self.connection.execute(
                     """
                     SELECT q.queue_item_id, q.event_id, q.target_agent,
-                           q.project_generation, q.session_id, q.status,
+                           q.project_revision, q.session_id, q.status,
                            q.cancel_requested_event_id, q.cancel_reason,
                            COALESCE(input.run_id, attempt.run_id) AS run_id,
                            attempt.attempt_id, attempt.attempt_number,
@@ -812,7 +812,7 @@ class CoordinationSqliteStore(_SqliteBacked):
         with self.events.write_lock:
             row = self.connection.execute(
                 """
-                SELECT queue_item_id, event_id, target_agent, project_generation,
+                SELECT queue_item_id, event_id, target_agent, project_revision,
                        session_id, input_cursor, status,
                        cancel_requested_event_id, cancel_requested_at,
                        cancel_reason
@@ -859,7 +859,7 @@ class CoordinationSqliteStore(_SqliteBacked):
         with self.events.write_lock:
             rows = self.connection.execute(
                 """
-                SELECT queue_item_id, event_id, target_agent, project_generation,
+                SELECT queue_item_id, event_id, target_agent, project_revision,
                        session_id, input_cursor, status, available_at,
                        claimed_by, claimed_until, attempt_count, last_error,
                        cancel_requested_event_id, cancel_requested_at,
@@ -888,7 +888,7 @@ class CoordinationSqliteStore(_SqliteBacked):
                 SELECT a.attempt_id, a.queue_item_id, a.event_id, a.attempt_number,
                        a.target_agent, a.worker_name, a.status, a.started_at,
                        a.heartbeat_at, a.finished_at, a.error, a.session_id, a.run_id,
-                       a.project_generation, a.execution_manifest_id,
+                       a.project_revision, a.execution_manifest_id,
                        a.execution_manifest_json,
                        COALESCE(a.summary, r.summary) AS summary,
                        a.input_tokens, a.output_tokens,
@@ -1723,7 +1723,7 @@ def _row_to_wait(row: sqlite3.Row) -> dict[str, Any]:
         "fields": _json_column(row["fields_json"]),
         "deadline_ms": int(deadline_ms) if isinstance(deadline_ms, int) else None,
         "source_queue_item_id": str(row["source_queue_item_id"]),
-        "project_generation": _optional_str(row["project_generation"]),
+        "project_revision": _optional_str(row["project_revision"]),
         "created_event_id": str(row["created_event_id"]),
         "status": str(row["status"]),
         "matched_event_id": _optional_str(row["matched_event_id"]),
@@ -1746,7 +1746,7 @@ def _wait_matched_event(row: sqlite3.Row, event: Event) -> Event:
                 "matched_event_id": event.id,
                 "event_type": event.event_type,
                 "payload": dict(event.payload),
-                "project_generation": _optional_str(row["project_generation"]),
+                "project_revision": _optional_str(row["project_revision"]),
             },
             idempotency_key=f"wait.matched:{handle}",
             caused_by=event.id,
@@ -1758,15 +1758,15 @@ def _wait_matched_event(row: sqlite3.Row, event: Event) -> Event:
 def _wait_continuation_event(row: sqlite3.Row, matched: Event) -> Event:
     agent_id = str(row["agent_id"])
     queue_item_id = ids.queue_item_id(matched.id, agent_id)
-    project_generation = _optional_str(row["project_generation"])
+    project_revision = _optional_str(row["project_revision"])
     payload: dict[str, Any] = {
         "queue_item_id": queue_item_id,
         "event_id": matched.id,
         "target_agent": agent_id,
         "status": "available",
     }
-    if project_generation is not None:
-        payload["project_generation"] = project_generation
+    if project_revision is not None:
+        payload["project_revision"] = project_revision
     return Event.from_draft(
         DraftEvent(
             event_type="runtime.queue_item.available",
@@ -1798,7 +1798,7 @@ def _wait_timed_out_event(row: sqlite3.Row, timestamp_ms: int) -> Event:
                 deadline_ms / 1_000,
                 tz=UTC,
             ).isoformat(),
-            "project_generation": _optional_str(row["project_generation"]),
+            "project_revision": _optional_str(row["project_revision"]),
         },
         idempotency_key=f"wait.timed_out:{handle}",
         caused_by=str(row["created_event_id"]),
@@ -1998,10 +1998,10 @@ def _queue_item_lifecycle_payload(
         "target_agent": str(row["target_agent"]),
         "status": status,
     }
-    project_generation = _optional_str(row["project_generation"])
+    project_revision = _optional_str(row["project_revision"])
     session_id = _optional_str(row["session_id"])
-    if project_generation is not None:
-        payload["project_generation"] = project_generation
+    if project_revision is not None:
+        payload["project_revision"] = project_revision
     if session_id is not None:
         payload["session_id"] = session_id
     return payload
@@ -2036,7 +2036,7 @@ def _row_to_attempt(row: sqlite3.Row) -> dict[str, Any]:
             "error": _optional_str(row["error"]),
             "session_id": _optional_str(row["session_id"]),
             "run_id": _optional_str(row["run_id"]),
-            "project_generation": _optional_str(row["project_generation"]),
+            "project_revision": _optional_str(row["project_revision"]),
             "execution_manifest_id": _optional_str(row["execution_manifest_id"]),
             "execution_manifest": _json_column(row["execution_manifest_json"]),
             "input_tokens": _row_token_count(
@@ -2057,7 +2057,7 @@ def _row_to_attempt(row: sqlite3.Row) -> dict[str, Any]:
 
 def _without_none_snapshot_fields(record: dict[str, Any]) -> dict[str, Any]:
     for key in (
-        "project_generation",
+        "project_revision",
         "execution_manifest_id",
         "execution_manifest",
     ):

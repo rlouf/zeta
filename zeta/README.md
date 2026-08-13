@@ -22,7 +22,7 @@ it across invocations while keeping the model loop local.
 Provider setup is asynchronous. Returned executors must support concurrent
 calls; Zeta awaits their `aclose()` method during worker shutdown.
 
-Executor configuration is persisted in project snapshots and execution
+Executor configuration is persisted in project revisions and execution
 manifests. Store only secret references, profile names, or environment-variable
 names there—never credentials or secret values. Providers resolve references
 during setup. Config must contain JSON-compatible values with string object

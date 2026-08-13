@@ -32,7 +32,7 @@ def scaffolded_runtime(tmp_path: Path, name: str) -> worker.WorkerServices:
 def test_scaffolded_project_waves_the_filesystem_connector(tmp_path: Path) -> None:
     runtime = scaffolded_runtime(tmp_path, "demo")
     try:
-        waves = ingress_waves(runtime.project_snapshot.project)
+        waves = ingress_waves(runtime.project_revision.project)
         assert len(waves) == 1
         connector, wave = waves[0]
         assert connector.id == "filesystem"
@@ -55,7 +55,7 @@ def test_process_allowlist_excluding_a_bound_connector_fails_loudly(
     )
     try:
         with pytest.raises(ManifestError, match="unknown ingress event"):
-            _ = runtime.project_snapshot
+            _ = runtime.project_revision
     finally:
         runtime.events.close()
 
@@ -186,7 +186,7 @@ async def test_ipc_ingress_reaches_the_journal(
 
 
 def demo_binding(runtime: worker.WorkerServices):
-    spec = next(spec for spec in runtime.project_snapshot.project.specs if spec.ingress)
+    spec = next(spec for spec in runtime.project_revision.project.specs if spec.ingress)
     return spec.ingress[0]
 
 

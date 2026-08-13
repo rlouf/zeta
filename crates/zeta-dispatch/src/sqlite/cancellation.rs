@@ -495,7 +495,7 @@ fn recovered_attempt_cancelled_event(
     }
     let mut payload = attempt_payload(attempt, AttemptStatus::Cancelled);
     payload.remove("error");
-    payload.remove("project_generation");
+    payload.remove("project_revision");
     payload.insert(
         "finished_at".to_owned(),
         Value::String(finished_at.to_owned()),

@@ -26,7 +26,7 @@ pub use spec::{
     AgentProject, AgentProjectInput, AgentSpec, AgentValidationContext, CapabilityId,
     CapabilitySpec, ConnectorOperation, ConnectorSpec, DeliverySemantics, EgressBinding,
     EventRegistry, ExecutionManifest, ExecutionManifestId, ExecutorProviderSpec, ExecutorSpec,
-    ImplementationFingerprint, IngressBinding, ModelSelectionSpec, ModelSpec, ProjectGenerationId,
-    ProjectManifest, RetrySpec, ScheduleEntry, EXECUTION_MANIFEST_SCHEMA,
+    ImplementationFingerprint, IngressBinding, ModelSelectionSpec, ModelSpec, ProjectManifest,
+    ProjectRevisionId, RetrySpec, ScheduleEntry, EXECUTION_MANIFEST_SCHEMA,
     EXECUTION_MANIFEST_VERSION, PROJECT_MANIFEST_SCHEMA, PROJECT_MANIFEST_VERSION,
 };

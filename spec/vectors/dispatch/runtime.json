@@ -339,7 +339,7 @@
             "github.issue.*"
           ],
           "session": "shared",
-          "project_generation": "project:audit"
+          "project_revision": "project:audit"
         },
         {
           "agent_id": "triage",
@@ -347,7 +347,7 @@
             "github.issue.*"
           ],
           "session": "{thread_id}",
-          "project_generation": "project:triage"
+          "project_revision": "project:triage"
         },
         {
           "agent_id": "notify",
@@ -361,19 +361,19 @@
           "agent_id": "audit.bot:v1",
           "queue_item_id": "qi_evt_route_1_audit_bot_v1",
           "session_id": "agent/audit.bot:v1",
-          "project_generation": "project:audit"
+          "project_revision": "project:audit"
         },
         {
           "agent_id": "triage",
           "queue_item_id": "qi_evt_route_1_triage",
           "session_id": "agent/triage/issue-7",
-          "project_generation": "project:triage"
+          "project_revision": "project:triage"
         },
         {
           "agent_id": "notify",
           "queue_item_id": "qi_evt_route_1_notify",
           "session_id": "agent/notify/evt_route_1",
-          "project_generation": null
+          "project_revision": null
         }
       ]
     },
@@ -513,7 +513,7 @@
               "work.*"
             ],
             "session": "shared",
-            "project_generation": "gen-a"
+            "project_revision": "gen-a"
           },
           {
             "agent_id": "beta",
@@ -521,7 +521,7 @@
               "work.requested"
             ],
             "session": "per-event",
-            "project_generation": "gen-b"
+            "project_revision": "gen-b"
           }
         ],
         "expected": {
@@ -549,7 +549,7 @@
                 "target_agent": "alpha",
                 "status": "available",
                 "session_id": "agent/alpha",
-                "project_generation": "gen-a"
+                "project_revision": "gen-a"
               }
             },
             {
@@ -563,7 +563,7 @@
                 "target_agent": "beta",
                 "status": "available",
                 "session_id": "agent/beta/evt_fanout",
-                "project_generation": "gen-b"
+                "project_revision": "gen-b"
               }
             }
           ],
@@ -572,14 +572,14 @@
               "queue_item_id": "qi_evt_fanout_alpha",
               "target_agent": "alpha",
               "session_id": "agent/alpha",
-              "project_generation": "gen-a",
+              "project_revision": "gen-a",
               "status": "available"
             },
             {
               "queue_item_id": "qi_evt_fanout_beta",
               "target_agent": "beta",
               "session_id": "agent/beta/evt_fanout",
-              "project_generation": "gen-b",
+              "project_revision": "gen-b",
               "status": "available"
             }
           ]
@@ -620,7 +620,7 @@
               "queue_item_id": "qi_evt_unhandled",
               "target_agent": "",
               "session_id": null,
-              "project_generation": null,
+              "project_revision": null,
               "status": "unhandled"
             }
           ]
@@ -678,7 +678,7 @@
           "queue_item_id": "qi_evt_retry_worker",
           "event_id": "evt_retry",
           "target_agent": "worker",
-          "project_generation": null,
+          "project_revision": null,
           "session_id": "agent/worker/evt_retry"
         },
         "failure_message": "temporary outage",
@@ -832,7 +832,7 @@
           "message": "Stop this turn",
           "agent_id": "master",
           "session_id": "session-1",
-          "project_generation": "generation-1",
+          "project_revision": "revision-1",
           "idempotency_key": "cancel-turn"
         },
         "reason": "user changed direction",
@@ -859,7 +859,7 @@
                 "queue_item_id": "qi_$message_master",
                 "event_id": "$message",
                 "target_agent": "master",
-                "project_generation": "generation-1",
+                "project_revision": "revision-1",
                 "session_id": "session-1",
                 "status": "available"
               }
@@ -874,7 +874,7 @@
                 "event_id": "$message",
                 "target_agent": "master",
                 "status": "available",
-                "project_generation": "generation-1",
+                "project_revision": "revision-1",
                 "session_id": "session-1",
                 "reason": "user changed direction"
               }
@@ -889,7 +889,7 @@
                 "event_id": "$message",
                 "target_agent": "master",
                 "status": "cancelled",
-                "project_generation": "generation-1",
+                "project_revision": "revision-1",
                 "session_id": "session-1",
                 "result": {
                   "outcome": "cancelled",
@@ -915,7 +915,7 @@
       {
         "name": "ordered_atomic_success",
         "agent_id": "worker",
-        "project_generation": "generation-1",
+        "project_revision": "revision-1",
         "triggering_event": {
           "id": "evt_complete",
           "event_type": "work.requested",
@@ -934,7 +934,7 @@
           "queue_item_id": "qi_evt_complete_worker",
           "event_id": "evt_complete",
           "target_agent": "worker",
-          "project_generation": "generation-1",
+          "project_revision": "revision-1",
           "session_id": "agent/worker/evt_complete"
         },
         "result": {
@@ -1000,7 +1000,7 @@
                 "target_agent": "worker",
                 "status": "claimed",
                 "session_id": "agent/worker/evt_complete",
-                "project_generation": "generation-1"
+                "project_revision": "revision-1"
               }
             },
             {
@@ -1017,7 +1017,7 @@
                 "status": "running",
                 "session_id": "agent/worker/evt_complete",
                 "run_id": "run_att_qi_evt_complete_worker_1",
-                "project_generation": "generation-1"
+                "project_revision": "revision-1"
               }
             },
             {
@@ -1034,7 +1034,7 @@
                 "status": "completed",
                 "session_id": "agent/worker/evt_complete",
                 "run_id": "run_att_qi_evt_complete_worker_1",
-                "project_generation": "generation-1",
+                "project_revision": "revision-1",
                 "result": {
                   "final_answer": "done",
                   "events": [
@@ -1128,7 +1128,7 @@
                 },
                 "deadline": "2030-01-02T03:04:05+00:00",
                 "source_queue_item_id": "qi_evt_complete_worker",
-                "project_generation": "generation-1"
+                "project_revision": "revision-1"
               }
             },
             {
@@ -1160,7 +1160,7 @@
                 "target_agent": "worker",
                 "status": "completed",
                 "session_id": "agent/worker/evt_complete",
-                "project_generation": "generation-1",
+                "project_revision": "revision-1",
                 "result": {
                   "final_answer": "done",
                   "events": [
@@ -1244,7 +1244,7 @@
           "queue_item_id": "qi_evt_complete_worker",
           "event_id": "evt_complete",
           "target_agent": "worker",
-          "project_generation": "generation-1",
+          "project_revision": "revision-1",
           "session_id": "agent/worker/evt_complete"
         },
         "result": {
@@ -1346,7 +1346,7 @@
             },
             "deadline": null,
             "source_queue_item_id": "qi-source",
-            "project_generation": "generation-1"
+            "project_revision": "revision-1"
           },
           "idempotency_key": "agent.wait:qi-source:0",
           "caused_by": "attempt-completed-1",
@@ -1385,7 +1385,7 @@
                 },
                 "deadline": null,
                 "source_queue_item_id": "qi-source",
-                "project_generation": "generation-1"
+                "project_revision": "revision-1"
               }
             },
             {
@@ -1413,7 +1413,7 @@
                   "repository": "zeta",
                   "issue": 5
                 },
-                "project_generation": "generation-1"
+                "project_revision": "revision-1"
               }
             },
             {
@@ -1426,7 +1426,7 @@
                 "event_id": "$wait_matched",
                 "target_agent": "issue-agent",
                 "status": "available",
-                "project_generation": "generation-1"
+                "project_revision": "revision-1"
               }
             }
           ],

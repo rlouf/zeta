@@ -1,4 +1,4 @@
-# Native Reactive Dispatcher Design
+# Native Runtime Design
 
 ## Current implementation
 
@@ -10,12 +10,20 @@ The actor recovers unbound ingress, expired claims, due waits, and due deferred
 publications at start. It waits for the next durable deadline between commands.
 `zeta status` reports queue state and the next deadline through `runtime.status`.
 
-The agent execution lane, schedules, connector process host, and durable egress
-outbox remain future work. No connector call occurs in this slice.
+The agent lane now claims up to four independent queue items. It runs each
+agent outside the Dispatch actor, renews its lease, and commits its terminal
+proposal before it wakes more work. Queue items retain their archived agent
+revision across reload and restart.
+
+The initial native executor supports direct model declarations and durable
+internal controls. It does not grant native tools yet. Those tools need their
+own durable effect boundary. Schedules, the connector process host, and the
+durable egress outbox remain future work. No connector call occurs in this
+slice.
 
 ## Decision
 
-The native host will use a reactive dispatcher. It will not poll one queue item per
+The native host will use an event-driven dispatcher. It will not poll one queue item per
 pass. SQLite remains the durable authority. A local wake signal only reduces
 the time from commit to work.
 
@@ -68,7 +76,7 @@ the check wakes the wait.
 
 The actor will return the earliest of these deadlines:
 
-- the next schedule occurrence from the active generation;
+- the next schedule occurrence from the active revision;
 - the next deferred publication;
 - the next wait timeout;
 - the next retry availability time;
@@ -87,12 +95,13 @@ The runtime will have separate bounded lanes.
 
 | Lane | Unit | Default rule |
 | --- | --- | --- |
-| Agent | One claimed queue item | Preserve existing session and lock rules |
+| Agent | One claimed queue item | Run up to four independent items |
 | Egress | One claimed outbox delivery | Do not wait for available agent capacity |
 | Control | Reload, cancel, and shutdown commands | Always accept; no external call |
 
-`agent_capacity` and `egress_capacity` are separate settings. The first native
-release should default both to one. The design must support higher values.
+`agent_capacity` and `egress_capacity` are separate settings. The native agent
+lane currently uses four slots. The design must support a later configuration
+for both values.
 
 The agent lane will use the existing `queue_items`, `queue_claims`, locks, and
 attempt lifecycle. The runtime must renew a live claim before its deadline.
@@ -108,7 +117,7 @@ model call.
 Each delivery has these fields:
 
 - a deterministic delivery id from the source event and egress binding;
-- the source event id and project generation;
+- the source event id and project revision;
 - the connector id, operation, payload, and binding options;
 - the idempotency key and declared delivery semantics;
 - availability, attempt, claim, and terminal state;
@@ -163,9 +172,9 @@ NextDeadline(now)
 Status()
 ```
 
-`CompleteAttempt` accepts the immutable generation from the claimed queue item.
+`CompleteAttempt` accepts the immutable revision from the claimed queue item.
 It never rereads authored files. `Ingress` and `CompleteAttempt` receive a
-compiled route plan from the active generation. They store the generation with
+compiled route plan from the active revision. They store the revision with
 each queued item and outbox delivery.
 
 The initial implementation can keep the existing claim then start sequence.
@@ -174,9 +183,9 @@ perform both durable transitions before it returns execution input.
 
 ## Reload and status
 
-`zeta reload` validates and atomically stores the next project generation. It
+`zeta reload` validates and atomically stores the next project revision. It
 then sends a wakeup so the timer uses the new schedule plan. Existing queued
-items and outbox deliveries retain their stored generation.
+items and outbox deliveries retain their stored revision.
 
 `zeta status` will report separate agent and egress lane counts. It will also report
 the next deadline and the oldest available work time. This makes delay visible
@@ -197,10 +206,9 @@ to stop. The actor will write no synthetic successful result.
 
 ## Remaining implementation order
 
-1. Run the existing agent queue through the reactive agent lane.
-2. Add the outbox schema, claim API, and reactive egress lane.
-3. Connect the native agent runner, attempt heartbeats, and cancellation.
-4. Add schedules and connector process supervision after durable egress works.
+1. Add the outbox schema, claim API, and event-driven egress lane.
+2. Add durable native-tool effect handling to the agent executor.
+3. Add schedules and connector process supervision after durable egress works.
 
 ## Acceptance tests
 

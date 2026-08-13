@@ -26,7 +26,7 @@ class RuntimeEventProjection:
     """Projects runtime queue and attempt events into queryable tables."""
 
     name = "zeta.harness.runtime"
-    version = 12
+    version = 13
 
     def init_schema(self, connection: sqlite3.Connection) -> None:
         connection.executescript(
@@ -35,7 +35,7 @@ class RuntimeEventProjection:
               queue_item_id TEXT PRIMARY KEY,
               event_id TEXT NOT NULL,
               target_agent TEXT NOT NULL,
-              project_generation TEXT,
+              project_revision TEXT,
               session_id TEXT,
               input_cursor INTEGER NOT NULL,
               status TEXT NOT NULL,
@@ -72,7 +72,7 @@ class RuntimeEventProjection:
               error TEXT,
               session_id TEXT,
               run_id TEXT,
-              project_generation TEXT,
+              project_revision TEXT,
               execution_manifest_id TEXT,
               execution_manifest_json TEXT,
               summary TEXT,
@@ -132,7 +132,7 @@ class RuntimeEventProjection:
               fields_json TEXT NOT NULL,
               deadline_ms INTEGER,
               source_queue_item_id TEXT NOT NULL,
-              project_generation TEXT,
+              project_revision TEXT,
               created_event_id TEXT NOT NULL,
               status TEXT NOT NULL,
               matched_event_id TEXT,
@@ -288,7 +288,7 @@ def _index_one_wait(connection: sqlite3.Connection, event: Event) -> None:
         """
         INSERT INTO waits
           (handle, agent_id, session_id, event_type, fields_json, deadline_ms,
-           source_queue_item_id, project_generation, created_event_id, status,
+           source_queue_item_id, project_revision, created_event_id, status,
            updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
         ON CONFLICT(handle) DO NOTHING
@@ -301,7 +301,7 @@ def _index_one_wait(connection: sqlite3.Connection, event: Event) -> None:
             json.dumps(fields, ensure_ascii=False, separators=(",", ":")),
             deadline_ms,
             source_queue_item_id,
-            _optional_str(event.payload.get("project_generation")),
+            _optional_str(event.payload.get("project_revision")),
             event.id,
             event.timestamp_ms,
         ),
@@ -493,15 +493,15 @@ def _index_one_queue_item(connection: sqlite3.Connection, event: Event) -> None:
     connection.execute(
         """
         INSERT INTO queue_items
-          (queue_item_id, event_id, target_agent, project_generation, session_id,
+          (queue_item_id, event_id, target_agent, project_revision, session_id,
            input_cursor, status, available_at, last_error, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(queue_item_id) DO UPDATE SET
           event_id = excluded.event_id,
           target_agent = excluded.target_agent,
-          project_generation = COALESCE(
-            excluded.project_generation,
-            queue_items.project_generation
+          project_revision = COALESCE(
+            excluded.project_revision,
+            queue_items.project_revision
           ),
           session_id = COALESCE(excluded.session_id, queue_items.session_id),
           input_cursor = excluded.input_cursor,
@@ -529,7 +529,7 @@ def _index_one_queue_item(connection: sqlite3.Connection, event: Event) -> None:
             queue_item.queue_item_id,
             queue_item.event_id,
             queue_item.target_agent,
-            _optional_str(event.payload.get("project_generation")),
+            _optional_str(event.payload.get("project_revision")),
             _optional_str(event.payload.get("session_id")) or event.session_id,
             _input_event_cursor(connection, queue_item.event_id, event),
             queue_item.status,
@@ -626,7 +626,7 @@ def _index_one_attempt(connection: sqlite3.Connection, event: Event) -> None:
           (attempt_id, queue_item_id, event_id, attempt_number, target_agent,
            worker_name, claim_token, status, started_at, heartbeat_at,
            finished_at, error, session_id, run_id, summary, input_tokens, output_tokens,
-           project_generation, execution_manifest_id, execution_manifest_json,
+           project_revision, execution_manifest_id, execution_manifest_json,
            tool_calls_json)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(attempt_id) DO UPDATE SET
@@ -637,9 +637,9 @@ def _index_one_attempt(connection: sqlite3.Connection, event: Event) -> None:
           error = excluded.error,
           session_id = excluded.session_id,
           run_id = excluded.run_id,
-          project_generation = COALESCE(
-            excluded.project_generation,
-            attempts.project_generation
+          project_revision = COALESCE(
+            excluded.project_revision,
+            attempts.project_revision
           ),
           execution_manifest_id = COALESCE(
             excluded.execution_manifest_id,
@@ -672,7 +672,7 @@ def _index_one_attempt(connection: sqlite3.Connection, event: Event) -> None:
             summary,
             _usage_token(event, "input_tokens", "prompt_tokens"),
             _usage_token(event, "output_tokens", "completion_tokens"),
-            _optional_str(event.payload.get("project_generation")),
+            _optional_str(event.payload.get("project_revision")),
             _optional_str(event.payload.get("execution_manifest_id")),
             execution_manifest_json,
             tool_calls_json,

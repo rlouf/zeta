@@ -26,41 +26,41 @@ pub const PROJECT_MANIFEST_VERSION: u64 = 1;
 /// Selects the only supported execution-manifest version.
 pub const EXECUTION_MANIFEST_VERSION: u64 = 1;
 
-/// Identifies one canonical normalized project generation.
+/// Identifies one canonical normalized project revision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ProjectGenerationId(Hash);
+pub struct ProjectRevisionId(Hash);
 
-impl ProjectGenerationId {
+impl ProjectRevisionId {
     /// Returns the underlying canonical-body content address.
     pub fn as_hash(&self) -> Hash {
         self.0
     }
 }
 
-impl fmt::Display for ProjectGenerationId {
+impl fmt::Display for ProjectRevisionId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "project:{}", self.0)
     }
 }
 
-impl Serialize for ProjectGenerationId {
+impl Serialize for ProjectRevisionId {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.to_string())
     }
 }
 
-impl<'de> Deserialize<'de> for ProjectGenerationId {
+impl<'de> Deserialize<'de> for ProjectRevisionId {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let text = String::deserialize(deserializer)?;
         let Some(hash) = text.strip_prefix("project:") else {
             return Err(D::Error::custom(
-                "project generation id must start with project:",
+                "project revision id must start with project:",
             ));
         };
         let hash = hash
             .parse::<Hash>()
             .map_err(|error| D::Error::custom(error.to_string()))?;
-        Ok(ProjectGenerationId(hash))
+        Ok(ProjectRevisionId(hash))
     }
 }
 
@@ -107,7 +107,7 @@ impl<'de> Deserialize<'de> for ExecutionManifestId {
 #[serde(deny_unknown_fields)]
 pub struct ProjectManifest {
     /// Identifies the canonical manifest body.
-    pub id: ProjectGenerationId,
+    pub id: ProjectRevisionId,
     /// Names the manifest schema.
     pub schema: String,
     /// Selects the manifest schema version.
@@ -175,8 +175,8 @@ pub struct ExecutionManifest {
     pub schema: String,
     /// Selects the manifest schema version.
     pub version: u64,
-    /// Identifies the complete project generation.
-    pub project_generation: ProjectGenerationId,
+    /// Identifies the complete project revision.
+    pub project_revision: ProjectRevisionId,
     /// Carries the selected normalized agent.
     pub agent: AgentSpec,
     /// Carries only event declarations referenced by the agent.
@@ -201,7 +201,7 @@ pub struct ExecutionManifest {
 struct ExecutionManifestBody {
     schema: String,
     version: u64,
-    project_generation: ProjectGenerationId,
+    project_revision: ProjectRevisionId,
     agent: AgentSpec,
     events: EventRegistry,
     skill_resources: BTreeMap<String, SkillResource>,
@@ -218,7 +218,7 @@ impl ExecutionManifest {
         ExecutionManifestBody {
             schema: self.schema.clone(),
             version: self.version,
-            project_generation: self.project_generation,
+            project_revision: self.project_revision,
             agent: self.agent.clone(),
             events: self.events.clone(),
             skill_resources: self.skill_resources.clone(),
@@ -252,7 +252,7 @@ pub fn project_manifest(project: &AgentProject) -> Result<ProjectManifest, Manif
         model: project.model.clone(),
         runtime_fingerprint: project.runtime_fingerprint.clone(),
     };
-    let id = ProjectGenerationId(manifest_hash(&body, "project")?);
+    let id = ProjectRevisionId(manifest_hash(&body, "project")?);
     Ok(ProjectManifest {
         id,
         schema: body.schema,
@@ -273,20 +273,20 @@ pub fn project_manifest(project: &AgentProject) -> Result<ProjectManifest, Manif
 ///
 /// # Errors
 ///
-/// Returns [`ManifestError`] when the project generation does not match,
+/// Returns [`ManifestError`] when the project revision does not match,
 /// the agent is unknown, or a normalized reference cannot be projected.
 pub fn execution_manifest(
     project: &AgentProject,
-    generation: &ProjectGenerationId,
+    revision: &ProjectRevisionId,
     agent_slug: &str,
 ) -> Result<ExecutionManifest, ManifestError> {
     let current = project_manifest(project)?;
-    if &current.id != generation {
+    if &current.id != revision {
         return Err(ManifestError::new(
             ManifestErrorKind::InvalidIdentity,
             Some(agent_slug),
-            Some("project_generation"),
-            "project generation does not identify the supplied project",
+            Some("project_revision"),
+            "project revision does not identify the supplied project",
         ));
     }
     let Some(agent) = project.agents.get(agent_slug) else {
@@ -382,7 +382,7 @@ pub fn execution_manifest(
     let body = ExecutionManifestBody {
         schema: EXECUTION_MANIFEST_SCHEMA.to_owned(),
         version: EXECUTION_MANIFEST_VERSION,
-        project_generation: *generation,
+        project_revision: *revision,
         agent: agent.clone(),
         events,
         skill_resources,
@@ -398,7 +398,7 @@ pub fn execution_manifest(
         id,
         schema: body.schema,
         version: body.version,
-        project_generation: body.project_generation,
+        project_revision: body.project_revision,
         agent: body.agent,
         events: body.events,
         skill_resources: body.skill_resources,
@@ -531,12 +531,12 @@ pub fn verify_execution_manifest(
             format!("execution manifest identity must be {expected_id}"),
         ));
     }
-    if manifest.project_generation != project_manifest_value.id {
+    if manifest.project_revision != project_manifest_value.id {
         return Err(ManifestError::new(
             ManifestErrorKind::InvalidIdentity,
             Some(&manifest.id.to_string()),
-            Some("project_generation"),
-            "execution manifest names a different project generation",
+            Some("project_revision"),
+            "execution manifest names a different project revision",
         ));
     }
     let value = serde_json::to_value(project_manifest_value).map_err(|error| {

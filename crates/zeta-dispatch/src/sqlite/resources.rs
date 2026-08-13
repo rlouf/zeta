@@ -672,10 +672,10 @@ fn wait_matched_event(identity: &RuntimeEventIdentity, wait: &Wait, input: &Even
         Value::String(input.event_type.clone()),
     );
     payload.insert("payload".to_owned(), Value::Object(input.payload.clone()));
-    if let Some(project_generation) = &wait.project_generation {
+    if let Some(project_revision) = &wait.project_revision {
         payload.insert(
-            "project_generation".to_owned(),
-            Value::String(project_generation.clone()),
+            "project_revision".to_owned(),
+            Value::String(project_revision.clone()),
         );
     }
     Event {
@@ -712,8 +712,8 @@ fn wait_timed_out_event(
         Value::String(format_wait_deadline(deadline_ms)?),
     );
     payload.insert(
-        "project_generation".to_owned(),
-        wait.project_generation
+        "project_revision".to_owned(),
+        wait.project_revision
             .clone()
             .map(Value::String)
             .unwrap_or(Value::Null),
@@ -813,10 +813,10 @@ fn wait_continuation_event(identity: &RuntimeEventIdentity, wait: &Wait, matched
         "status".to_owned(),
         Value::String(QueueItemStatus::Available.to_string()),
     );
-    if let Some(project_generation) = &wait.project_generation {
+    if let Some(project_revision) = &wait.project_revision {
         payload.insert(
-            "project_generation".to_owned(),
-            Value::String(project_generation.clone()),
+            "project_revision".to_owned(),
+            Value::String(project_revision.clone()),
         );
     }
     Event {
@@ -995,13 +995,13 @@ fn index_wait_created(connection: &Connection, event: &Event) -> Result<(), Disp
     let source_queue_item_id = required_runtime_id(event, "source_queue_item_id")?;
     QueueItemId::from_str(&source_queue_item_id)
         .map_err(|_error| invalid_lifecycle(event, "source_queue_item_id"))?;
-    let project_generation = optional_payload_string(event, "project_generation")?;
-    validate_optional_runtime_id(event, "project_generation", project_generation.as_deref())?;
+    let project_revision = optional_payload_string(event, "project_revision")?;
+    validate_optional_runtime_id(event, "project_revision", project_revision.as_deref())?;
     connection
         .execute(
             "INSERT INTO waits (
                 handle, agent_id, session_id, event_type, fields_json,
-                deadline_ms, source_queue_item_id, project_generation,
+                deadline_ms, source_queue_item_id, project_revision,
                 created_event_id, status, matched_event_id,
                 terminal_event_id, updated_at
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
@@ -1014,7 +1014,7 @@ fn index_wait_created(connection: &Connection, event: &Event) -> Result<(), Disp
                 fields_json,
                 deadline_ms,
                 source_queue_item_id,
-                project_generation,
+                project_revision,
                 &event.id,
                 event.timestamp_ms,
             ],
@@ -1219,7 +1219,7 @@ fn deferred_publication_status_str(status: DeferredPublicationStatus) -> &'stati
 
 const WAIT_COLUMNS: &str = "wait.handle, wait.agent_id, wait.session_id,
     wait.event_type, wait.fields_json, wait.deadline_ms,
-    wait.source_queue_item_id, wait.project_generation,
+    wait.source_queue_item_id, wait.project_revision,
     wait.created_event_id, wait.status, wait.matched_event_id,
     wait.terminal_event_id, wait.updated_at";
 
@@ -1262,7 +1262,7 @@ struct StoredWait {
     fields_json: String,
     deadline_ms: Option<i64>,
     source_queue_item_id: String,
-    project_generation: Option<String>,
+    project_revision: Option<String>,
     created_event_id: String,
     status: String,
     matched_event_id: Option<String>,
@@ -1280,7 +1280,7 @@ impl StoredWait {
             fields_json: row.get(4)?,
             deadline_ms: row.get(5)?,
             source_queue_item_id: row.get(6)?,
-            project_generation: row.get(7)?,
+            project_revision: row.get(7)?,
             created_event_id: row.get(8)?,
             status: row.get(9)?,
             matched_event_id: row.get(10)?,
@@ -1313,7 +1313,7 @@ impl StoredWait {
             fields,
             deadline_ms: self.deadline_ms,
             source_queue_item_id,
-            project_generation: self.project_generation,
+            project_revision: self.project_revision,
             created_event_id: self.created_event_id,
             status,
             matched_event_id: self.matched_event_id,

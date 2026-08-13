@@ -132,7 +132,7 @@ pub struct Route {
     accepts: Vec<EventPattern>,
     session: SessionRule,
     lock_keys: Vec<String>,
-    project_generation: Option<String>,
+    project_revision: Option<String>,
 }
 
 impl Route {
@@ -142,14 +142,14 @@ impl Route {
         accepts: Vec<EventPattern>,
         session: SessionRule,
         lock_keys: Vec<String>,
-        project_generation: Option<String>,
+        project_revision: Option<String>,
     ) -> Self {
         Route {
             agent_id: agent_id.into(),
             accepts,
             session,
             lock_keys,
-            project_generation,
+            project_revision,
         }
     }
 
@@ -176,7 +176,7 @@ pub struct RouteDecision {
     queue_item_id: QueueItemId,
     session_id: SessionId,
     lock_keys: Vec<String>,
-    project_generation: Option<String>,
+    project_revision: Option<String>,
 }
 
 impl RouteDecision {
@@ -204,9 +204,9 @@ impl RouteDecision {
         &self.lock_keys
     }
 
-    /// Returns the stored project generation when the route supplied one.
-    pub fn project_generation(&self) -> Option<&str> {
-        self.project_generation.as_deref()
+    /// Returns the stored project revision when the route supplied one.
+    pub fn project_revision(&self) -> Option<&str> {
+        self.project_revision.as_deref()
     }
 }
 
@@ -226,7 +226,7 @@ pub fn route_event(event: &Event, routes: &[Route]) -> Result<Vec<RouteDecision>
             queue_item_id: queue_item_id(&event.id, &route.agent_id),
             session_id: route.session.resolve(&route.agent_id, event)?,
             lock_keys: route.lock_keys.clone(),
-            project_generation: route.project_generation.clone(),
+            project_revision: route.project_revision.clone(),
         });
     }
     if decisions.len() == 1 {

@@ -128,7 +128,7 @@ def _wait_created(
             "fields": fields or {},
             "deadline": deadline,
             "source_queue_item_id": "qi-source",
-            "project_generation": "generation-1",
+            "project_revision": "revision-1",
         },
         idempotency_key=f"agent.wait:{handle}",
         caused_by="attempt-completed-1",
@@ -224,7 +224,7 @@ def test_queue_item_cancel_request_cancels_queued_turn_and_survives_rebuild(
         message="Stop this turn",
         agent_id="master",
         session_id="session-1",
-        project_generation="generation-1",
+        project_revision="revision-1",
     )
 
     result = store.cancel_queue_item(
@@ -252,7 +252,7 @@ def test_queue_item_cancel_request_cancels_queued_turn_and_survives_rebuild(
         "queue_item_id": queued["queue_item_id"],
         "event_id": queued["event_id"],
         "target_agent": "master",
-        "project_generation": "generation-1",
+        "project_revision": "revision-1",
         "session_id": "session-1",
         "input_cursor": 1,
         "status": "cancelled",
@@ -293,7 +293,7 @@ def test_queue_item_cancel_request_marks_claimed_turn_as_cancelling(
         message="Start this turn",
         agent_id="master",
         session_id="session-1",
-        project_generation="generation-1",
+        project_revision="revision-1",
     )
     queued_event = store.get(queued["event_id"])
     assert queued_event is not None
@@ -334,7 +334,7 @@ def test_worker_recovery_finalizes_a_requested_turn_before_claiming_it(
         message="Interrupted turn",
         agent_id="master",
         session_id="session-1",
-        project_generation="generation-1",
+        project_revision="revision-1",
     )
     requested = store.get(queued["event_id"])
     assert requested is not None
@@ -421,7 +421,7 @@ def test_queue_item_cancel_request_rejects_a_different_session(tmp_path: Path) -
         message="Private turn",
         agent_id="master",
         session_id="session-owner",
-        project_generation="generation-1",
+        project_revision="revision-1",
     )
 
     with pytest.raises(UnauthorizedCancellation):
@@ -450,7 +450,7 @@ def test_queue_item_cancel_request_reports_unknown_and_terminal_items(
         message="Finished turn",
         agent_id="master",
         session_id="session-1",
-        project_generation="generation-1",
+        project_revision="revision-1",
     )
     store.accept(
         DraftEvent(
@@ -460,7 +460,7 @@ def test_queue_item_cancel_request_reports_unknown_and_terminal_items(
                 "queue_item_id": queued["queue_item_id"],
                 "event_id": queued["event_id"],
                 "target_agent": "master",
-                "project_generation": "generation-1",
+                "project_revision": "revision-1",
                 "session_id": "session-1",
                 "status": "completed",
             },
@@ -572,7 +572,7 @@ def test_projection_upgrade_drops_scheduled_events_without_dual_read(
     assert "scheduled_events" not in table_names
     assert "deferred_publications" in table_names
     assert version is not None
-    assert version["version"] == 12
+    assert version["version"] == 13
     assert upgraded.list_deferred_publications() == []
     upgraded.close()
 
@@ -599,7 +599,7 @@ def test_wait_created_projection_survives_reopen_and_rebuild(tmp_path: Path) -> 
             "fields": {"repository": "zeta"},
             "deadline_ms": 1_893_553_445_000,
             "source_queue_item_id": "qi-source",
-            "project_generation": "generation-1",
+            "project_revision": "revision-1",
             "created_event_id": created.id,
             "status": "active",
             "matched_event_id": None,
@@ -632,7 +632,7 @@ def test_direct_message_cancels_an_active_wait_in_the_same_transaction(
         message="Use this answer instead.",
         agent_id="issue-agent",
         session_id="session-1",
-        project_generation="generation-2",
+        project_revision="revision-2",
         idempotency_key="message-1",
     )
     repeated = submit_session_message(
@@ -640,7 +640,7 @@ def test_direct_message_cancels_an_active_wait_in_the_same_transaction(
         message="Use this answer instead.",
         agent_id="issue-agent",
         session_id="session-1",
-        project_generation="generation-2",
+        project_revision="revision-2",
         idempotency_key="message-1",
     )
 
@@ -649,7 +649,7 @@ def test_direct_message_cancels_an_active_wait_in_the_same_transaction(
     assert wait["status"] == "cancelled"
     queue_item = store.list_queue_items()[0]
     assert queue_item["session_id"] == "session-1"
-    assert queue_item["project_generation"] == "generation-2"
+    assert queue_item["project_revision"] == "revision-2"
     cancelled = store.list_events(Filter(event_type="runtime.wait.cancelled"))[0]
     requested = store.get(submission["event_id"])
     available = store.list_events(Filter(event_type="runtime.queue_item.available"))[0]
@@ -754,7 +754,7 @@ def test_matching_event_consumes_wait_and_creates_continuation(
         "matched_event_id": matched_event.id,
         "event_type": "github.issue.updated",
         "payload": {"repository": "zeta", "issue": 5},
-        "project_generation": "generation-1",
+        "project_revision": "revision-1",
     }
 
     wait = store.list_waits()[0]
@@ -771,7 +771,7 @@ def test_matching_event_consumes_wait_and_creates_continuation(
     assert continuation.session_id == "session-1"
     assert continuation.payload["event_id"] == matched.id
     assert continuation.payload["target_agent"] == "issue-agent"
-    assert continuation.payload["project_generation"] == "generation-1"
+    assert continuation.payload["project_revision"] == "revision-1"
     assert any(
         item["event_id"] == matched_event.id and item["target_agent"] == ""
         for item in store.list_queue_items()
@@ -914,7 +914,7 @@ def test_due_wait_times_out_and_creates_continuation(tmp_path: Path) -> None:
         "agent_id": "issue-agent",
         "session_id": "session-1",
         "deadline": "1970-01-01T00:00:02+00:00",
-        "project_generation": "generation-1",
+        "project_revision": "revision-1",
     }
     wait = store.list_waits()[0]
     assert wait["status"] == "timed_out"
@@ -925,7 +925,7 @@ def test_due_wait_times_out_and_creates_continuation(tmp_path: Path) -> None:
     ]
     assert continuation.payload["event_id"] == timed_out.id
     assert continuation.payload["target_agent"] == "issue-agent"
-    assert continuation.payload["project_generation"] == "generation-1"
+    assert continuation.payload["project_revision"] == "revision-1"
 
     expected_wait = store.list_waits()
     store.rebuild_projections()
@@ -1489,7 +1489,7 @@ def test_dispatch_routing_scripts_freeze_lifecycle_order(
             route["agent_id"],
             tuple(EventPattern(pattern) for pattern in route["accepts"]),
             session=route["session"],
-            project_generation=route.get("project_generation"),
+            project_revision=route.get("project_revision"),
         )
         for route in case["routes"]
     )
@@ -1508,7 +1508,7 @@ def test_dispatch_routing_scripts_freeze_lifecycle_order(
                 "queue_item_id": item["queue_item_id"],
                 "target_agent": item["target_agent"],
                 "session_id": item.get("session_id"),
-                "project_generation": item.get("project_generation"),
+                "project_revision": item.get("project_revision"),
                 "status": item["status"],
             }
             for item in store.list_queue_items()

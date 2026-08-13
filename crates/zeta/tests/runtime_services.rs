@@ -576,7 +576,7 @@ fn agent_result_completion_commits_typed_controls_through_dispatch() {
         vec![EventPattern::exact("work.requested")],
         SessionRule::PerEvent,
         Vec::new(),
-        Some("generation-1".to_owned()),
+        Some("revision-1".to_owned()),
     );
     dispatch
         .route_ingress_event(
@@ -728,7 +728,7 @@ fn prepared_agent_preserves_the_verified_authored_projection() {
     let prepared = prepare_agent(&project, &execution).expect("the verified pair must prepare");
 
     assert_eq!(prepared.execution_manifest_id(), execution.id);
-    assert_eq!(prepared.project_generation_id(), project.id);
+    assert_eq!(prepared.project_revision_id(), project.id);
     assert_eq!(prepared.agent_slug(), "worker");
     assert_eq!(prepared.agent_description(), "Routes authored work.");
     let ExecutorSelection {

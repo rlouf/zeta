@@ -174,7 +174,7 @@ fn lifecycle_for_route(
                 target_agent: "",
                 status: QueueItemStatus::Unhandled,
                 session_id: None,
-                project_generation: None,
+                project_revision: None,
                 lock_keys: &[],
             },
         ));
@@ -190,7 +190,7 @@ fn lifecycle_for_route(
                 target_agent: decisions[0].agent_id(),
                 status: QueueItemStatus::Available,
                 session_id: Some(decisions[0].session_id()),
-                project_generation: decisions[0].project_generation(),
+                project_revision: decisions[0].project_revision(),
                 lock_keys: decisions[0].lock_keys(),
             },
         ));
@@ -205,7 +205,7 @@ fn lifecycle_for_route(
             target_agent: "",
             status: QueueItemStatus::Completed,
             session_id: None,
-            project_generation: None,
+            project_revision: None,
             lock_keys: &[],
         },
     ));
@@ -219,7 +219,7 @@ fn lifecycle_for_route(
                 target_agent: decision.agent_id(),
                 status: QueueItemStatus::Available,
                 session_id: Some(decision.session_id()),
-                project_generation: decision.project_generation(),
+                project_revision: decision.project_revision(),
                 lock_keys: decision.lock_keys(),
             },
         ));
@@ -232,7 +232,7 @@ pub(super) struct QueueLifecycleFields<'a> {
     pub(super) target_agent: &'a str,
     pub(super) status: QueueItemStatus,
     pub(super) session_id: Option<&'a SessionId>,
-    pub(super) project_generation: Option<&'a str>,
+    pub(super) project_revision: Option<&'a str>,
     pub(super) lock_keys: &'a [String],
 }
 
@@ -246,7 +246,7 @@ pub(super) fn queue_lifecycle_event(
         target_agent,
         status,
         session_id,
-        project_generation,
+        project_revision,
         lock_keys,
     } = fields;
     let mut payload = Map::new();
@@ -266,10 +266,10 @@ pub(super) fn queue_lifecycle_event(
             Value::String(session_id.to_string()),
         );
     }
-    if let Some(project_generation) = project_generation {
+    if let Some(project_revision) = project_revision {
         payload.insert(
-            "project_generation".to_owned(),
-            Value::String(project_generation.to_owned()),
+            "project_revision".to_owned(),
+            Value::String(project_revision.to_owned()),
         );
     }
     if !lock_keys.is_empty() {
@@ -357,10 +357,10 @@ pub(super) fn queue_item_payload(
             Value::String(session_id.to_string()),
         );
     }
-    if let Some(project_generation) = &queue_item.project_generation {
+    if let Some(project_revision) = &queue_item.project_revision {
         payload.insert(
-            "project_generation".to_owned(),
-            Value::String(project_generation.clone()),
+            "project_revision".to_owned(),
+            Value::String(project_revision.clone()),
         );
     }
     payload
@@ -542,8 +542,8 @@ pub(super) fn index_queue_item(
     let session_id =
         optional_payload_string(event, "session_id")?.or_else(|| event.session_id.clone());
     validate_optional_runtime_id(event, "session_id", session_id.as_deref())?;
-    let project_generation = optional_payload_string(event, "project_generation")?;
-    validate_optional_runtime_id(event, "project_generation", project_generation.as_deref())?;
+    let project_revision = optional_payload_string(event, "project_revision")?;
+    validate_optional_runtime_id(event, "project_revision", project_revision.as_deref())?;
     let lock_keys = optional_payload_string_array(event, "lock_keys")?;
     let lock_keys_json = lock_keys
         .map(|keys| serde_json::to_string(&keys))
@@ -561,16 +561,16 @@ pub(super) fn index_queue_item(
     connection
         .execute(
             "INSERT INTO queue_items (
-                queue_item_id, event_id, target_agent, project_generation,
+                queue_item_id, event_id, target_agent, project_revision,
                 session_id, lock_keys_json, input_cursor, status, available_at,
                 last_error, updated_at
              ) VALUES (?1, ?2, ?3, ?4, ?5, COALESCE(?6, '[]'), ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(queue_item_id) DO UPDATE SET
                 event_id = excluded.event_id,
                 target_agent = excluded.target_agent,
-                project_generation = COALESCE(
-                    excluded.project_generation,
-                    queue_items.project_generation
+                project_revision = COALESCE(
+                    excluded.project_revision,
+                    queue_items.project_revision
                 ),
                 session_id = COALESCE(excluded.session_id, queue_items.session_id),
                 lock_keys_json = COALESCE(?6, queue_items.lock_keys_json),
@@ -586,7 +586,7 @@ pub(super) fn index_queue_item(
                 queue_item_id.as_str(),
                 input_event_id,
                 target_agent,
-                project_generation,
+                project_revision,
                 session_id,
                 lock_keys_json,
                 input_cursor,
@@ -744,7 +744,7 @@ fn input_event_cursor(
 }
 
 const QUEUE_ITEM_COLUMNS: &str = "queue.queue_item_id, queue.event_id,
-    queue.target_agent, queue.project_generation, queue.session_id,
+    queue.target_agent, queue.project_revision, queue.session_id,
     queue.lock_keys_json, queue.input_cursor,
     CASE WHEN claim.queue_item_id IS NULL THEN queue.status ELSE 'claimed' END,
     queue.available_at, claim.worker_name, claim.claimed_until,
@@ -795,7 +795,7 @@ struct StoredQueueItem {
     queue_item_id: String,
     event_id: String,
     target_agent: String,
-    project_generation: Option<String>,
+    project_revision: Option<String>,
     session_id: Option<String>,
     lock_keys_json: String,
     input_cursor: i64,
@@ -817,7 +817,7 @@ impl StoredQueueItem {
             queue_item_id: row.get(0)?,
             event_id: row.get(1)?,
             target_agent: row.get(2)?,
-            project_generation: row.get(3)?,
+            project_revision: row.get(3)?,
             session_id: row.get(4)?,
             lock_keys_json: row.get(5)?,
             input_cursor: row.get(6)?,
@@ -860,7 +860,7 @@ impl StoredQueueItem {
             id,
             event_id: self.event_id,
             target_agent: self.target_agent,
-            project_generation: self.project_generation,
+            project_revision: self.project_revision,
             session_id,
             lock_keys,
             input_cursor,

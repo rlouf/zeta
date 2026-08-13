@@ -15,7 +15,7 @@ pub use crate::event::{derive_returns_schema, scheduled_event_type, EventRegistr
 pub use crate::manifest::{
     execution_manifest, project_manifest, restore_execution_manifest, restore_project_manifest,
     verify_execution_manifest, verify_project_manifest, ExecutionManifest, ExecutionManifestId,
-    ProjectGenerationId, ProjectManifest, EXECUTION_MANIFEST_SCHEMA, EXECUTION_MANIFEST_VERSION,
+    ProjectManifest, ProjectRevisionId, EXECUTION_MANIFEST_SCHEMA, EXECUTION_MANIFEST_VERSION,
     PROJECT_MANIFEST_SCHEMA, PROJECT_MANIFEST_VERSION,
 };
 pub use crate::project::{

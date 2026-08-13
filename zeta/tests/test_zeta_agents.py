@@ -2661,7 +2661,7 @@ Resume for {{ event.event_type }} #{{ event.payload.issue }}.
                 "fields": {"issue": 5},
                 "deadline": None,
                 "source_queue_item_id": "qi-source",
-                "project_generation": None,
+                "project_revision": None,
             },
             idempotency_key="agent.wait:qi-source:0",
             caused_by="attempt-completed-1",

@@ -79,7 +79,7 @@ async def run_stdio_async(input: TextIO, output: TextIO) -> None:
         session=session,
         dispatcher=dispatcher,
         background_tasks=background_tasks,
-        project_snapshot=runtime.project_snapshot,
+        project_revision=runtime.project_revision,
     )
     router = build_ipc_router(client)
     try:

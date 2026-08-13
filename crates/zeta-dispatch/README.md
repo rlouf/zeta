@@ -31,7 +31,7 @@ durable outcomes:
 - several matches close the unbound barrier and create one `available` child
   per route in declaration order.
 
-Session identity and project generation are resolved before work becomes
+Session identity and project revision are resolved before work becomes
 executable. Lifecycle event IDs and timestamps are explicit inputs; Dispatch
 owns every other lifecycle field. Duplicate or colliding generated IDs abort
 the complete route transaction.

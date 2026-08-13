@@ -25,7 +25,7 @@ use crate::identity::{QueueItemId, SessionId};
 use crate::routing::SessionError;
 use crate::state::TransitionError;
 
-const BASE_EPOCH: i64 = 1;
+const BASE_EPOCH: i64 = 2;
 const PROJECTION_EPOCH: i64 = 7;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -36,7 +36,7 @@ const CREATE_SCHEMA: &str = "
         projection_epoch INTEGER NOT NULL CHECK (projection_epoch >= 0)
     ) STRICT;
     INSERT INTO dispatch_schema (singleton, base_epoch, projection_epoch)
-    VALUES (1, 1, 7);
+    VALUES (1, 2, 7);
 
     CREATE TABLE journal_entries (
         cursor INTEGER PRIMARY KEY CHECK (cursor > 0),
@@ -77,7 +77,7 @@ const CREATE_PROJECTIONS: &str = "
         queue_item_id TEXT PRIMARY KEY CHECK (length(queue_item_id) > 0),
         event_id TEXT NOT NULL CHECK (length(event_id) > 0),
         target_agent TEXT NOT NULL,
-        project_generation TEXT,
+        project_revision TEXT,
         session_id TEXT,
         lock_keys_json TEXT NOT NULL DEFAULT '[]',
         input_cursor INTEGER NOT NULL CHECK (input_cursor > 0),
@@ -128,7 +128,7 @@ const CREATE_PROJECTIONS: &str = "
         error TEXT,
         session_id TEXT,
         run_id TEXT,
-        project_generation TEXT,
+        project_revision TEXT,
         UNIQUE (queue_item_id, attempt_number),
         FOREIGN KEY (queue_item_id) REFERENCES queue_items(queue_item_id),
         FOREIGN KEY (event_id) REFERENCES journal_entries(event_id)
@@ -150,7 +150,7 @@ const CREATE_PROJECTIONS: &str = "
         fields_json TEXT NOT NULL,
         deadline_ms INTEGER,
         source_queue_item_id TEXT NOT NULL CHECK (length(source_queue_item_id) > 0),
-        project_generation TEXT,
+        project_revision TEXT,
         created_event_id TEXT NOT NULL UNIQUE CHECK (length(created_event_id) > 0),
         status TEXT NOT NULL CHECK (status IN (
             'active', 'matched', 'timed_out', 'cancelled'

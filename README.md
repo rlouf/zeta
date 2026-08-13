@@ -26,7 +26,7 @@ once. When a file arrives, it writes a summary where you can use it.
 ## Native runtime CLI
 
 The Rust native CLI now has an explicit project lifecycle. It validates,
-activates, starts, inspects, and stops one project generation. See the
+activates, starts, inspects, and stops one project revision. See the
 [Native CLI guide](docs/native-cli.md).
 
 ## Give an agent its first responsibility

@@ -117,7 +117,7 @@ async def _wait_for_initialization(
 def project_egress_executors(
     project,
     *,
-    project_generation: str | None = None,
+    project_revision: str | None = None,
     execution_manifests: Mapping[str, Mapping[str, Any]] | None = None,
     connector_calls: ConnectorCalls | None = None,
 ) -> tuple[ExecutableAgent, ...]:
@@ -138,7 +138,7 @@ def project_egress_executors(
                         agent_id,
                         (EventPattern(binding.event),),
                         session="per-event",
-                        project_generation=project_generation,
+                        project_revision=project_revision,
                         execution_manifest=(execution_manifests or {}).get(spec.slug),
                     ),
                     run=egress_runner(
@@ -372,7 +372,7 @@ async def run_ipc_ingress_forever(
                 poll_interval_seconds=poll_interval_seconds,
             )
         )
-        for connector, wave in ingress_waves(runtime.project_snapshot.project)
+        for connector, wave in ingress_waves(runtime.project_revision.project)
     ]
     if not tasks:
         return
@@ -461,7 +461,7 @@ def accept_ipc_event(
             binding.event,
         )
         return None
-    project = runtime.project_snapshot.project
+    project = runtime.project_revision.project
     draft = DraftEvent(
         publication.type,
         connector_id,

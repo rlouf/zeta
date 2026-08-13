@@ -59,7 +59,7 @@ order:
   path invocations of `zeta` still find sibling scripts) and
   executable files under `agents/connectors/`; each is described
   once (`--describe`, cached by mtime), validated, and recorded in
-  project snapshots. Ingress spawns one child per **wave** — at most
+  project revisions. Ingress spawns one child per **wave** — at most
   one binding per event type per child, so Telegram's two event
   types share one upstream cursor while two watched directories get
   two children. Egress runs as `call` envelopes against declared

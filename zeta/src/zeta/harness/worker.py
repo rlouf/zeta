@@ -33,11 +33,11 @@ from zeta.harness.connector_bridge import (
 )
 from zeta.harness.dispatch import QueueingDispatcher
 from zeta.harness.project import (
-    ProjectSnapshot,
-    ProjectSnapshotUnavailable,
-    load_project_snapshot,
-    load_recorded_project_snapshot,
-    record_project_snapshot,
+    ProjectRevision,
+    ProjectRevisionUnavailable,
+    load_project_revision,
+    load_recorded_project_revision,
+    record_project_revision,
 )
 from zeta.harness.retry import RetryPolicy
 from zeta.harness.routing import (
@@ -114,8 +114,8 @@ class WorkerServices:
     )
 
     @property
-    def project_snapshot(self) -> ProjectSnapshot:
-        return load_project_snapshot(
+    def project_revision(self) -> ProjectRevision:
+        return load_project_revision(
             self.project_root / "agents",
             registry=self.registry,
             tool_registry=self.tool_registry,
@@ -185,7 +185,7 @@ class WorkerServices:
         key = (
             agent.tool_executor.provider,
             agent.agent_id,
-            agent.project_generation or "",
+            agent.project_revision or "",
             json.dumps(
                 config,
                 sort_keys=True,
@@ -257,7 +257,7 @@ def build_worker_services(
 
 
 async def run_once(runtime: WorkerServices) -> str:
-    record_project_snapshot(runtime.events, runtime.project_snapshot)
+    record_project_revision(runtime.events, runtime.project_revision)
     publish_due_schedules(runtime)
     runtime.events.publish_next_due_deferred_publication()
     runtime.events.timeout_next_due_wait()
@@ -280,54 +280,54 @@ async def run_until_idle(runtime: WorkerServices) -> str:
 
 
 def publish_due_schedules(runtime: WorkerServices) -> list[Event]:
-    return request_due_schedules(runtime.events, runtime.project_snapshot.project.specs)
+    return request_due_schedules(runtime.events, runtime.project_revision.project.specs)
 
 
 def project_executors(runtime: WorkerServices) -> tuple[ExecutableAgent, ...]:
-    current = runtime.project_snapshot
-    snapshots: list[ProjectSnapshot] = []
-    historical_generations = sorted(
+    current = runtime.project_revision
+    revisions: list[ProjectRevision] = []
+    historical_revisions = sorted(
         {
-            generation
+            revision
             for item in runtime.events.list_queue_items()
             if item["status"]
             not in {"completed", "cancelled", "dead_lettered", "unhandled"}
             if isinstance(
-                generation := item.get("project_generation"),
+                revision := item.get("project_revision"),
                 str,
             )
-            and generation != current.generation_id
+            and revision != current.revision_id
         }
     )
-    for generation in historical_generations:
+    for revision in historical_revisions:
         try:
-            snapshots.append(
-                load_recorded_project_snapshot(
+            revisions.append(
+                load_recorded_project_revision(
                     runtime.events,
-                    generation,
+                    revision,
                     registry=runtime.registry,
                     tool_executors=runtime.tool_executors,
                     tool_registry=runtime.tool_registry,
                 )
             )
-        except ProjectSnapshotUnavailable:
-            logger.exception("project snapshot %s is unavailable", generation)
-    snapshots.append(current)
+        except ProjectRevisionUnavailable:
+            logger.exception("project revision %s is unavailable", revision)
+    revisions.append(current)
     return tuple(
         executor
-        for snapshot in snapshots
-        for executor in compile_snapshot_executors(runtime, snapshot)
+        for revision in revisions
+        for executor in compile_revision_executors(runtime, revision)
     )
 
 
-def compile_snapshot_executors(
+def compile_revision_executors(
     runtime: WorkerServices,
-    snapshot: ProjectSnapshot,
+    revision: ProjectRevision,
 ) -> tuple[ExecutableAgent, ...]:
-    project = snapshot.project
-    agent_loop = RuntimeAgentLoop(runtime, snapshot.tool_registry)
+    project = revision.project
+    agent_loop = RuntimeAgentLoop(runtime, revision.tool_registry)
     execution_manifests = {
-        spec.slug: snapshot.execution_manifest(spec) for spec in project.specs
+        spec.slug: revision.execution_manifest(spec) for spec in project.specs
     }
     return tuple(
         [
@@ -342,13 +342,13 @@ def compile_snapshot_executors(
                     ),
                     event_registry=project.events,
                     agent_loop=agent_loop.run,
-                    project_generation=snapshot.generation_id,
+                    project_revision=revision.revision_id,
                     execution_manifest=execution_manifests[spec.slug],
                 )
             ),
             *project_egress_executors(
                 project,
-                project_generation=snapshot.generation_id,
+                project_revision=revision.revision_id,
                 execution_manifests=execution_manifests,
                 connector_calls=runtime.connector_calls,
             ),

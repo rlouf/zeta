@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 /// Carries one ordered proposal for the invocation owner to commit.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum AgentRequest {
+pub enum AgentProposal {
     /// Proposes publishing a durable event.
     Publish {
         /// Identifies the retry-stable proposal.
@@ -39,9 +39,9 @@ pub enum AgentRequest {
         handle: String,
         /// Explains the cancellation when supplied.
         reason: Option<String>,
-        /// Associates the request with an authored agent.
+        /// Associates the proposal with an authored agent.
         source_agent_id: String,
-        /// Associates the request with an authored session.
+        /// Associates the proposal with an authored session.
         source_session_id: String,
         /// Preserves global tool-call order.
         position: usize,

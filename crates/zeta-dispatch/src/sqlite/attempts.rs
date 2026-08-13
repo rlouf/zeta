@@ -12,11 +12,12 @@ use super::journal::{
     append_lifecycle_candidate, append_runtime_event, entry_by_field, same_lifecycle_intention,
     validate_distinct_runtime_identities, validate_event_identity,
 };
-use super::projection::{index_event, load_queue_item};
+use super::projection::index_event;
 use super::resources::{cancel_resource_in_transaction, resource_kind_for_handle};
-use super::routing::queue_item_payload;
+use super::routing::{load_queue_item, queue_item_payload};
 use super::{
-    corrupt_projection, database_error, nonnegative_u32_projection, Dispatch, DispatchError,
+    corrupt_projection, database_error, nonnegative_u32_projection, optional_payload_string,
+    required_runtime_id, validate_optional_runtime_id, Dispatch, DispatchError,
 };
 use crate::dispatch::{
     Attempt, AttemptCompletion, AttemptCompletionDisposition, AttemptControl, AttemptFailure,
@@ -27,8 +28,8 @@ use crate::identity::{
     AttemptId, QueueItemId, RunId, SessionId,
 };
 use crate::state::{
-    classify_error_code, AttemptStatus, DispatchErrorCode, FailureClass, QueueItemStatus,
-    RetryPolicy,
+    classify_attempt_failure_code, AttemptFailureCode, AttemptStatus, FailureClass,
+    QueueItemStatus, RetryPolicy,
 };
 
 impl Dispatch {
@@ -1047,7 +1048,7 @@ fn completed_queue_event(
 struct AttemptFailureFields<'a> {
     finished_at: &'a str,
     error: &'a str,
-    error_code: DispatchErrorCode,
+    error_code: AttemptFailureCode,
     retry_policy: RetryPolicy,
     now_ms: i64,
 }
@@ -1094,7 +1095,7 @@ fn failed_queue_disposition_event(
     attempt: &Attempt,
     failure: &AttemptFailureFields<'_>,
 ) -> Result<Event, DispatchError> {
-    let failure_class = classify_error_code(failure.error_code);
+    let failure_class = classify_attempt_failure_code(failure.error_code);
     let retry = failure_class == FailureClass::Retryable
         && failure
             .retry_policy
@@ -1243,6 +1244,268 @@ pub(super) fn attempt_payload(attempt: &Attempt, status: AttemptStatus) -> Map<S
         );
     }
     payload
+}
+
+pub(super) fn index_attempt(connection: &Connection, event: &Event) -> Result<(), DispatchError> {
+    let attempt_id = required_runtime_id(event, "attempt_id")?;
+    let attempt_id = AttemptId::from_str(&attempt_id).map_err(|_error| {
+        DispatchError::InvalidLifecycleEvent {
+            event_id: event.id.clone(),
+            field: "attempt_id",
+        }
+    })?;
+    let queue_item_id = required_runtime_id(event, "queue_item_id")?;
+    let queue_item_id = QueueItemId::from_str(&queue_item_id).map_err(|_error| {
+        DispatchError::InvalidLifecycleEvent {
+            event_id: event.id.clone(),
+            field: "queue_item_id",
+        }
+    })?;
+    let input_event_id = required_runtime_id(event, "event_id")?;
+    let attempt_number = required_positive_u32(event, "attempt_number")?;
+    let target_agent = required_runtime_id(event, "target_agent")?;
+    let status = lifecycle_attempt_status(event)?;
+    let supplied_started_at = optional_payload_string(event, "started_at")?;
+    let supplied_session_id =
+        optional_payload_string(event, "session_id")?.or_else(|| event.session_id.clone());
+    validate_optional_runtime_id(event, "session_id", supplied_session_id.as_deref())?;
+    let supplied_run_id =
+        optional_payload_string(event, "run_id")?.or_else(|| event.run_id.clone());
+    validate_optional_runtime_id(event, "run_id", supplied_run_id.as_deref())?;
+    let supplied_project_generation = optional_payload_string(event, "project_generation")?;
+    validate_optional_runtime_id(
+        event,
+        "project_generation",
+        supplied_project_generation.as_deref(),
+    )?;
+    let previous = connection
+        .query_row(
+            "SELECT queue_item_id, event_id, attempt_number, target_agent,
+                    status, started_at, session_id, run_id, project_generation
+             FROM attempts WHERE attempt_id = ?1",
+            params![attempt_id.as_str()],
+            |row| {
+                Ok(StoredAttemptIdentity {
+                    queue_item_id: row.get(0)?,
+                    event_id: row.get(1)?,
+                    attempt_number: row.get(2)?,
+                    target_agent: row.get(3)?,
+                    status: row.get(4)?,
+                    started_at: row.get(5)?,
+                    session_id: row.get(6)?,
+                    run_id: row.get(7)?,
+                    project_generation: row.get(8)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|error| database_error("read attempt transition", error))?;
+    let (previous_status, started_at, session_id, run_id, project_generation) = match previous {
+        Some(previous) => {
+            if previous.queue_item_id != queue_item_id.as_str()
+                || previous.event_id != input_event_id
+                || previous.attempt_number != i64::from(attempt_number)
+                || previous.target_agent != target_agent
+            {
+                return Err(DispatchError::InvalidLifecycleEvent {
+                    event_id: event.id.clone(),
+                    field: "attempt_identity",
+                });
+            }
+            if supplied_started_at
+                .as_deref()
+                .is_some_and(|value| value != previous.started_at)
+                || supplied_session_id
+                    .as_deref()
+                    .is_some_and(|value| Some(value) != previous.session_id.as_deref())
+                || supplied_run_id
+                    .as_deref()
+                    .is_some_and(|value| Some(value) != previous.run_id.as_deref())
+                || supplied_project_generation
+                    .as_deref()
+                    .is_some_and(|value| Some(value) != previous.project_generation.as_deref())
+            {
+                return Err(DispatchError::InvalidLifecycleEvent {
+                    event_id: event.id.clone(),
+                    field: "attempt_identity",
+                });
+            }
+            let previous_status = AttemptStatus::from_str(&previous.status).map_err(|_error| {
+                DispatchError::CorruptProjection {
+                    table: "attempts",
+                    field: "status",
+                }
+            })?;
+            (
+                Some(previous_status),
+                previous.started_at,
+                previous.session_id,
+                previous.run_id,
+                previous.project_generation,
+            )
+        }
+        None => {
+            let Some(started_at) = supplied_started_at else {
+                return Err(DispatchError::InvalidLifecycleEvent {
+                    event_id: event.id.clone(),
+                    field: "started_at",
+                });
+            };
+            (
+                None,
+                started_at,
+                supplied_session_id,
+                supplied_run_id,
+                supplied_project_generation,
+            )
+        }
+    };
+    AttemptStatus::validate_transition(previous_status, status)?;
+
+    let worker_name = optional_payload_string(event, "worker_name")?;
+    let finished_at = optional_payload_string(event, "finished_at")?;
+    let error = optional_payload_string(event, "error")?;
+    let claim_token = if status == AttemptStatus::Running {
+        match &worker_name {
+            Some(worker_name) => connection
+                .query_row(
+                    "SELECT claim_token FROM queue_claims
+                     WHERE queue_item_id = ?1 AND worker_name = ?2",
+                    params![queue_item_id.as_str(), worker_name],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(|database| database_error("resolve attempt claim", database))?,
+            None => None,
+        }
+    } else {
+        None
+    };
+    connection
+        .execute(
+            "INSERT INTO attempts (
+                attempt_id, queue_item_id, event_id, attempt_number,
+                target_agent, worker_name, claim_token, status, started_at,
+                heartbeat_at, finished_at, error, session_id, run_id,
+                project_generation
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+             ON CONFLICT(attempt_id) DO UPDATE SET
+                claim_token = CASE
+                    WHEN excluded.status = 'running'
+                    THEN COALESCE(attempts.claim_token, excluded.claim_token)
+                    ELSE NULL
+                END,
+                status = excluded.status,
+                heartbeat_at = CASE
+                    WHEN excluded.status = 'running' THEN excluded.heartbeat_at
+                    ELSE NULL
+                END,
+                finished_at = excluded.finished_at,
+                error = excluded.error,
+                session_id = excluded.session_id,
+                run_id = excluded.run_id,
+                project_generation = COALESCE(
+                    excluded.project_generation,
+                    attempts.project_generation
+                )",
+            params![
+                attempt_id.as_str(),
+                queue_item_id.as_str(),
+                input_event_id,
+                i64::from(attempt_number),
+                target_agent,
+                worker_name,
+                claim_token,
+                status.to_string(),
+                started_at,
+                event.timestamp_ms,
+                finished_at,
+                error,
+                session_id,
+                run_id,
+                project_generation,
+            ],
+        )
+        .map_err(|error| database_error("project attempt lifecycle", error))?;
+    if status == AttemptStatus::Running {
+        connection
+            .execute(
+                "UPDATE queue_items
+                 SET attempt_count = MAX(attempt_count, ?1)
+                 WHERE queue_item_id = ?2",
+                params![i64::from(attempt_number), queue_item_id.as_str()],
+            )
+            .map_err(|error| database_error("project attempt count", error))?;
+    }
+    Ok(())
+}
+
+struct StoredAttemptIdentity {
+    queue_item_id: String,
+    event_id: String,
+    attempt_number: i64,
+    target_agent: String,
+    status: String,
+    started_at: String,
+    session_id: Option<String>,
+    run_id: Option<String>,
+    project_generation: Option<String>,
+}
+
+fn lifecycle_attempt_status(event: &Event) -> Result<AttemptStatus, DispatchError> {
+    let suffix = event.event_type.rsplit('.').next().unwrap_or_default();
+    let expected = if suffix == "started" {
+        AttemptStatus::Running
+    } else {
+        AttemptStatus::from_str(suffix).map_err(|_error| DispatchError::InvalidLifecycleEvent {
+            event_id: event.id.clone(),
+            field: "event_type",
+        })?
+    };
+    let actual = match event.payload.get("status") {
+        Some(Value::String(status)) => AttemptStatus::from_str(status).map_err(|_error| {
+            DispatchError::InvalidLifecycleEvent {
+                event_id: event.id.clone(),
+                field: "status",
+            }
+        })?,
+        Some(_value) => {
+            return Err(DispatchError::InvalidLifecycleEvent {
+                event_id: event.id.clone(),
+                field: "status",
+            });
+        }
+        None => expected,
+    };
+    if actual != expected {
+        return Err(DispatchError::InvalidLifecycleEvent {
+            event_id: event.id.clone(),
+            field: "status",
+        });
+    }
+    Ok(actual)
+}
+
+fn required_positive_u32(event: &Event, field: &'static str) -> Result<u32, DispatchError> {
+    let Some(Value::Number(number)) = event.payload.get(field) else {
+        return Err(DispatchError::InvalidLifecycleEvent {
+            event_id: event.id.clone(),
+            field,
+        });
+    };
+    let Some(value) = number.as_u64() else {
+        return Err(DispatchError::InvalidLifecycleEvent {
+            event_id: event.id.clone(),
+            field,
+        });
+    };
+    if value == 0 || value > u64::from(u32::MAX) {
+        return Err(DispatchError::InvalidLifecycleEvent {
+            event_id: event.id.clone(),
+            field,
+        });
+    }
+    Ok(value as u32)
 }
 
 const ATTEMPT_COLUMNS: &str = "attempt.attempt_id, attempt.queue_item_id,

@@ -12,7 +12,7 @@ pub use dispatch::{
     CancellationStatus, DeferredPublication, DeferredPublicationStatus, Effect,
     EffectDeliverySemantics, EffectStatus, LockLease, QueueClaim, QueueItem,
     ResourceCancellationOutcome, ResourceCancellationStatus, ResourceKind, RoutingOutcome,
-    RuntimeEventIdentity, Session, SessionActiveWait, SessionActivityStatus, SessionLatestRun,
+    RuntimeEventIdentity, Session, SessionActiveWait, SessionActivityStatus, SessionLatestAttempt,
     SessionMessageIdentities, SessionMessageRequest, StartedAttempt, SubmittedSessionMessage, Wait,
     WaitStatus,
 };
@@ -26,6 +26,6 @@ pub use identity::{
 pub use routing::{route_event, EventPattern, Route, RouteDecision, SessionError, SessionRule};
 pub use sqlite::{Dispatch, DispatchError};
 pub use state::{
-    classify_error_code, AttemptStatus, DispatchErrorCode, FailureClass, QueueItemStatus,
-    RetryPolicy, RetryPolicyError, StateParseError, TransitionError,
+    classify_attempt_failure_code, AttemptFailureCode, AttemptStatus, FailureClass,
+    QueueItemStatus, RetryPolicy, RetryPolicyError, StateParseError, TransitionError,
 };

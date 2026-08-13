@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "environment": {
     "working_directory": "/workspace/zeta",
     "calendar_date": "2026-08-12"
@@ -85,7 +85,6 @@
           "tool_choice": "auto",
           "max_tokens": 64,
           "selected_model": "unit-model",
-          "selected_url": null,
           "session_id": null,
           "thinking": null
         },
@@ -503,7 +502,6 @@
           "tool_choice": "auto",
           "max_tokens": 64,
           "selected_model": "unit-model",
-          "selected_url": null,
           "session_id": null,
           "thinking": "low"
         },
@@ -1056,7 +1054,6 @@
           "tool_choice": "auto",
           "max_tokens": 64,
           "selected_model": "unit-model",
-          "selected_url": null,
           "session_id": null,
           "thinking": null
         },
@@ -1692,7 +1689,6 @@
           "tool_choice": "auto",
           "max_tokens": 64,
           "selected_model": "unit-model",
-          "selected_url": null,
           "session_id": null,
           "thinking": null
         },
@@ -2120,7 +2116,6 @@
           "tool_choice": "auto",
           "max_tokens": 64,
           "selected_model": "unit-model",
-          "selected_url": null,
           "session_id": null,
           "thinking": null
         },
@@ -2616,7 +2611,6 @@
           "tool_choice": "auto",
           "max_tokens": 64,
           "selected_model": "unit-model",
-          "selected_url": null,
           "session_id": null,
           "thinking": null
         },
@@ -3296,7 +3290,6 @@
           "tool_choice": "auto",
           "max_tokens": 64,
           "selected_model": "unit-model",
-          "selected_url": null,
           "session_id": null,
           "thinking": null
         },
@@ -3839,7 +3832,6 @@
           "tool_choice": "auto",
           "max_tokens": 64,
           "selected_model": "unit-model",
-          "selected_url": null,
           "session_id": null,
           "thinking": null
         },

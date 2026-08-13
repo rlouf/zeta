@@ -258,7 +258,7 @@ def _session_outcome(
     *,
     stop_reason: str | None = None,
 ) -> str:
-    if stop_reason == "max_turns":
+    if stop_reason == "max_model_calls":
         return "max_turns"
     if stop_reason == "aborted":
         return "aborted"

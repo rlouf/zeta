@@ -570,6 +570,25 @@ def agent_invocation_vector_inputs() -> list[dict[str, Any]]:
     }
     return [
         {
+            "name": "maximum_model_calls_reached",
+            "invocation": {
+                "objective": "Do not call the model.",
+                "timeline": [],
+                "context": "",
+                "system_prompt": "Answer plainly.",
+                "allowed_capabilities": [],
+                "max_model_calls": 0,
+                "model_name": "unit-model",
+                "base_directory": "/workspace/zeta",
+                "source_queue_item_id": None,
+            },
+            "capabilities": [],
+            "model_script": [],
+            "tool_results": {},
+            "event_ids": [],
+            "cancelled": False,
+        },
+        {
             "name": "streamed_final_text",
             "invocation": {
                 "objective": "Greet the user.",
@@ -1416,7 +1435,7 @@ async def python_agent_invocation_vectors() -> dict[str, Any]:
             }
         )
     document = {
-        "version": 1,
+        "version": 2,
         "environment": asdict(TEST_PROMPT_ENVIRONMENT),
         "cases": cases,
     }
@@ -4036,7 +4055,7 @@ def test_zeta_run_capability_step_records_call_execution_and_result(
     )
 
     assert [step.step for step in state.steps] == [
-        "check_budget",
+        "check_abort",
         "record_capability_call",
         "execute_capability",
         "record_capability_result",
@@ -4247,7 +4266,7 @@ def test_zeta_run_capability_step_reconciles_existing_terminal_result(
     assert invoked is False
     assert result.events == []
     assert [step.step for step in state.steps] == [
-        "check_budget",
+        "check_abort",
         "record_capability_result",
     ]
 
@@ -5982,6 +6001,10 @@ def test_zeta_session_turns_use_a_protocol_neutral_runtime_name() -> None:
         zeta_requests.session_agent_request({"objective": "answer"}).runtime
         == "zeta-session"
     )
+
+
+def test_zeta_session_outcome_keeps_max_turns_vocabulary() -> None:
+    assert zeta_requests._session_outcome(stop_reason="max_model_calls") == "max_turns"
 
 
 def test_zeta_session_run_params_preserve_boundary_values() -> None:
@@ -11156,7 +11179,7 @@ def test_zeta_agent_turn_finalizes_text(monkeypatch) -> None:
     assert timeline_events(result.events)[0]["content"] == "done"
     assert timeline_events(result.events)[0]["prompt_object_id"]
     assert [step.step for step in result.steps] == [
-        "check_budget",
+        "check_abort",
         "build_prompt",
         "call_model",
         "record_assistant",
@@ -11890,11 +11913,11 @@ def test_zeta_agent_turn_streams_tool_call_before_running_tool(monkeypatch) -> N
         "tool_result",
     ]
     assert [step.step for step in result.steps] == [
-        "check_budget",
+        "check_abort",
         "build_prompt",
         "call_model",
         "record_assistant",
-        "check_budget",
+        "check_abort",
         "record_capability_call",
         "execute_capability",
         "record_capability_result",
@@ -11995,7 +12018,7 @@ def test_zeta_agent_turn_reports_max_turns_exhaustion(monkeypatch) -> None:
         tool_registry=registry,
     )
 
-    assert result.stop_reason == "max_turns"
+    assert result.stop_reason == "max_model_calls"
     assert result.final_answer == ""
     assert [event["type"] for event in timeline_events(result.events)] == [
         "model",
@@ -12118,7 +12141,7 @@ def test_zeta_agent_turn_aborts_before_model_when_cancelled(monkeypatch) -> None
     assert raised.value.reason == "cancelled"
     assert raised.value.result.events == events
     assert [step.step for step in raised.value.result.steps] == [
-        "check_budget",
+        "check_abort",
         "abort_run",
     ]
     projected = timeline_events(events)

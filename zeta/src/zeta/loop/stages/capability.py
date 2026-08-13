@@ -64,7 +64,7 @@ async def run_capability_step(
     position: int | None = None,
 ) -> CapabilityCallResult:
     position = index if position is None else position
-    state.note_step("check_budget")
+    state.note_step("check_abort")
     check_run_abort(state, ctx=ctx)
     if (
         terminal_capability_result_event(

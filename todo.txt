@@ -1,0 +1,65 @@
+1. Make the agent loop's phases explicit.
+
+   AgentRunner::run interleaves tool execution, budgeting, model calls, trace
+   recording, and durable-event ordering. Extract two private methods, roughly
+   run_pending_tool_batch and run_model_turn, to expose the sequencing. Do not
+   add a state-machine crate or framework.
+
+2. Move projection logic closer to its owners.
+
+   projection.rs is a 1,600-line reducer for effects, attempts, waits,
+   schedules, and queue items. Move those reducers into the existing domain
+   files, leaving projection routing and rebuild orchestration in projection.rs.
+   As a smaller first step, centralize the duplicated effect status/string
+   codecs currently in projection.rs and effects.rs.
+
+3. Remove dead and parallel state.
+
+   - ModelInput::selected_url appears to be written but never read; endpoint
+     ownership already belongs to ModelRequest.
+   - PreparedAgent stores both resolved capabilities and their IDs, although
+     each resolved capability already contains its ID.
+   - tools_prompt receives an allowed-capabilities argument it deliberately
+     ignores.
+
+4. Make process recovery policy one concept.
+
+   ProcessExecutor::execute_now scatters recycle() decisions among error
+   branches. Add a small private classification such as invalidates_process()
+   to make the policy visible: remote application errors preserve the session;
+   transport errors, timeouts, aborts, and malformed responses recycle it.
+
+5. Apply the naming cleanup.
+
+   Start with private, source-only renames:
+
+   - append_draft -> record_durable_draft
+   - PendingEffect -> EffectCompletionContext
+   - execute_tool_call -> process_tool_call
+   - complete_draft -> draft_with_invocation_context
+   - recycle -> terminate_current_provider
+   - spawn_provider -> spawn_and_initialize_provider
+
+   Then make the public Rust API consistent:
+
+   - ToolExecutor -> CapabilityExecutor
+   - ToolFuture -> CapabilityFuture
+   - AgentRequest -> AgentProposal
+   - AgentRunResult::requests -> proposals
+   - SessionLatestRun -> SessionLatestAttempt
+   - DispatchErrorCode -> AttemptFailureCode
+   - Dispatch::append_event -> append_trusted_event
+   - matches -> agent_accepts_event
+   - Filter -> EventFilter
+   - SpecError -> AgentSpecError
+
+   Treat serialized and protocol-facing names as versioned migrations rather
+   than incidental refactors:
+
+   - RunStopReason::MaxTurns -> MaxModelCalls
+   - StepName::CheckBudget -> CheckAbort
+
+   Do not rename the separate CapabilityId and DeliverySemantics types across
+   crates; they preserve useful ownership boundaries. Keep the journal's proof
+   vocabulary: cursor, head, caused_by, payload_address, previous_address,
+   entry_address, idempotency_key, and HeadExpectation.

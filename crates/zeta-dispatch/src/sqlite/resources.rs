@@ -2,11 +2,15 @@ use std::str::FromStr;
 
 use rusqlite::{params, Connection, OptionalExtension, Row, Transaction, TransactionBehavior};
 use serde_json::{Map, Value};
-use time::OffsetDateTime;
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use zeta_journal::Event;
 
 use super::journal::{append_runtime_event, entry_by_field, validate_distinct_runtime_identities};
-use super::{corrupt_projection, database_error, Dispatch, DispatchError};
+use super::{
+    corrupt_projection, database_error, invalid_lifecycle, optional_payload_string,
+    required_payload_object, required_runtime_id, validate_optional_runtime_id, Dispatch,
+    DispatchError,
+};
 use crate::dispatch::{
     DeferredPublication, DeferredPublicationStatus, ResourceCancellationOutcome,
     ResourceCancellationStatus, ResourceKind, RuntimeEventIdentity, Wait, WaitStatus,
@@ -790,6 +794,259 @@ fn deferred_publication_cancelled_event(
         turn_id: None,
         timestamp_ms: identity.timestamp_ms(),
         cursor: None,
+    }
+}
+
+pub(super) fn index_wait(connection: &Connection, event: &Event) -> Result<(), DispatchError> {
+    match event.event_type.as_str() {
+        "runtime.wait.created" => index_wait_created(connection, event),
+        "runtime.wait.matched" => index_wait_terminal(connection, event, WaitStatus::Matched),
+        "runtime.wait.timed_out" => index_wait_terminal(connection, event, WaitStatus::TimedOut),
+        "runtime.wait.cancelled" => index_wait_terminal(connection, event, WaitStatus::Cancelled),
+        _ => Err(invalid_lifecycle(event, "event_type")),
+    }
+}
+
+fn index_wait_created(connection: &Connection, event: &Event) -> Result<(), DispatchError> {
+    let handle = required_runtime_id(event, "handle")?;
+    let agent_id = required_runtime_id(event, "agent_id")?;
+    let session_id = required_runtime_id(event, "session_id")?;
+    SessionId::from_str(&session_id).map_err(|_error| invalid_lifecycle(event, "session_id"))?;
+    if event.session_id.as_deref() != Some(session_id.as_str()) {
+        return Err(invalid_lifecycle(event, "session_id"));
+    }
+    let event_type = required_runtime_id(event, "event_type")?;
+    if event_type.starts_with("runtime.") {
+        return Err(invalid_lifecycle(event, "event_type"));
+    }
+    let fields = required_payload_object(event, "fields")?;
+    let fields_json =
+        serde_json::to_string(&fields).map_err(|_error| invalid_lifecycle(event, "fields"))?;
+    let deadline_ms = optional_payload_string(event, "deadline")?
+        .map(|deadline| lifecycle_timestamp_ms(event, "deadline", &deadline))
+        .transpose()?;
+    let source_queue_item_id = required_runtime_id(event, "source_queue_item_id")?;
+    QueueItemId::from_str(&source_queue_item_id)
+        .map_err(|_error| invalid_lifecycle(event, "source_queue_item_id"))?;
+    let project_generation = optional_payload_string(event, "project_generation")?;
+    validate_optional_runtime_id(event, "project_generation", project_generation.as_deref())?;
+    connection
+        .execute(
+            "INSERT INTO waits (
+                handle, agent_id, session_id, event_type, fields_json,
+                deadline_ms, source_queue_item_id, project_generation,
+                created_event_id, status, matched_event_id,
+                terminal_event_id, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
+                       'active', NULL, NULL, ?10)",
+            params![
+                handle,
+                agent_id,
+                session_id,
+                event_type,
+                fields_json,
+                deadline_ms,
+                source_queue_item_id,
+                project_generation,
+                &event.id,
+                event.timestamp_ms,
+            ],
+        )
+        .map_err(|database| database_error("project wait creation", database))?;
+    Ok(())
+}
+
+fn index_wait_terminal(
+    connection: &Connection,
+    event: &Event,
+    status: WaitStatus,
+) -> Result<(), DispatchError> {
+    let handle = required_runtime_id(event, "handle")?;
+    let matched_event_id = if status == WaitStatus::Matched {
+        Some(required_runtime_id(event, "matched_event_id")?)
+    } else {
+        None
+    };
+    if matched_event_id
+        .as_deref()
+        .is_some_and(|matched_event_id| event.caused_by.as_deref() != Some(matched_event_id))
+    {
+        return Err(invalid_lifecycle(event, "matched_event_id"));
+    }
+    let changed = connection
+        .execute(
+            "UPDATE waits
+             SET status = ?1, matched_event_id = ?2,
+                 terminal_event_id = ?3, updated_at = ?4
+             WHERE handle = ?5 AND status = 'active'",
+            params![
+                wait_status_str(status),
+                matched_event_id,
+                &event.id,
+                event.timestamp_ms,
+                handle,
+            ],
+        )
+        .map_err(|database| database_error("project wait terminal", database))?;
+    if changed != 1 {
+        return Err(invalid_lifecycle(event, "handle"));
+    }
+    Ok(())
+}
+
+pub(super) fn index_deferred_publication(
+    connection: &Connection,
+    event: &Event,
+) -> Result<(), DispatchError> {
+    match event.event_type.as_str() {
+        "runtime.deferred_publication.created" => {
+            index_deferred_publication_created(connection, event)
+        }
+        "runtime.deferred_publication.published" => index_deferred_publication_terminal(
+            connection,
+            event,
+            DeferredPublicationStatus::Published,
+        ),
+        "runtime.deferred_publication.cancelled" => index_deferred_publication_terminal(
+            connection,
+            event,
+            DeferredPublicationStatus::Cancelled,
+        ),
+        _ => Err(invalid_lifecycle(event, "event_type")),
+    }
+}
+
+fn index_deferred_publication_created(
+    connection: &Connection,
+    event: &Event,
+) -> Result<(), DispatchError> {
+    let handle = required_runtime_id(event, "handle")?;
+    let event_type = required_runtime_id(event, "event_type")?;
+    if event_type.starts_with("runtime.") {
+        return Err(invalid_lifecycle(event, "event_type"));
+    }
+    let payload = required_payload_object(event, "payload")?;
+    let payload_json =
+        serde_json::to_string(&payload).map_err(|_error| invalid_lifecycle(event, "payload"))?;
+    let publish_at = required_runtime_id(event, "publish_at")?;
+    let publish_at_ms = lifecycle_timestamp_ms(event, "publish_at", &publish_at)?;
+    let source_agent_id = required_runtime_id(event, "source_agent_id")?;
+    let source_queue_item_id = required_runtime_id(event, "source_queue_item_id")?;
+    QueueItemId::from_str(&source_queue_item_id)
+        .map_err(|_error| invalid_lifecycle(event, "source_queue_item_id"))?;
+    let position = required_nonnegative_u64(event, "position")?;
+    let position =
+        i64::try_from(position).map_err(|_error| invalid_lifecycle(event, "position"))?;
+    let source_session_id = optional_payload_string(event, "source_session_id")?;
+    if source_session_id != event.session_id {
+        return Err(invalid_lifecycle(event, "source_session_id"));
+    }
+    if let Some(session_id) = &source_session_id {
+        SessionId::from_str(session_id)
+            .map_err(|_error| invalid_lifecycle(event, "source_session_id"))?;
+    }
+    if let Some(run_id) = &event.run_id {
+        RunId::from_str(run_id).map_err(|_error| invalid_lifecycle(event, "source_run_id"))?;
+    }
+    connection
+        .execute(
+            "INSERT INTO deferred_publications (
+                handle, event_type, payload_json, publish_at_ms,
+                source_agent_id, source_session_id, source_run_id,
+                source_queue_item_id, position, created_event_id, status,
+                published_event_id, terminal_event_id, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+                       'pending', NULL, NULL, ?11)",
+            params![
+                handle,
+                event_type,
+                payload_json,
+                publish_at_ms,
+                source_agent_id,
+                source_session_id,
+                event.run_id.as_deref(),
+                source_queue_item_id,
+                position,
+                &event.id,
+                event.timestamp_ms,
+            ],
+        )
+        .map_err(|database| database_error("project deferred publication creation", database))?;
+    Ok(())
+}
+
+fn index_deferred_publication_terminal(
+    connection: &Connection,
+    event: &Event,
+    status: DeferredPublicationStatus,
+) -> Result<(), DispatchError> {
+    let handle = required_runtime_id(event, "handle")?;
+    let published_event_id = if status == DeferredPublicationStatus::Published {
+        Some(required_runtime_id(event, "published_event_id")?)
+    } else {
+        None
+    };
+    if published_event_id
+        .as_deref()
+        .is_some_and(|published_event_id| event.caused_by.as_deref() != Some(published_event_id))
+    {
+        return Err(invalid_lifecycle(event, "published_event_id"));
+    }
+    let changed = connection
+        .execute(
+            "UPDATE deferred_publications
+             SET status = ?1, published_event_id = ?2,
+                 terminal_event_id = ?3, updated_at = ?4
+             WHERE handle = ?5 AND status IN ('pending', 'claimed')",
+            params![
+                deferred_publication_status_str(status),
+                published_event_id,
+                &event.id,
+                event.timestamp_ms,
+                handle,
+            ],
+        )
+        .map_err(|database| database_error("project deferred publication terminal", database))?;
+    if changed != 1 {
+        return Err(invalid_lifecycle(event, "handle"));
+    }
+    Ok(())
+}
+
+fn required_nonnegative_u64(event: &Event, field: &'static str) -> Result<u64, DispatchError> {
+    event
+        .payload
+        .get(field)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| invalid_lifecycle(event, field))
+}
+
+fn lifecycle_timestamp_ms(
+    event: &Event,
+    field: &'static str,
+    value: &str,
+) -> Result<i64, DispatchError> {
+    let timestamp =
+        OffsetDateTime::parse(value, &Rfc3339).map_err(|_error| invalid_lifecycle(event, field))?;
+    i64::try_from(timestamp.unix_timestamp_nanos().div_euclid(1_000_000))
+        .map_err(|_error| invalid_lifecycle(event, field))
+}
+
+fn wait_status_str(status: WaitStatus) -> &'static str {
+    match status {
+        WaitStatus::Active => "active",
+        WaitStatus::Matched => "matched",
+        WaitStatus::TimedOut => "timed_out",
+        WaitStatus::Cancelled => "cancelled",
+    }
+}
+
+fn deferred_publication_status_str(status: DeferredPublicationStatus) -> &'static str {
+    match status {
+        DeferredPublicationStatus::Pending => "pending",
+        DeferredPublicationStatus::Claimed => "claimed",
+        DeferredPublicationStatus::Published => "published",
+        DeferredPublicationStatus::Cancelled => "cancelled",
     }
 }
 

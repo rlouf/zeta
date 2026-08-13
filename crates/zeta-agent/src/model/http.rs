@@ -424,9 +424,6 @@ fn resolved_input(input: &ModelInput, request: &ModelRequest) -> ModelInput {
     if request.model.is_some() {
         input.selected_model = request.model.clone();
     }
-    if request.url.is_some() {
-        input.selected_url = request.url.clone();
-    }
     if request.session_id.is_some() {
         input.session_id = request.session_id.clone();
     }

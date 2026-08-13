@@ -13,5 +13,5 @@ pub use chain::{
     HeadExpectation, JournalEntry,
 };
 pub use error::{AppendError, VerificationError, VerificationErrorKind, VerificationReport};
-pub use event::{AppendOutcome, DraftEvent, Event, Filter};
+pub use event::{AppendOutcome, DraftEvent, Event, EventFilter};
 pub use memory::MemoryJournal;

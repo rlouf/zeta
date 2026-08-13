@@ -11,7 +11,7 @@ from zeta.events import DraftEvent
 from zeta.tools.events import CancelRequest, PublishEventRequest, WaitRequest
 
 StepName = Literal[
-    "check_budget",
+    "check_abort",
     "build_prompt",
     "call_model",
     "record_assistant",
@@ -70,7 +70,7 @@ def agent_run_result_payload(result: AgentRunResult) -> dict[str, Any]:
     return payload
 
 
-RunStopReason = Literal["finished", "tool_stop", "aborted", "max_turns"]
+RunStopReason = Literal["finished", "tool_stop", "aborted", "max_model_calls"]
 RunInfoKind = Literal["model", "tools", "stopped"]
 
 

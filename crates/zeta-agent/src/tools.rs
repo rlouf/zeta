@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde_json::{json, Map, Value};
 use zeta_substrate::hash_bytes;
 
-use crate::{AbortSignal, AgentError, CapabilityInvocation, ToolExecutor, ToolFuture};
+use crate::{AbortSignal, AgentError, CapabilityExecutor, CapabilityFuture, CapabilityInvocation};
 
 pub use declarations::native_capabilities;
 pub use files::{HttpFuture, HttpResponse, HttpTransport, UnavailableHttpTransport};
@@ -94,7 +94,7 @@ impl<C, H, W> NativeToolExecutor<C, H, W> {
     }
 }
 
-impl<C, H, W> ToolExecutor for NativeToolExecutor<C, H, W>
+impl<C, H, W> CapabilityExecutor for NativeToolExecutor<C, H, W>
 where
     C: CommandRunner,
     H: HttpTransport,
@@ -104,7 +104,7 @@ where
         &'a mut self,
         invocation: &'a CapabilityInvocation,
         abort: &'a dyn AbortSignal,
-    ) -> ToolFuture<'a> {
+    ) -> CapabilityFuture<'a> {
         Box::pin(async move { self.execute_now(invocation, abort).await })
     }
 }

@@ -36,7 +36,7 @@ deferred publications.
 
 `attempt_completion` is the corresponding composition point between
 `zeta-agent` and `zeta-dispatch`. It retains durable answer, event, and usage
-metadata; converts ordered publish, wait, and cancellation requests without
+metadata; converts ordered publish, wait, and cancellation proposals without
 renumbering them; and rejects content promotion until Dispatch can commit that
 operation atomically. Dispatch then owns validation, execution order, and the
 legacy control-array shape recorded in the journal.

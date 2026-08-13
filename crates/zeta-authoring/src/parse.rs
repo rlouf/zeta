@@ -12,7 +12,7 @@ use serde_json::{Map, Number, Value};
 use yaml_serde::Value as YamlValue;
 use zeta_substrate::{hash_bytes, Hash, Object};
 
-use crate::error::{AuthoringError, AuthoringErrorKind, SpecError, SpecErrorKind};
+use crate::error::{AgentSpecError, AuthoringError, AuthoringErrorKind, SpecErrorKind};
 use crate::spec::{
     scheduled_event_type, AgentSpec, EgressBinding, ExecutorSpec, IngressBinding, ModelSpec,
     RetrySpec, ScheduleEntry,
@@ -25,10 +25,10 @@ use crate::spec::{
 ///
 /// # Errors
 ///
-/// Returns [`SpecError`] when the path cannot be read, its filename does not
+/// Returns [`AgentSpecError`] when the path cannot be read, its filename does not
 /// produce a valid slug, or its contents are invalid.
 ///
-/// [`SpecError`]: crate::SpecError
+/// [`AgentSpecError`]: crate::AgentSpecError
 ///
 /// # Examples
 ///
@@ -37,11 +37,11 @@ use crate::spec::{
 ///
 /// let spec = zeta_authoring::load_agent(Path::new("agents/worker.md"))?;
 /// assert_eq!(spec.slug, "worker");
-/// # Ok::<(), zeta_authoring::SpecError>(())
+/// # Ok::<(), zeta_authoring::AgentSpecError>(())
 /// ```
-pub fn load_agent(path: &Path) -> Result<AgentSpec, SpecError> {
+pub fn load_agent(path: &Path) -> Result<AgentSpec, AgentSpecError> {
     let source = fs::read(path).map_err(|error| {
-        SpecError::new(SpecErrorKind::Io, None, error.to_string()).with_path(path)
+        AgentSpecError::new(SpecErrorKind::Io, None, error.to_string()).with_path(path)
     })?;
     let slug = slug_from_path(path).map_err(|error| error.with_path(path))?;
     parse_agent(slug, &source).map_err(|error| error.with_path(path))
@@ -54,10 +54,10 @@ pub fn load_agent(path: &Path) -> Result<AgentSpec, SpecError> {
 ///
 /// # Errors
 ///
-/// Returns [`SpecError`] when the slug, source, frontmatter, or declaration
+/// Returns [`AgentSpecError`] when the slug, source, frontmatter, or declaration
 /// values are invalid.
 ///
-/// [`SpecError`]: crate::SpecError
+/// [`AgentSpecError`]: crate::AgentSpecError
 ///
 /// # Examples
 ///
@@ -67,12 +67,13 @@ pub fn load_agent(path: &Path) -> Result<AgentSpec, SpecError> {
 ///     b"---\nname: Worker\ndescription: Does work.\n---\nWork.\n",
 /// )?;
 /// assert_eq!(spec.instructions, "Work.\n");
-/// # Ok::<(), zeta_authoring::SpecError>(())
+/// # Ok::<(), zeta_authoring::AgentSpecError>(())
 /// ```
-pub fn parse_agent(slug: &str, source: &[u8]) -> Result<AgentSpec, SpecError> {
+pub fn parse_agent(slug: &str, source: &[u8]) -> Result<AgentSpec, AgentSpecError> {
     let slug = validate_slug(slug)?;
-    let content = std::str::from_utf8(source)
-        .map_err(|error| SpecError::new(SpecErrorKind::InvalidUtf8, None, error.to_string()))?;
+    let content = std::str::from_utf8(source).map_err(|error| {
+        AgentSpecError::new(SpecErrorKind::InvalidUtf8, None, error.to_string())
+    })?;
     let (frontmatter, instructions) = split_frontmatter(content)?;
     let mut frontmatter = parse_frontmatter(frontmatter)?;
 
@@ -251,7 +252,7 @@ pub struct SkillSpec {
 ///     b"---\nname: Worker\ndescription: Works.\n---\n{{ event.payload.text }}\n",
 /// )?;
 /// zeta_authoring::validate_prompt(&spec).unwrap();
-/// # Ok::<(), zeta_authoring::SpecError>(())
+/// # Ok::<(), zeta_authoring::AgentSpecError>(())
 /// ```
 pub fn validate_prompt(spec: &AgentSpec) -> Result<(), AuthoringError> {
     let environment = prompt_environment();
@@ -298,7 +299,7 @@ pub fn validate_prompt(spec: &AgentSpec) -> Result<(), AuthoringError> {
 /// )?;
 /// let event = serde_json::json!({"payload": {"text": "hello"}});
 /// assert_eq!(zeta_authoring::render_prompt(&spec, &event).unwrap(), "hello");
-/// # Ok::<(), zeta_authoring::SpecError>(())
+/// # Ok::<(), zeta_authoring::AgentSpecError>(())
 /// ```
 pub fn render_prompt(spec: &AgentSpec, event: &Value) -> Result<String, AuthoringError> {
     let environment = prompt_environment();
@@ -483,17 +484,17 @@ fn valid_skill_name(name: &str) -> bool {
     true
 }
 
-fn split_frontmatter(content: &str) -> Result<(&str, &str), SpecError> {
+fn split_frontmatter(content: &str) -> Result<(&str, &str), AgentSpecError> {
     let mut lines = content.split_inclusive('\n');
     let Some(first) = lines.next() else {
-        return Err(SpecError::new(
+        return Err(AgentSpecError::new(
             SpecErrorKind::MissingFrontmatterDelimiter,
             None,
             "the first line must be ---",
         ));
     };
     if first.trim() != "---" {
-        return Err(SpecError::new(
+        return Err(AgentSpecError::new(
             SpecErrorKind::MissingFrontmatterDelimiter,
             None,
             "the first line must be ---",
@@ -510,16 +511,17 @@ fn split_frontmatter(content: &str) -> Result<(&str, &str), SpecError> {
         }
         line_start += line.len();
     }
-    Err(SpecError::new(
+    Err(AgentSpecError::new(
         SpecErrorKind::MissingClosingFrontmatterDelimiter,
         None,
         "frontmatter must end with ---",
     ))
 }
 
-fn parse_frontmatter(source: &str) -> Result<Map<String, Value>, SpecError> {
-    let source = yaml_serde::from_str::<YamlValue>(source)
-        .map_err(|error| SpecError::new(SpecErrorKind::InvalidYaml, None, error.to_string()))?;
+fn parse_frontmatter(source: &str) -> Result<Map<String, Value>, AgentSpecError> {
+    let source = yaml_serde::from_str::<YamlValue>(source).map_err(|error| {
+        AgentSpecError::new(SpecErrorKind::InvalidYaml, None, error.to_string())
+    })?;
     let mapping = match source {
         YamlValue::Null => return Ok(Map::new()),
         YamlValue::Mapping(mapping) => mapping,
@@ -528,7 +530,7 @@ fn parse_frontmatter(source: &str) -> Result<Map<String, Value>, SpecError> {
         | YamlValue::String(_)
         | YamlValue::Sequence(_)
         | YamlValue::Tagged(_) => {
-            return Err(SpecError::new(
+            return Err(AgentSpecError::new(
                 SpecErrorKind::ExpectedFrontmatterObject,
                 None,
                 "frontmatter must be an object",
@@ -539,21 +541,22 @@ fn parse_frontmatter(source: &str) -> Result<Map<String, Value>, SpecError> {
     let mut output = Map::new();
     for (key, value) in mapping {
         let YamlValue::String(key) = key else {
-            return Err(SpecError::new(
+            return Err(AgentSpecError::new(
                 SpecErrorKind::ExpectedFrontmatterObject,
                 None,
                 "frontmatter keys must be strings",
             ));
         };
         if key == "<<" {
-            return Err(SpecError::new(
+            return Err(AgentSpecError::new(
                 SpecErrorKind::InvalidField,
                 Some(&key),
                 "merge keys are not supported",
             ));
         }
-        let value = yaml_to_json(value)
-            .map_err(|detail| SpecError::new(SpecErrorKind::InvalidField, Some(&key), detail))?;
+        let value = yaml_to_json(value).map_err(|detail| {
+            AgentSpecError::new(SpecErrorKind::InvalidField, Some(&key), detail)
+        })?;
         output.insert(key, value);
     }
     Ok(output)
@@ -608,9 +611,9 @@ fn yaml_number_to_json(value: &yaml_serde::Number) -> Result<Value, &'static str
     Ok(Value::Number(value))
 }
 
-fn slug_from_path(path: &Path) -> Result<&str, SpecError> {
+fn slug_from_path(path: &Path) -> Result<&str, AgentSpecError> {
     let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
-        return Err(SpecError::new(
+        return Err(AgentSpecError::new(
             SpecErrorKind::InvalidSlug,
             None,
             "the filename must have a UTF-8 stem",
@@ -619,9 +622,9 @@ fn slug_from_path(path: &Path) -> Result<&str, SpecError> {
     Ok(stem)
 }
 
-fn validate_slug(slug: &str) -> Result<String, SpecError> {
+fn validate_slug(slug: &str) -> Result<String, AgentSpecError> {
     if slug.is_empty() {
-        return Err(SpecError::new(
+        return Err(AgentSpecError::new(
             SpecErrorKind::InvalidSlug,
             None,
             "the slug must match [a-z0-9_-]+",
@@ -631,7 +634,7 @@ fn validate_slug(slug: &str) -> Result<String, SpecError> {
         let valid =
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_' || byte == b'-';
         if !valid {
-            return Err(SpecError::new(
+            return Err(AgentSpecError::new(
                 SpecErrorKind::InvalidSlug,
                 None,
                 "the slug must match [a-z0-9_-]+",
@@ -644,17 +647,17 @@ fn validate_slug(slug: &str) -> Result<String, SpecError> {
 fn take_required_string(
     values: &mut Map<String, Value>,
     field: &'static str,
-) -> Result<String, SpecError> {
+) -> Result<String, AgentSpecError> {
     let value = values.remove(field);
     let Some(Value::String(value)) = value else {
-        return Err(SpecError::new(
+        return Err(AgentSpecError::new(
             SpecErrorKind::MissingRequiredField,
             Some(field),
             "a non-empty string is required",
         ));
     };
     if value.is_empty() {
-        return Err(SpecError::new(
+        return Err(AgentSpecError::new(
             SpecErrorKind::MissingRequiredField,
             Some(field),
             "a non-empty string is required",
@@ -667,7 +670,7 @@ fn take_bool(
     values: &mut Map<String, Value>,
     field: &'static str,
     default: bool,
-) -> Result<bool, SpecError> {
+) -> Result<bool, AgentSpecError> {
     match values.remove(field) {
         None => Ok(default),
         Some(Value::Bool(value)) => Ok(value),
@@ -677,7 +680,7 @@ fn take_bool(
     }
 }
 
-fn take_session(values: &mut Map<String, Value>) -> Result<String, SpecError> {
+fn take_session(values: &mut Map<String, Value>) -> Result<String, AgentSpecError> {
     match values.remove("session") {
         None | Some(Value::Null) => Ok("per-event".to_owned()),
         Some(Value::String(value)) => {
@@ -696,7 +699,7 @@ fn take_session(values: &mut Map<String, Value>) -> Result<String, SpecError> {
     }
 }
 
-fn take_model(values: &mut Map<String, Value>) -> Result<Option<ModelSpec>, SpecError> {
+fn take_model(values: &mut Map<String, Value>) -> Result<Option<ModelSpec>, AgentSpecError> {
     let value = values.remove("model");
     let Some(value) = value else {
         return Ok(None);
@@ -713,7 +716,7 @@ fn take_model(values: &mut Map<String, Value>) -> Result<Option<ModelSpec>, Spec
     Ok(Some(ModelSpec { name, url }))
 }
 
-fn take_executor(values: &mut Map<String, Value>) -> Result<ExecutorSpec, SpecError> {
+fn take_executor(values: &mut Map<String, Value>) -> Result<ExecutorSpec, AgentSpecError> {
     let value = values.remove("executor");
     let Some(value) = value else {
         return Ok(ExecutorSpec::default());
@@ -740,7 +743,7 @@ fn take_nested_required_string(
     values: &mut Map<String, Value>,
     name: &str,
     parent: &'static str,
-) -> Result<String, SpecError> {
+) -> Result<String, AgentSpecError> {
     let value = values.remove(name);
     let Some(Value::String(value)) = value else {
         return Err(invalid_field(
@@ -760,7 +763,7 @@ fn take_nested_required_string(
 fn take_string_list(
     values: &mut Map<String, Value>,
     field: &'static str,
-) -> Result<Vec<String>, SpecError> {
+) -> Result<Vec<String>, AgentSpecError> {
     let value = values.remove(field);
     let Some(value) = value else {
         return Ok(Vec::new());
@@ -786,7 +789,7 @@ fn take_string_list(
 
 fn take_accepts(
     values: &mut Map<String, Value>,
-) -> Result<(Vec<String>, Vec<IngressBinding>), SpecError> {
+) -> Result<(Vec<String>, Vec<IngressBinding>), AgentSpecError> {
     let entries = take_event_entries(values, "accepts")?;
     let mut events = Vec::with_capacity(entries.len());
     let mut bindings = Vec::new();
@@ -823,7 +826,7 @@ fn take_accepts(
 
 fn take_publishes(
     values: &mut Map<String, Value>,
-) -> Result<(Vec<String>, Vec<EgressBinding>), SpecError> {
+) -> Result<(Vec<String>, Vec<EgressBinding>), AgentSpecError> {
     let entries = take_event_entries(values, "publishes")?;
     let mut events = Vec::with_capacity(entries.len());
     let mut bindings = Vec::new();
@@ -867,7 +870,7 @@ fn take_publishes(
 fn take_event_entries(
     values: &mut Map<String, Value>,
     field: &'static str,
-) -> Result<Vec<Value>, SpecError> {
+) -> Result<Vec<Value>, AgentSpecError> {
     let value = values.remove(field);
     let Some(value) = value else {
         return Ok(Vec::new());
@@ -885,7 +888,7 @@ fn take_object(
     values: &mut Map<String, Value>,
     name: &str,
     parent: &'static str,
-) -> Result<Map<String, Value>, SpecError> {
+) -> Result<Map<String, Value>, AgentSpecError> {
     match values.remove(name) {
         None => Ok(Map::new()),
         Some(Value::Object(value)) => Ok(value),
@@ -899,7 +902,7 @@ fn take_optional_string(
     values: &mut Map<String, Value>,
     name: &str,
     parent: &'static str,
-) -> Result<Option<String>, SpecError> {
+) -> Result<Option<String>, AgentSpecError> {
     match values.remove(name) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(value)) if !value.is_empty() => Ok(Some(value)),
@@ -916,7 +919,7 @@ fn take_optional_string(
     }
 }
 
-fn take_schedules(values: &mut Map<String, Value>) -> Result<Vec<ScheduleEntry>, SpecError> {
+fn take_schedules(values: &mut Map<String, Value>) -> Result<Vec<ScheduleEntry>, AgentSpecError> {
     let value = values.remove("schedules");
     let Some(value) = value else {
         return Ok(Vec::new());
@@ -955,7 +958,7 @@ fn take_schedules(values: &mut Map<String, Value>) -> Result<Vec<ScheduleEntry>,
     Ok(schedules)
 }
 
-fn take_retry(values: &mut Map<String, Value>) -> Result<Option<RetrySpec>, SpecError> {
+fn take_retry(values: &mut Map<String, Value>) -> Result<Option<RetrySpec>, AgentSpecError> {
     let value = values.remove("retry");
     let Some(value) = value else {
         return Ok(None);
@@ -1021,7 +1024,7 @@ fn take_retry(values: &mut Map<String, Value>) -> Result<Option<RetrySpec>, Spec
     }))
 }
 
-fn take_base_dir(values: &mut Map<String, Value>) -> Result<Option<PathBuf>, SpecError> {
+fn take_base_dir(values: &mut Map<String, Value>) -> Result<Option<PathBuf>, AgentSpecError> {
     match values.remove("base_dir") {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(value)) => {
@@ -1036,7 +1039,7 @@ fn take_base_dir(values: &mut Map<String, Value>) -> Result<Option<PathBuf>, Spe
     }
 }
 
-fn take_locks(values: &mut Map<String, Value>) -> Result<Vec<String>, SpecError> {
+fn take_locks(values: &mut Map<String, Value>) -> Result<Vec<String>, AgentSpecError> {
     let Some(value) = values.remove("locks") else {
         return Ok(Vec::new());
     };
@@ -1074,7 +1077,7 @@ fn reject_unknown_fields(
     values: &Map<String, Value>,
     allowed: &[&str],
     field: &'static str,
-) -> Result<(), SpecError> {
+) -> Result<(), AgentSpecError> {
     for key in values.keys() {
         if !allowed.contains(&key.as_str()) {
             return Err(invalid_field(field, format!("unsupported field {key:?}")));
@@ -1083,6 +1086,6 @@ fn reject_unknown_fields(
     Ok(())
 }
 
-fn invalid_field(field: &'static str, detail: impl Into<String>) -> SpecError {
-    SpecError::new(SpecErrorKind::InvalidField, Some(field), detail)
+fn invalid_field(field: &'static str, detail: impl Into<String>) -> AgentSpecError {
+    AgentSpecError::new(SpecErrorKind::InvalidField, Some(field), detail)
 }

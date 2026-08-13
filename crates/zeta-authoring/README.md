@@ -48,7 +48,7 @@ let spec = zeta_authoring::parse_agent("worker", source)?;
 
 assert_eq!(spec.slug, "worker");
 assert_eq!(spec.instructions, "Do the work.\n");
-# Ok::<(), zeta_authoring::SpecError>(())
+# Ok::<(), zeta_authoring::AgentSpecError>(())
 ```
 
 Load an authored file and derive its slug from the filename:
@@ -59,7 +59,7 @@ use std::path::Path;
 let spec = zeta_authoring::load_agent(Path::new("agents/worker.md"))?;
 
 assert_eq!(spec.slug, "worker");
-# Ok::<(), zeta_authoring::SpecError>(())
+# Ok::<(), zeta_authoring::AgentSpecError>(())
 ```
 
 Direct parse errors have no path. Loading attaches the supplied filesystem

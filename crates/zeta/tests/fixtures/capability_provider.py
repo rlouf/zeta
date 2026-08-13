@@ -68,6 +68,9 @@ for line in sys.stdin:
             }
         )
         continue
+    if input_value.get("non_object"):
+        send({"jsonrpc": "2.0", "id": request["id"], "result": "invalid"})
+        continue
     send(
         {
             "jsonrpc": "2.0",

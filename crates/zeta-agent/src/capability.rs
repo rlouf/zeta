@@ -12,7 +12,7 @@ use crate::error::AgentError;
 use crate::model::AbortSignal;
 
 /// Resolves one capability execution at an injected runtime boundary.
-pub type ToolFuture<'a> =
+pub type CapabilityFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Map<String, Value>, AgentError>> + 'a>>;
 
 /// Identifies one canonical capability independently of its model-facing name.
@@ -282,13 +282,13 @@ pub struct CapabilityInvocation {
 }
 
 /// Executes validated capabilities without choosing a host or plugin system.
-pub trait ToolExecutor {
+pub trait CapabilityExecutor {
     /// Executes one canonical invocation.
     fn execute<'a>(
         &'a mut self,
         invocation: &'a CapabilityInvocation,
         abort: &'a dyn AbortSignal,
-    ) -> ToolFuture<'a>;
+    ) -> CapabilityFuture<'a>;
 }
 
 /// Persists complete journal drafts at the moment they become true.

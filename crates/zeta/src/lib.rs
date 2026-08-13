@@ -3,7 +3,7 @@
 use std::fmt;
 
 use serde_json::{Map, Value};
-use zeta_agent::{AgentRequest, AgentRunResult, RunStopReason};
+use zeta_agent::{AgentProposal, AgentRunResult, RunStopReason};
 use zeta_dispatch::{AttemptCompletion, AttemptCompletionDisposition, AttemptControl};
 
 pub mod process_executor;
@@ -133,7 +133,7 @@ pub fn attempt_completion(
         let stop_reason = match stop_reason {
             RunStopReason::Finished => "finished",
             RunStopReason::ToolStop => "tool_stop",
-            RunStopReason::MaxTurns => "max_turns",
+            RunStopReason::MaxModelCalls => "max_model_calls",
         };
         metadata.insert(
             "stop_reason".to_owned(),
@@ -158,9 +158,9 @@ pub fn attempt_completion(
     }
 
     let mut controls = Vec::new();
-    for request in &result.requests {
-        match request {
-            AgentRequest::Publish {
+    for proposal in &result.proposals {
+        match proposal {
+            AgentProposal::Publish {
                 handle,
                 event_type,
                 payload,
@@ -176,7 +176,7 @@ pub fn attempt_completion(
                     position,
                 ));
             }
-            AgentRequest::Wait {
+            AgentProposal::Wait {
                 handle,
                 event_type,
                 fields,
@@ -192,7 +192,7 @@ pub fn attempt_completion(
                     position,
                 ));
             }
-            AgentRequest::Cancel {
+            AgentProposal::Cancel {
                 handle,
                 reason,
                 source_agent_id,
@@ -208,7 +208,7 @@ pub fn attempt_completion(
                     position,
                 ));
             }
-            AgentRequest::ContentPromotion {
+            AgentProposal::ContentPromotion {
                 scope,
                 key,
                 object_id: _object_id,

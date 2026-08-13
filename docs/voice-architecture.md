@@ -98,7 +98,7 @@ zeta sessions start
 ```
 
 `run_agent_loop()` initializes `AgentRun` and repeats `step()` until there is a
-final model answer, a tool stop, abort, or `max_turns`
+final model answer, a tool stop, abort, or `max_model_calls`
 ([runtime.py](../zeta/src/zeta/loop/runtime.py)). `build_prompt_step()` sends:
 
 1. the durable timeline from earlier CLI/voice turns;

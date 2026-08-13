@@ -81,16 +81,16 @@ impl SpecErrorKind {
 /// assert_eq!(error.path(), None);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SpecError {
+pub struct AgentSpecError {
     kind: SpecErrorKind,
     field: Option<String>,
     path: Option<PathBuf>,
     detail: String,
 }
 
-impl SpecError {
+impl AgentSpecError {
     pub(crate) fn new(kind: SpecErrorKind, field: Option<&str>, detail: impl Into<String>) -> Self {
-        SpecError {
+        AgentSpecError {
             kind,
             field: field.map(str::to_owned),
             path: None,
@@ -149,7 +149,7 @@ impl SpecError {
     }
 }
 
-impl fmt::Display for SpecError {
+impl fmt::Display for AgentSpecError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Some(path) = &self.path else {
             return write!(formatter, "{}: {}", self.kind.reason(), self.detail);
@@ -164,7 +164,7 @@ impl fmt::Display for SpecError {
     }
 }
 
-impl std::error::Error for SpecError {}
+impl std::error::Error for AgentSpecError {}
 
 /// Classifies why authored declarations cannot form a valid project.
 ///
@@ -280,7 +280,7 @@ impl AuthoringErrorKind {
 /// )
 /// .unwrap_err();
 /// assert_eq!(error.subject(), Some("missing"));
-/// # Ok::<(), zeta_authoring::SpecError>(())
+/// # Ok::<(), zeta_authoring::AgentSpecError>(())
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuthoringError {
@@ -338,7 +338,7 @@ impl AuthoringError {
     /// )
     /// .unwrap_err();
     /// assert_eq!(error.subject(), Some("missing"));
-    /// # Ok::<(), zeta_authoring::SpecError>(())
+    /// # Ok::<(), zeta_authoring::AgentSpecError>(())
     /// ```
     pub fn subject(&self) -> Option<&str> {
         self.subject.as_deref()
@@ -359,7 +359,7 @@ impl AuthoringError {
     /// )
     /// .unwrap_err();
     /// assert_eq!(error.field(), Some("returns"));
-    /// # Ok::<(), zeta_authoring::SpecError>(())
+    /// # Ok::<(), zeta_authoring::AgentSpecError>(())
     /// ```
     pub fn field(&self) -> Option<&str> {
         self.field.as_deref()
@@ -380,7 +380,7 @@ impl AuthoringError {
     /// )
     /// .unwrap_err();
     /// assert!(error.detail().contains("unknown event"));
-    /// # Ok::<(), zeta_authoring::SpecError>(())
+    /// # Ok::<(), zeta_authoring::AgentSpecError>(())
     /// ```
     pub fn detail(&self) -> &str {
         &self.detail

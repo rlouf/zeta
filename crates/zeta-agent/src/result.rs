@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use zeta_journal::DraftEvent;
 
-use crate::control::AgentRequest;
+use crate::control::AgentProposal;
 use crate::trace::{PromptTrace, TraceBatch};
 
 /// Names why an ordinary run stopped.
@@ -16,15 +16,15 @@ pub enum RunStopReason {
     /// Stops because a control capability requested it.
     ToolStop,
     /// Stops after the configured model-call budget.
-    MaxTurns,
+    MaxModelCalls,
 }
 
 /// Names one observable state-machine step.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StepName {
-    /// Checks cancellation, deadline, and model-call budget.
-    CheckBudget,
+    /// Checks cancellation and the invocation deadline.
+    CheckAbort,
     /// Builds and addresses one model prompt.
     BuildPrompt,
     /// Calls the injected model gateway.
@@ -61,11 +61,26 @@ pub struct AgentRunResult {
     /// Carries durable event proposals in execution order.
     pub events: Vec<DraftEvent>,
     /// Carries ordered control proposals for the caller to commit.
-    pub requests: Vec<AgentRequest>,
+    #[serde(rename = "requests")]
+    pub proposals: Vec<AgentProposal>,
     /// Links every model request to its traced response.
     pub prompt_traces: Vec<PromptTrace>,
     /// Preserves the state-machine path taken by the run.
     pub steps: Vec<StepName>,
     /// Carries deterministic objects and derivations for caller persistence.
     pub trace: TraceBatch,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AgentRunResult;
+
+    #[test]
+    fn serialized_result_uses_the_requests_key() {
+        let value = serde_json::to_value(AgentRunResult::default()).unwrap();
+        let object = value.as_object().unwrap();
+
+        assert!(object.contains_key("requests"));
+        assert!(!object.contains_key("proposals"));
+    }
 }

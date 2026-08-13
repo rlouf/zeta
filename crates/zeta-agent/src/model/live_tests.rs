@@ -144,7 +144,6 @@ fn input() -> ModelInput {
         tool_choice: json!("auto"),
         max_tokens: 64,
         selected_model: Some("unit-model".to_owned()),
-        selected_url: None,
         session_id: Some("session-vector".to_owned()),
         thinking: None,
     }

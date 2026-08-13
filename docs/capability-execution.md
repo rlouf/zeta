@@ -41,7 +41,7 @@ envelope. It does not change the declared JSON Schema.
 
 ### Dispatch
 
-Each run resolves one `ToolExecutor` before dispatch. The local executor is
+Each run resolves one `CapabilityExecutor` before dispatch. The local executor is
 the default when agent Markdown has no `executor:` field.
 
 The executor receives a canonical capability id, validated arguments, a base

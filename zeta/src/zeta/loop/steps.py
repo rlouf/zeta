@@ -62,7 +62,7 @@ async def step_model(
     tools: list[dict[str, Any]],
     ctx: RunDependencies,
 ) -> tuple[RunState, RunInfo]:
-    state.note_step("check_budget")
+    state.note_step("check_abort")
     check_run_abort(
         state,
         ctx=ctx,
@@ -243,6 +243,6 @@ class AgentRun:
                 final_answer=info.final_answer,
                 answer_streamed=info.answer_streamed,
             )
-        self.state.stop = "max_turns"
+        self.state.stop = "max_model_calls"
         self.state.note_step("finish_run")
         return self.state.result()

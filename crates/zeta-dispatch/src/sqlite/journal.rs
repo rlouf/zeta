@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use rusqlite::{params, Connection, OptionalExtension, Row, Transaction, TransactionBehavior};
 use serde_json::{Map, Value};
 use zeta_journal::{
-    canonical_payload, payload_address, verify, AppendError, AppendOutcome, Event, Filter,
+    canonical_payload, payload_address, verify, AppendError, AppendOutcome, Event, EventFilter,
     HeadExpectation, JournalEntry, VerificationReport,
 };
 use zeta_substrate::Hash;
@@ -27,7 +27,7 @@ impl Dispatch {
     ///
     /// Returns [`DispatchError`] for invalid new events, storage failures, or
     /// corrupted retained journal rows.
-    pub fn append_event(&mut self, event: Event) -> Result<AppendOutcome, DispatchError> {
+    pub fn append_trusted_event(&mut self, event: Event) -> Result<AppendOutcome, DispatchError> {
         validate_event_identity(&event)?;
         let transaction = self
             .connection
@@ -59,7 +59,7 @@ impl Dispatch {
                 event_type: event.event_type,
             });
         }
-        self.append_event(event)
+        self.append_trusted_event(event)
     }
 
     /// Returns the final retained entry address, or `None` for an empty journal.
@@ -93,7 +93,7 @@ impl Dispatch {
     ///
     /// Returns [`DispatchError`] when any retained entry is malformed or a
     /// database read fails.
-    pub fn list_events(&self, filter: &Filter) -> Result<Vec<Event>, DispatchError> {
+    pub fn list_events(&self, filter: &EventFilter) -> Result<Vec<Event>, DispatchError> {
         if filter.limit == Some(0) {
             return Ok(Vec::new());
         }
@@ -121,10 +121,10 @@ impl Dispatch {
         event_id: &str,
         limit: Option<usize>,
     ) -> Result<Vec<Event>, DispatchError> {
-        let filter = Filter {
+        let filter = EventFilter {
             caused_by: Some(event_id.to_owned()),
             limit,
-            ..Filter::default()
+            ..EventFilter::default()
         };
         self.list_events(&filter)
     }
@@ -386,7 +386,7 @@ pub(super) fn load_entries(
     Ok(entries)
 }
 
-fn event_matches(event: &Event, filter: &Filter) -> bool {
+fn event_matches(event: &Event, filter: &EventFilter) -> bool {
     if let Some(expected) = &filter.event_type {
         if &event.event_type != expected {
             return false;

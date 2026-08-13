@@ -9,7 +9,7 @@ use zeta::{
     SystemClock, UuidIdSource,
 };
 use zeta_agent::{
-    AbortReason, AbortSignal, AgentErrorKind, AgentInvocation, AgentObserver, AgentRequest,
+    AbortReason, AbortSignal, AgentErrorKind, AgentInvocation, AgentObserver, AgentProposal,
     AgentRunResult, ArgumentAdapter, Capability, Clock,
     DeliverySemantics as AgentDeliverySemantics, DraftRecorder, IdSource, Observation,
     PromptEnvironment, PromptTransform, ResolvedCapability, RunStopReason, ToolProfile,
@@ -248,22 +248,22 @@ fn agent_result_becomes_typed_dispatch_completion_without_reordering_controls() 
         final_object_id: Some("obj-final".to_owned()),
         stop_reason: Some(RunStopReason::ToolStop),
         events: vec![draft()],
-        requests: vec![
-            AgentRequest::Publish {
+        proposals: vec![
+            AgentProposal::Publish {
                 handle: "pub-first".to_owned(),
                 event_type: "work.first".to_owned(),
                 payload: object(json!({"position": 0})),
                 at: None,
                 position: 0,
             },
-            AgentRequest::Wait {
+            AgentProposal::Wait {
                 handle: "wait-middle".to_owned(),
                 event_type: "work.ready".to_owned(),
                 fields: object(json!({"work_id": "42"})),
                 deadline: Some("2030-01-02T03:04:05Z".to_owned()),
                 position: 1,
             },
-            AgentRequest::Cancel {
+            AgentProposal::Cancel {
                 handle: "wait-old".to_owned(),
                 reason: Some("superseded".to_owned()),
                 source_agent_id: "worker".to_owned(),
@@ -338,6 +338,18 @@ fn agent_result_becomes_typed_dispatch_completion_without_reordering_controls() 
 }
 
 #[test]
+fn agent_result_records_the_maximum_model_call_stop_reason() {
+    let result = AgentRunResult {
+        stop_reason: Some(RunStopReason::MaxModelCalls),
+        ..AgentRunResult::default()
+    };
+
+    let completion = attempt_completion("2026-08-12T10:00:01Z", &result).unwrap();
+
+    assert_eq!(completion.metadata()["stop_reason"], "max_model_calls");
+}
+
+#[test]
 fn agent_result_preserves_null_draft_event_evidence_fields() {
     let result = AgentRunResult {
         events: vec![DraftEvent {
@@ -400,7 +412,7 @@ fn agent_result_rejects_non_object_usage() {
 #[test]
 fn agent_result_rejects_unsupported_content_promotion() {
     let result = AgentRunResult {
-        requests: vec![AgentRequest::ContentPromotion {
+        proposals: vec![AgentProposal::ContentPromotion {
             scope: "agent/worker/session".to_owned(),
             key: "answer".to_owned(),
             object_id: Some("obj-final".to_owned()),
@@ -474,15 +486,15 @@ fn agent_result_completion_commits_typed_controls_through_dispatch() {
     let result = AgentRunResult {
         final_answer: "done".to_owned(),
         stop_reason: Some(RunStopReason::ToolStop),
-        requests: vec![
-            AgentRequest::Publish {
+        proposals: vec![
+            AgentProposal::Publish {
                 handle: "pub-host".to_owned(),
                 event_type: "work.completed".to_owned(),
                 payload: object(json!({"work_id": "42"})),
                 at: None,
                 position: 0,
             },
-            AgentRequest::Wait {
+            AgentProposal::Wait {
                 handle: "wait-host".to_owned(),
                 event_type: "review.completed".to_owned(),
                 fields: object(json!({"work_id": "42"})),

@@ -10,11 +10,11 @@ use zeta_journal::DraftEvent;
 use zeta_substrate::{canonical_json, derive, Derivation, Domain, Object};
 
 use crate::capability::{
-    ArgumentAdapter, Capability, CapabilityId, CapabilityInvocation, DeliverySemantics,
-    DraftRecorder, IdSource, ResolvedCapability, ToolExecutor,
+    ArgumentAdapter, Capability, CapabilityExecutor, CapabilityId, CapabilityInvocation,
+    DeliverySemantics, DraftRecorder, IdSource, ResolvedCapability,
 };
 use crate::content::{ContentOperation, ContentService};
-use crate::control::AgentRequest;
+use crate::control::AgentProposal;
 use crate::error::{AgentError, AgentRunAborted, AgentRunError};
 use crate::history::HistoryService;
 use crate::invocation::AgentInvocation;
@@ -27,7 +27,7 @@ use crate::trace::{PromptTrace, TraceBatch};
 pub struct AgentRunner<'a> {
     capabilities: &'a [ResolvedCapability],
     model_gateway: &'a mut dyn ModelGateway,
-    tool_executor: &'a mut dyn ToolExecutor,
+    tool_executor: &'a mut dyn CapabilityExecutor,
     observer: &'a mut dyn AgentObserver,
     draft_recorder: &'a mut dyn DraftRecorder,
     id_source: &'a mut dyn IdSource,
@@ -43,7 +43,7 @@ impl<'a> AgentRunner<'a> {
     pub fn new(
         capabilities: &'a [ResolvedCapability],
         model_gateway: &'a mut dyn ModelGateway,
-        tool_executor: &'a mut dyn ToolExecutor,
+        tool_executor: &'a mut dyn CapabilityExecutor,
         observer: &'a mut dyn AgentObserver,
         draft_recorder: &'a mut dyn DraftRecorder,
         id_source: &'a mut dyn IdSource,
@@ -98,201 +98,232 @@ impl<'a> AgentRunner<'a> {
         };
         loop {
             if !state.pending_tool_calls.is_empty() {
-                let tool_calls = std::mem::take(&mut state.pending_tool_calls);
-                let model_telemetry = std::mem::take(&mut state.pending_model_telemetry);
-                let assistant_event_id = state.pending_tool_parent_id.take();
-                for (index, tool_call) in tool_calls.into_iter().enumerate() {
-                    result.steps.push(StepName::CheckBudget);
-                    if let Some(reason) = self.abort_reason(invocation) {
-                        return self.abort_run(
-                            invocation,
-                            result,
-                            reason,
-                            state.next_model_caused_by,
-                        );
-                    }
-                    let position = state.next_tool_position;
-                    state.next_tool_position += 1;
-                    let call_id = tool_call_id(&tool_call, index);
-                    if terminal_tool_result(&result.events, &call_id).is_some() {
-                        result.steps.push(StepName::RecordCapabilityResult);
-                        state.next_model_caused_by = None;
-                        continue;
-                    }
-                    result.steps.push(StepName::RecordCapabilityCall);
-                    result.steps.push(StepName::ExecuteCapability);
-                    let telemetry = if index == 0 {
-                        model_telemetry.clone()
-                    } else {
-                        Map::new()
-                    };
-                    let outcome = self
-                        .execute_tool_call(
-                            invocation,
-                            &capabilities,
-                            tool_call,
-                            index,
-                            position,
-                            assistant_event_id.as_deref(),
-                            telemetry,
-                            &mut result,
-                            &mut state.projection,
-                        )
-                        .await?;
-                    result.steps.push(StepName::RecordCapabilityResult);
-                    state.next_model_caused_by = Some(outcome.result_event_id.clone());
-                    if let Some(reason) = self.abort_reason(invocation) {
-                        return self.abort_run(
-                            invocation,
-                            result,
-                            reason,
-                            Some(outcome.result_event_id),
-                        );
-                    }
-                    if outcome.stop {
-                        result.stop_reason = Some(RunStopReason::ToolStop);
-                        result.steps.push(StepName::FinishRun);
-                        return Ok(result);
+                let control = self
+                    .run_pending_tool_batch(invocation, &capabilities, &mut result, &mut state)
+                    .await?;
+                match control {
+                    RunLoopControl::Continue => continue,
+                    RunLoopControl::Finish => return Ok(result),
+                    RunLoopControl::Abort { reason, caused_by } => {
+                        return self.abort_run(invocation, result, reason, caused_by);
                     }
                 }
-                continue;
             }
             if state.model_calls >= invocation.max_model_calls {
-                result.stop_reason = Some(RunStopReason::MaxTurns);
+                result.stop_reason = Some(RunStopReason::MaxModelCalls);
                 result.steps.push(StepName::FinishRun);
                 return Ok(result);
             }
-            result.steps.push(StepName::CheckBudget);
+            result.steps.push(StepName::CheckAbort);
             if let Some(reason) = self.abort_reason(invocation) {
                 return self.abort_run(invocation, result, reason, state.next_model_caused_by);
             }
-            result.steps.push(StepName::BuildPrompt);
-            let current_events = current_event_views(&result.events, &state.projection);
-            let content_components = match self.content.as_deref_mut() {
-                Some(content) => content.prompt_components()?,
-                None => Vec::new(),
-            };
-            let prompt = build_prompt(
-                &PromptInput {
-                    objective: invocation.objective.clone(),
-                    timeline: invocation.timeline.clone(),
-                    system: invocation.system_prompt.clone(),
-                    allowed_capabilities: capabilities.allowed_ids.clone(),
-                    context: invocation.context.clone(),
-                    tools: capabilities.descriptors.clone(),
-                    tool_choice: invocation.tool_choice.clone(),
-                    max_tokens: invocation.max_tokens,
-                    selected_model: invocation.model_name.clone(),
-                    thinking: invocation.thinking.clone(),
-                    current_events,
-                    content_components,
-                    transform: invocation.prompt_transform.clone(),
-                },
-                &invocation.environment,
-            )?;
-            let PromptBuild {
-                components: _components,
-                model_input,
-                request_payload: _request_payload,
-                prompt_object_id,
-                component_object_ids: _component_object_ids,
-                objects,
-                derivations,
-            } = prompt;
-            result.trace.merge(TraceBatch {
-                objects,
-                derivations,
-            })?;
-            result.steps.push(StepName::CallModel);
-            let active_abort = RunAbort {
-                external: self.abort,
-                clock: self.clock,
-                deadline_ms: invocation.deadline_ms,
-            };
-            let output = self
-                .model_gateway
-                .generate(
-                    &model_input,
-                    &ModelRequest {
-                        api: invocation.model_api.clone(),
-                        model: invocation.model_name.clone(),
-                        url: invocation.model_url.clone(),
-                        thinking: invocation.thinking.clone(),
-                        session_id: invocation.model_session_id.clone(),
-                    },
-                    self.observer,
-                    &active_abort,
-                )
-                .await;
-            let output = match output {
-                Ok(output) => output,
-                Err(error) => {
-                    if let Some(reason) = active_abort.reason() {
-                        return self.abort_run(
-                            invocation,
-                            result,
-                            reason,
-                            state.next_model_caused_by.clone(),
-                        );
-                    }
-                    return Err(error.into());
+            let control = self
+                .run_model_turn(invocation, &capabilities, &mut result, &mut state)
+                .await?;
+            match control {
+                RunLoopControl::Continue => {}
+                RunLoopControl::Finish => return Ok(result),
+                RunLoopControl::Abort { reason, caused_by } => {
+                    return self.abort_run(invocation, result, reason, caused_by);
                 }
-            };
-            result.steps.push(StepName::RecordAssistant);
-            if !output.telemetry.is_empty() {
-                result.telemetry = output.telemetry.clone();
-                result.model_telemetry_calls.push(output.telemetry.clone());
             }
-            result.prompt_traces.push(PromptTrace {
-                prompt_object_id: prompt_object_id.clone(),
-                assistant_message_object_id: None,
-            });
-            if self.abort.reason() == Some(AbortReason::Cancelled) {
-                return self.abort_run(
-                    invocation,
-                    result,
-                    AbortReason::Cancelled,
-                    state.next_model_caused_by.clone(),
-                );
-            }
-            let event_id = next_event_id(self.id_source)?;
-            let model_payload = model_payload(&output.message, &prompt_object_id);
-            let draft = model_draft(
-                invocation,
-                model_payload.clone(),
-                &event_id,
-                state.next_model_caused_by.clone(),
-            );
-            self.append_draft(&mut result, draft)?;
-            let assistant_object_id =
-                record_model_trace(&mut result.trace, &prompt_object_id, &model_payload)?;
-            state.projection.models.insert(
-                event_id.clone(),
-                (prompt_object_id.clone(), assistant_object_id.clone()),
-            );
-            state.projection.latest_assistant = Some(assistant_object_id.clone());
-            let Some(prompt_trace) = result.prompt_traces.last_mut() else {
-                return Err(AgentError::trace("model response is missing its prompt trace").into());
-            };
-            prompt_trace.assistant_message_object_id = Some(assistant_object_id);
-            state.model_calls += 1;
-            let tool_calls = assistant_tool_calls(&output.message);
-            if tool_calls.is_empty() {
-                result.final_answer = output
-                    .message
-                    .get("content")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_owned();
-                result.answer_streamed = output.streamed_content;
-                result.stop_reason = Some(RunStopReason::Finished);
-                result.steps.push(StepName::FinishRun);
-                return Ok(result);
-            }
-            state.pending_tool_calls = tool_calls;
-            state.pending_model_telemetry = output.telemetry;
-            state.pending_tool_parent_id = Some(event_id);
         }
+    }
+
+    async fn run_pending_tool_batch(
+        &mut self,
+        invocation: &AgentInvocation,
+        capabilities: &CapabilitySet,
+        result: &mut AgentRunResult,
+        state: &mut RunState,
+    ) -> Result<RunLoopControl, AgentRunError> {
+        let tool_calls = std::mem::take(&mut state.pending_tool_calls);
+        let model_telemetry = std::mem::take(&mut state.pending_model_telemetry);
+        let assistant_event_id = state.pending_tool_parent_id.take();
+        for (index, tool_call) in tool_calls.into_iter().enumerate() {
+            result.steps.push(StepName::CheckAbort);
+            if let Some(reason) = self.abort_reason(invocation) {
+                return Ok(RunLoopControl::Abort {
+                    reason,
+                    caused_by: state.next_model_caused_by.clone(),
+                });
+            }
+            let position = state.next_tool_position;
+            state.next_tool_position += 1;
+            let call_id = tool_call_id(&tool_call, index);
+            if terminal_tool_result(&result.events, &call_id).is_some() {
+                result.steps.push(StepName::RecordCapabilityResult);
+                state.next_model_caused_by = None;
+                continue;
+            }
+            result.steps.push(StepName::RecordCapabilityCall);
+            result.steps.push(StepName::ExecuteCapability);
+            let telemetry = if index == 0 {
+                model_telemetry.clone()
+            } else {
+                Map::new()
+            };
+            let outcome = self
+                .process_tool_call(
+                    invocation,
+                    capabilities,
+                    tool_call,
+                    index,
+                    position,
+                    assistant_event_id.as_deref(),
+                    telemetry,
+                    result,
+                    &mut state.projection,
+                )
+                .await?;
+            result.steps.push(StepName::RecordCapabilityResult);
+            state.next_model_caused_by = Some(outcome.result_event_id.clone());
+            if let Some(reason) = self.abort_reason(invocation) {
+                return Ok(RunLoopControl::Abort {
+                    reason,
+                    caused_by: Some(outcome.result_event_id),
+                });
+            }
+            if outcome.stop {
+                result.stop_reason = Some(RunStopReason::ToolStop);
+                result.steps.push(StepName::FinishRun);
+                return Ok(RunLoopControl::Finish);
+            }
+        }
+        Ok(RunLoopControl::Continue)
+    }
+
+    async fn run_model_turn(
+        &mut self,
+        invocation: &AgentInvocation,
+        capabilities: &CapabilitySet,
+        result: &mut AgentRunResult,
+        state: &mut RunState,
+    ) -> Result<RunLoopControl, AgentRunError> {
+        result.steps.push(StepName::BuildPrompt);
+        let current_events = current_event_views(&result.events, &state.projection);
+        let content_components = match self.content.as_deref_mut() {
+            Some(content) => content.prompt_components()?,
+            None => Vec::new(),
+        };
+        let prompt = build_prompt(
+            &PromptInput {
+                objective: invocation.objective.clone(),
+                timeline: invocation.timeline.clone(),
+                system: invocation.system_prompt.clone(),
+                allowed_capabilities: capabilities.allowed_ids.clone(),
+                context: invocation.context.clone(),
+                tools: capabilities.descriptors.clone(),
+                tool_choice: invocation.tool_choice.clone(),
+                max_tokens: invocation.max_tokens,
+                selected_model: invocation.model_name.clone(),
+                thinking: invocation.thinking.clone(),
+                current_events,
+                content_components,
+                transform: invocation.prompt_transform.clone(),
+            },
+            &invocation.environment,
+        )?;
+        let PromptBuild {
+            components: _components,
+            model_input,
+            request_payload: _request_payload,
+            prompt_object_id,
+            component_object_ids: _component_object_ids,
+            objects,
+            derivations,
+        } = prompt;
+        result.trace.merge(TraceBatch {
+            objects,
+            derivations,
+        })?;
+        result.steps.push(StepName::CallModel);
+        let active_abort = RunAbort {
+            external: self.abort,
+            clock: self.clock,
+            deadline_ms: invocation.deadline_ms,
+        };
+        let output = self
+            .model_gateway
+            .generate(
+                &model_input,
+                &ModelRequest {
+                    api: invocation.model_api.clone(),
+                    model: invocation.model_name.clone(),
+                    url: invocation.model_url.clone(),
+                    thinking: invocation.thinking.clone(),
+                    session_id: invocation.model_session_id.clone(),
+                },
+                self.observer,
+                &active_abort,
+            )
+            .await;
+        let output = match output {
+            Ok(output) => output,
+            Err(error) => {
+                if let Some(reason) = active_abort.reason() {
+                    return Ok(RunLoopControl::Abort {
+                        reason,
+                        caused_by: state.next_model_caused_by.clone(),
+                    });
+                }
+                return Err(error.into());
+            }
+        };
+        result.steps.push(StepName::RecordAssistant);
+        if !output.telemetry.is_empty() {
+            result.telemetry = output.telemetry.clone();
+            result.model_telemetry_calls.push(output.telemetry.clone());
+        }
+        result.prompt_traces.push(PromptTrace {
+            prompt_object_id: prompt_object_id.clone(),
+            assistant_message_object_id: None,
+        });
+        if self.abort.reason() == Some(AbortReason::Cancelled) {
+            return Ok(RunLoopControl::Abort {
+                reason: AbortReason::Cancelled,
+                caused_by: state.next_model_caused_by.clone(),
+            });
+        }
+        let event_id = next_event_id(self.id_source)?;
+        let model_payload = model_payload(&output.message, &prompt_object_id);
+        let draft = model_draft(
+            invocation,
+            model_payload.clone(),
+            &event_id,
+            state.next_model_caused_by.clone(),
+        );
+        self.record_durable_draft(result, draft)?;
+        let assistant_object_id =
+            record_model_trace(&mut result.trace, &prompt_object_id, &model_payload)?;
+        state.projection.models.insert(
+            event_id.clone(),
+            (prompt_object_id.clone(), assistant_object_id.clone()),
+        );
+        state.projection.latest_assistant = Some(assistant_object_id.clone());
+        let Some(prompt_trace) = result.prompt_traces.last_mut() else {
+            return Err(AgentError::trace("model response is missing its prompt trace").into());
+        };
+        prompt_trace.assistant_message_object_id = Some(assistant_object_id);
+        state.model_calls += 1;
+        let tool_calls = assistant_tool_calls(&output.message);
+        if tool_calls.is_empty() {
+            result.final_answer = output
+                .message
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            result.answer_streamed = output.streamed_content;
+            result.stop_reason = Some(RunStopReason::Finished);
+            result.steps.push(StepName::FinishRun);
+            return Ok(RunLoopControl::Finish);
+        }
+        state.pending_tool_calls = tool_calls;
+        state.pending_model_telemetry = output.telemetry;
+        state.pending_tool_parent_id = Some(event_id);
+        Ok(RunLoopControl::Continue)
     }
 
     fn abort_reason(&self, invocation: &AgentInvocation) -> Option<AbortReason> {
@@ -305,7 +336,7 @@ impl<'a> AgentRunner<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn execute_tool_call(
+    async fn process_tool_call(
         &mut self,
         invocation: &AgentInvocation,
         capabilities: &CapabilitySet,
@@ -345,7 +376,7 @@ impl<'a> AgentRunner<'a> {
             &parsed.call_id,
             assistant_event_id,
         );
-        self.append_draft(result, call_draft)?;
+        self.record_durable_draft(result, call_draft)?;
         let call_object_id = record_tool_call_trace(
             &mut result.trace,
             &call_payload,
@@ -413,7 +444,7 @@ impl<'a> AgentRunner<'a> {
             &event_id,
             assistant_event_id,
         );
-        self.append_draft(result, result_draft)?;
+        self.record_durable_draft(result, result_draft)?;
         let result_object_id =
             record_tool_result_trace(&mut result.trace, &result_payload, &call_object_id)?;
         projection
@@ -518,7 +549,7 @@ impl<'a> AgentRunner<'a> {
                 let tool_result = normalize_tool_result(tool_result, parsed.name.as_str());
                 let stop = tool_result.get("ok") == Some(&Value::Bool(true))
                     && tool_result.get("stop") == Some(&Value::Bool(true));
-                let effect = effect.map(|identity| PendingEffect {
+                let effect = effect.map(|identity| EffectCompletionContext {
                     identity,
                     capability: capability.clone(),
                     params: canonical_params.clone(),
@@ -556,7 +587,7 @@ impl<'a> AgentRunner<'a> {
                             return Ok(ToolExecution::control(&route.id, error, false));
                         }
                     };
-                result.requests.push(AgentRequest::Wait {
+                result.proposals.push(AgentProposal::Wait {
                     handle: handle.clone(),
                     event_type,
                     fields,
@@ -616,7 +647,7 @@ impl<'a> AgentRunner<'a> {
                     }
                 };
                 let handle = control_handle("pub_", queue_item_id, position);
-                result.requests.push(AgentRequest::Publish {
+                result.proposals.push(AgentProposal::Publish {
                     handle: handle.clone(),
                     event_type,
                     payload,
@@ -651,7 +682,7 @@ impl<'a> AgentRunner<'a> {
                     ));
                 };
                 let handle = text_param(canonical_params, "handle");
-                result.requests.push(AgentRequest::Cancel {
+                result.proposals.push(AgentProposal::Cancel {
                     handle: handle.clone(),
                     reason: optional_text_param(canonical_params, "reason"),
                     source_agent_id: source_agent_id.clone(),
@@ -731,7 +762,7 @@ impl<'a> AgentRunner<'a> {
             payload.insert("result".to_owned(), Value::Object(result));
         }
         let event_type = format!("runtime.effect.{status}");
-        let draft = complete_draft(
+        let draft = draft_with_invocation_context(
             invocation,
             event_type.clone(),
             format!("capability:{}", capability.id),
@@ -739,10 +770,10 @@ impl<'a> AgentRunner<'a> {
             Some(format!("{event_type}:{}", identity.key)),
             Some(caused_by.to_owned()),
         );
-        self.append_draft(run_result, draft)
+        self.record_durable_draft(run_result, draft)
     }
 
-    fn append_draft(
+    fn record_durable_draft(
         &mut self,
         result: &mut AgentRunResult,
         draft: DraftEvent,
@@ -762,7 +793,7 @@ impl<'a> AgentRunner<'a> {
         caused_by: Option<String>,
     ) -> Result<AgentRunResult, AgentRunError> {
         result.steps.push(StepName::AbortRun);
-        let draft = complete_draft(
+        let draft = draft_with_invocation_context(
             invocation,
             "zeta.turn.failed".to_owned(),
             invocation.event_source.clone(),
@@ -774,7 +805,7 @@ impl<'a> AgentRunner<'a> {
             None,
             caused_by,
         );
-        self.append_draft(&mut result, draft)?;
+        self.record_durable_draft(&mut result, draft)?;
         Err(AgentRunError::Aborted(Box::new(AgentRunAborted {
             reason,
             result,
@@ -811,6 +842,15 @@ struct RunState {
     model_calls: usize,
     next_tool_position: usize,
     projection: TraceProjection,
+}
+
+enum RunLoopControl {
+    Continue,
+    Finish,
+    Abort {
+        reason: AbortReason,
+        caused_by: Option<String>,
+    },
 }
 
 #[derive(Default)]
@@ -1169,7 +1209,7 @@ struct ToolExecution {
     capability_id: Option<CapabilityId>,
     tool_result: Map<String, Value>,
     stop: bool,
-    effect: Option<PendingEffect>,
+    effect: Option<EffectCompletionContext>,
 }
 
 fn context_budget_result(
@@ -1262,7 +1302,7 @@ fn apply_content_operation(
         trace,
     } = operation;
     for promotion in promotions {
-        result.requests.push(AgentRequest::ContentPromotion {
+        result.proposals.push(AgentProposal::ContentPromotion {
             scope: promotion.scope,
             key: promotion.key,
             object_id: promotion.object_id,
@@ -1293,7 +1333,7 @@ impl ToolExecution {
     }
 }
 
-struct PendingEffect {
+struct EffectCompletionContext {
     identity: EffectIdentity,
     capability: Capability,
     params: Map<String, Value>,
@@ -1380,7 +1420,7 @@ fn model_draft(
     event_id: &str,
     caused_by: Option<String>,
 ) -> DraftEvent {
-    complete_draft(
+    draft_with_invocation_context(
         invocation,
         "zeta.model_call.completed".to_owned(),
         invocation.event_source.clone(),
@@ -1397,7 +1437,7 @@ fn tool_draft(
     event_id: &str,
     caused_by: Option<&str>,
 ) -> DraftEvent {
-    complete_draft(
+    draft_with_invocation_context(
         invocation,
         event_type.to_owned(),
         invocation.event_source.clone(),
@@ -1407,7 +1447,7 @@ fn tool_draft(
     )
 }
 
-fn complete_draft(
+fn draft_with_invocation_context(
     invocation: &AgentInvocation,
     event_type: String,
     source: String,

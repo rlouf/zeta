@@ -188,16 +188,16 @@ pub struct AppendOutcome {
 /// # Examples
 ///
 /// ```
-/// let filter = zeta_journal::Filter {
+/// let filter = zeta_journal::EventFilter {
 ///     event_type_prefix: Some("example.".to_owned()),
 ///     limit: Some(10),
-///     ..zeta_journal::Filter::default()
+///     ..zeta_journal::EventFilter::default()
 /// };
 /// assert_eq!(filter.limit, Some(10));
 /// ```
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(default)]
-pub struct Filter {
+pub struct EventFilter {
     /// Matches an exact event type.
     pub event_type: Option<String>,
     /// Matches a literal, case-sensitive event-type prefix.

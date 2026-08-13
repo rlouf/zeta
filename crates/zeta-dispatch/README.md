@@ -91,9 +91,9 @@ ordinary application ingress, so routing, wait matching, idempotency, and
 recovery use the same Dispatch path as connector events. Dispatch does not
 parse calendar policy or maintain a recurring-schedule projection.
 
-`ingest_event` is the external authority boundary. `append_event` is the
-lower-level trusted journal adapter used for runtime-owned lifecycle facts and
-journal conformance; application ingress should not call it directly.
+`ingest_event` is the external authority boundary. `append_trusted_event` is
+the lower-level trusted journal adapter used for runtime-owned lifecycle facts
+and journal conformance; application ingress should not call it directly.
 
 ## Example
 
@@ -117,11 +117,11 @@ let event = Event {
     cursor: None,
 };
 
-let appended = dispatch.append_event(event.clone())?;
+let appended = dispatch.append_trusted_event(event.clone())?;
 assert!(appended.inserted);
 assert_eq!(appended.event.cursor, Some(1));
 
-let duplicate = dispatch.append_event(event)?;
+let duplicate = dispatch.append_trusted_event(event)?;
 assert!(!duplicate.inserted);
 assert_eq!(duplicate.event.cursor, Some(1));
 assert_eq!(

@@ -15,9 +15,9 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use zeta_agent::{
-    bounded_output, native_capabilities, AbortReason, AbortSignal, CapabilityInvocation,
-    CommandOutput, CommandRunner, HttpFuture, HttpResponse, HttpTransport, NativeToolExecutor,
-    SystemCommandRunner, ToolExecutor, WebSearchFuture, WebSearchProvider, WebSearchResult,
+    bounded_output, native_capabilities, AbortReason, AbortSignal, CapabilityExecutor,
+    CapabilityInvocation, CommandOutput, CommandRunner, HttpFuture, HttpResponse, HttpTransport,
+    NativeToolExecutor, SystemCommandRunner, WebSearchFuture, WebSearchProvider, WebSearchResult,
     WebSearchSource,
 };
 

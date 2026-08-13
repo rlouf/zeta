@@ -13,7 +13,8 @@ use std::os::unix::process::CommandExt;
 
 use serde_json::{Map, Value};
 use zeta_agent::{
-    AbortReason, AbortSignal, AgentError, CapabilityInvocation, ToolExecutor, ToolFuture,
+    AbortReason, AbortSignal, AgentError, CapabilityExecutor, CapabilityFuture,
+    CapabilityInvocation,
 };
 use zeta_ipc::{
     Action, ErrorObject, Frame, FrameReader, FrameWriter, PeerIdentity, RequestId, ResolvedRequest,
@@ -138,7 +139,8 @@ impl ProcessExecutor {
             Err(ProcessFailure::Aborted(reason)) => Err(AgentError::tool(format!(
                 "provider shutdown aborted: {reason}"
             ))),
-            Err(ProcessFailure::Transport(message)) => Err(AgentError::tool(message)),
+            Err(ProcessFailure::MalformedResponse(message))
+            | Err(ProcessFailure::Transport(message)) => Err(AgentError::tool(message)),
         }
     }
 
@@ -175,32 +177,24 @@ impl ProcessExecutor {
             self.config.call_timeout,
             Some(abort),
         );
+        if call_outcome_invalidates_process(&outcome) {
+            self.terminate_current_provider();
+        }
         match outcome {
             Ok(Value::Object(result)) => Ok(result),
             Ok(Value::Null) | Ok(Value::Bool(_)) | Ok(Value::Number(_)) | Ok(Value::String(_))
-            | Ok(Value::Array(_)) => {
-                self.recycle();
-                Err(AgentError::tool(format!(
-                    "provider call '{method}' returned a non-object result"
-                )))
-            }
+            | Ok(Value::Array(_)) => Err(AgentError::tool(format!(
+                "provider call '{method}' returned a non-object result"
+            ))),
             Err(ProcessFailure::Remote(error)) => Err(provider_error(error)),
-            Err(ProcessFailure::Timeout) => {
-                self.recycle();
-                Err(AgentError::tool(format!(
-                    "provider call '{method}' timed out"
-                )))
-            }
-            Err(ProcessFailure::Aborted(reason)) => {
-                self.recycle();
-                Err(AgentError::tool(format!(
-                    "provider call '{method}' aborted: {reason}"
-                )))
-            }
-            Err(ProcessFailure::Transport(message)) => {
-                self.recycle();
-                Err(AgentError::tool(message))
-            }
+            Err(ProcessFailure::Timeout) => Err(AgentError::tool(format!(
+                "provider call '{method}' timed out"
+            ))),
+            Err(ProcessFailure::Aborted(reason)) => Err(AgentError::tool(format!(
+                "provider call '{method}' aborted: {reason}"
+            ))),
+            Err(ProcessFailure::MalformedResponse(message))
+            | Err(ProcessFailure::Transport(message)) => Err(AgentError::tool(message)),
         }
     }
 
@@ -208,10 +202,12 @@ impl ProcessExecutor {
         if self.process.is_some() {
             return Ok(());
         }
-        let process = match spawn_provider(&self.launch, self.config.handshake_timeout, abort) {
-            Ok(process) => process,
-            Err(error) => return Err(AgentError::tool(error)),
-        };
+        let process =
+            match spawn_and_initialize_provider(&self.launch, self.config.handshake_timeout, abort)
+            {
+                Ok(process) => process,
+                Err(error) => return Err(AgentError::tool(error)),
+            };
         self.process = Some(process);
         self.initialization_count = self.initialization_count.saturating_add(1);
         Ok(())
@@ -223,7 +219,7 @@ impl ProcessExecutor {
         RequestId::from(format!("runtime-{purpose}-{sequence}"))
     }
 
-    fn recycle(&mut self) {
+    fn terminate_current_provider(&mut self) {
         let Some(process) = self.process.take() else {
             return;
         };
@@ -244,12 +240,12 @@ impl fmt::Debug for ProcessExecutor {
     }
 }
 
-impl ToolExecutor for ProcessExecutor {
+impl CapabilityExecutor for ProcessExecutor {
     fn execute<'a>(
         &'a mut self,
         invocation: &'a CapabilityInvocation,
         abort: &'a dyn AbortSignal,
-    ) -> ToolFuture<'a> {
+    ) -> CapabilityFuture<'a> {
         Box::pin(async move { self.execute_now(invocation, abort) })
     }
 }
@@ -279,7 +275,29 @@ enum ProcessFailure {
     Remote(ErrorObject),
     Timeout,
     Aborted(AbortReason),
+    MalformedResponse(String),
     Transport(String),
+}
+
+impl ProcessFailure {
+    fn invalidates_process(&self) -> bool {
+        match self {
+            ProcessFailure::Remote(_) => false,
+            ProcessFailure::Timeout
+            | ProcessFailure::Aborted(_)
+            | ProcessFailure::MalformedResponse(_)
+            | ProcessFailure::Transport(_) => true,
+        }
+    }
+}
+
+fn call_outcome_invalidates_process(outcome: &Result<Value, ProcessFailure>) -> bool {
+    match outcome {
+        Ok(Value::Object(_)) => false,
+        Ok(Value::Null) | Ok(Value::Bool(_)) | Ok(Value::Number(_)) | Ok(Value::String(_))
+        | Ok(Value::Array(_)) => true,
+        Err(failure) => failure.invalidates_process(),
+    }
 }
 
 fn validate_launch(
@@ -310,7 +328,7 @@ fn validate_launch(
     Ok(())
 }
 
-fn spawn_provider(
+fn spawn_and_initialize_provider(
     launch: &ProcessLaunch,
     timeout: Duration,
     abort: &dyn AbortSignal,
@@ -483,7 +501,16 @@ fn transact(
             )));
         };
         let actions = process.session.receive(message);
-        let resolved = drive_actions(process, actions).map_err(ProcessFailure::Transport)?;
+        let malformed_response = actions
+            .iter()
+            .any(|action| matches!(action, Action::Violation(_)));
+        let resolved = drive_actions(process, actions).map_err(|message| {
+            if malformed_response {
+                ProcessFailure::MalformedResponse(message)
+            } else {
+                ProcessFailure::Transport(message)
+            }
+        })?;
         let Some(resolved) = resolved else {
             continue;
         };
@@ -606,7 +633,7 @@ fn failure_message(error: ProcessFailure) -> String {
         ProcessFailure::Aborted(reason) => {
             format!("provider initialization aborted: {reason}")
         }
-        ProcessFailure::Transport(message) => message,
+        ProcessFailure::MalformedResponse(message) | ProcessFailure::Transport(message) => message,
     }
 }
 

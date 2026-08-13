@@ -6,8 +6,7 @@ use zeta_journal::Event;
 
 use super::attempts::{attempt_payload, load_latest_running_attempt};
 use super::journal::{append_runtime_event, entry_by_field};
-use super::projection::load_queue_item;
-use super::routing::queue_item_payload;
+use super::routing::{load_queue_item, queue_item_payload};
 use super::{corrupt_projection, database_error, Dispatch, DispatchError};
 use crate::dispatch::{
     Attempt, CancellationFinalizationIdentities, CancellationIdentities, CancellationOutcome,

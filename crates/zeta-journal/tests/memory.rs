@@ -1,7 +1,7 @@
 //! In-memory reference behavior independent of a storage backend.
 
 use serde_json::{json, Map, Value};
-use zeta_journal::{Event, Filter, MemoryJournal};
+use zeta_journal::{Event, EventFilter, MemoryJournal};
 
 fn fields(value: Value) -> Map<String, Value> {
     value.as_object().unwrap().clone()
@@ -53,20 +53,20 @@ fn query_helpers_preserve_cursor_order_and_literal_prefixes() {
     third.event_type = "prefixXliteralZdone".to_owned();
     journal.append(third).unwrap();
 
-    let filter = Filter {
+    let filter = EventFilter {
         event_type_prefix: Some("prefix.literal_%".to_owned()),
-        ..Filter::default()
+        ..EventFilter::default()
     };
     let events = journal.list_events(&filter);
     assert_eq!(events.len(), 2);
     assert_eq!(events[0].id, "evt_1");
     assert_eq!(events[1].id, "evt_2");
 
-    let filter = Filter {
+    let filter = EventFilter {
         after_cursor: Some(1),
         limit: Some(1),
         newest_first: true,
-        ..Filter::default()
+        ..EventFilter::default()
     };
     let events = journal.list_events(&filter);
     assert_eq!(events.len(), 1);

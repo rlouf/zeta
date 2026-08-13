@@ -241,7 +241,7 @@ pub struct EgressBinding {
 ///     b"---\nname: Worker\ndescription: Does work.\n---\nWork.\n",
 /// )?;
 /// assert_eq!(spec.slug, "worker");
-/// # Ok::<(), zeta_authoring::SpecError>(())
+/// # Ok::<(), zeta_authoring::AgentSpecError>(())
 /// ```
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -417,10 +417,10 @@ pub struct ModelSelectionSpec {
 ///     "worker",
 ///     b"---\nname: Worker\ndescription: Does work.\naccepts: [work.requested]\n---\n",
 /// )?;
-/// assert!(zeta_authoring::matches(&spec, "work.requested"));
-/// # Ok::<(), zeta_authoring::SpecError>(())
+/// assert!(zeta_authoring::agent_accepts_event(&spec, "work.requested"));
+/// # Ok::<(), zeta_authoring::AgentSpecError>(())
 /// ```
-pub fn matches(spec: &AgentSpec, event_type: &str) -> bool {
+pub fn agent_accepts_event(spec: &AgentSpec, event_type: &str) -> bool {
     if !spec.enabled {
         return false;
     }

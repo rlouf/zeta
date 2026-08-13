@@ -18,7 +18,6 @@ class ModelInput:
     tool_choice: str | dict[str, Any] = "auto"
     max_tokens: int | None = None
     selected_model: str | None = None
-    selected_url: str | None = None
     session_id: str | None = None
     thinking: str | None = None
 

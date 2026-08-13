@@ -10,13 +10,13 @@ use super::journal::{
     append_lifecycle_candidate, append_runtime_event, entry_by_field, same_lifecycle_intention,
     validate_distinct_runtime_identities, validate_event_identity,
 };
-use super::projection::{index_event, load_queue_items};
+use super::projection::index_event;
 use super::resources::{active_wait_for_session, cancel_resource_in_transaction, load_waits};
-use super::routing::{queue_lifecycle_event, QueueLifecycleFields};
+use super::routing::{load_queue_items, queue_lifecycle_event, QueueLifecycleFields};
 use super::{corrupt_projection, database_error, Dispatch, DispatchError};
 use crate::dispatch::{
     Attempt, QueueItem, ResourceKind, RuntimeEventIdentity, Session, SessionActiveWait,
-    SessionActivityStatus, SessionLatestRun, SessionMessageIdentities, SessionMessageRequest,
+    SessionActivityStatus, SessionLatestAttempt, SessionMessageIdentities, SessionMessageRequest,
     SubmittedSessionMessage, Wait, WaitStatus,
 };
 use crate::identity::{queue_item_id, SessionId};
@@ -346,7 +346,7 @@ fn session_from_sources(
         fields: wait.fields.clone(),
         deadline_ms: wait.deadline_ms,
     });
-    let latest_run = latest_attempt.map(|attempt| SessionLatestRun {
+    let latest_attempt = latest_attempt.map(|attempt| SessionLatestAttempt {
         run_id: attempt.run_id.clone(),
         status: attempt.status,
     });
@@ -374,7 +374,7 @@ fn session_from_sources(
             active_run_id,
             queued_turns,
             active_wait,
-            latest_run,
+            latest_attempt,
             updated_at: format_session_timestamp(updated_at_ms)?,
             conflicting_agent_ids,
         },

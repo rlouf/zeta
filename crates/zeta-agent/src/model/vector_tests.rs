@@ -55,7 +55,6 @@ fn model_input(value: &Value) -> ModelInput {
         tool_choice: value["tool_choice"].clone(),
         max_tokens: value["max_tokens"].as_u64().unwrap(),
         selected_model,
-        selected_url: None,
         session_id: value
             .get("session_id")
             .and_then(Value::as_str)

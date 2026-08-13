@@ -6,7 +6,7 @@ use zeta_journal::Event;
 
 use crate::identity::{AttemptId, ClaimToken, QueueItemId, RunId, RuntimeIdParseError, SessionId};
 use crate::routing::RouteDecision;
-use crate::state::{AttemptStatus, DispatchErrorCode, QueueItemStatus, RetryPolicy};
+use crate::state::{AttemptFailureCode, AttemptStatus, QueueItemStatus, RetryPolicy};
 
 /// Supplies deterministic identity and time for one runtime-owned event.
 ///
@@ -488,12 +488,12 @@ impl SessionActiveWait {
 
 /// Summarizes the latest attempt associated with a session.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct SessionLatestRun {
+pub struct SessionLatestAttempt {
     pub(crate) run_id: Option<RunId>,
     pub(crate) status: AttemptStatus,
 }
 
-impl SessionLatestRun {
+impl SessionLatestAttempt {
     /// Returns the invocation id when the attempt declared one.
     pub fn run_id(&self) -> Option<&RunId> {
         self.run_id.as_ref()
@@ -515,7 +515,8 @@ pub struct Session {
     pub(crate) active_run_id: Option<RunId>,
     pub(crate) queued_turns: u64,
     pub(crate) active_wait: Option<SessionActiveWait>,
-    pub(crate) latest_run: Option<SessionLatestRun>,
+    #[serde(rename = "latest_run")]
+    pub(crate) latest_attempt: Option<SessionLatestAttempt>,
     pub(crate) updated_at: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) conflicting_agent_ids: Vec<String>,
@@ -558,8 +559,8 @@ impl Session {
     }
 
     /// Returns the newest attempt regardless of terminal state.
-    pub fn latest_run(&self) -> Option<&SessionLatestRun> {
-        self.latest_run.as_ref()
+    pub fn latest_attempt(&self) -> Option<&SessionLatestAttempt> {
+        self.latest_attempt.as_ref()
     }
 
     /// Returns the latest activity timestamp normalized to UTC.
@@ -988,7 +989,7 @@ impl Effect {
 pub struct AttemptFailure {
     pub(crate) finished_at: String,
     pub(crate) error: String,
-    pub(crate) error_code: DispatchErrorCode,
+    pub(crate) error_code: AttemptFailureCode,
     pub(crate) retry_policy: RetryPolicy,
 }
 
@@ -1276,7 +1277,7 @@ impl AttemptFailure {
     pub fn new(
         finished_at: impl Into<String>,
         error: impl Into<String>,
-        error_code: DispatchErrorCode,
+        error_code: AttemptFailureCode,
         retry_policy: RetryPolicy,
     ) -> Self {
         AttemptFailure {
@@ -1298,7 +1299,7 @@ impl AttemptFailure {
     }
 
     /// Returns the structured failure code used for retry classification.
-    pub fn error_code(&self) -> DispatchErrorCode {
+    pub fn error_code(&self) -> AttemptFailureCode {
         self.error_code
     }
 

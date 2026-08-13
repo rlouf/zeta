@@ -6,7 +6,7 @@ use zeta_substrate::Hash;
 
 use crate::chain::{canonical_payload, payload_address, validate_identity_fields, JournalEntry};
 use crate::error::AppendError;
-use crate::event::{AppendOutcome, Event, Filter};
+use crate::event::{AppendOutcome, Event, EventFilter};
 
 /// Stores complete journal entries in process memory.
 ///
@@ -195,10 +195,10 @@ impl MemoryJournal {
     ///
     /// ```
     /// let journal = zeta_journal::MemoryJournal::new();
-    /// let events = journal.list_events(&zeta_journal::Filter::default());
+    /// let events = journal.list_events(&zeta_journal::EventFilter::default());
     /// assert!(events.is_empty());
     /// ```
-    pub fn list_events(&self, filter: &Filter) -> Vec<&Event> {
+    pub fn list_events(&self, filter: &EventFilter) -> Vec<&Event> {
         let mut events = Vec::new();
         if filter.newest_first {
             for entry in self.entries.iter().rev() {
@@ -242,10 +242,10 @@ impl MemoryJournal {
     /// assert!(journal.children("evt_parent", None).is_empty());
     /// ```
     pub fn children(&self, event_id: &str, limit: Option<usize>) -> Vec<&Event> {
-        let filter = Filter {
+        let filter = EventFilter {
             caused_by: Some(event_id.to_owned()),
             limit,
-            ..Filter::default()
+            ..EventFilter::default()
         };
         self.list_events(&filter)
     }
@@ -287,9 +287,9 @@ impl MemoryJournal {
     /// assert!(journal.events_for_turn("turn_1").is_empty());
     /// ```
     pub fn events_for_turn(&self, turn_id: &str) -> Vec<&Event> {
-        let filter = Filter {
+        let filter = EventFilter {
             turn_id: Some(turn_id.to_owned()),
-            ..Filter::default()
+            ..EventFilter::default()
         };
         self.list_events(&filter)
     }
@@ -303,9 +303,9 @@ impl MemoryJournal {
     /// assert!(journal.events_for_run("run_1").is_empty());
     /// ```
     pub fn events_for_run(&self, run_id: &str) -> Vec<&Event> {
-        let filter = Filter {
+        let filter = EventFilter {
             run_id: Some(run_id.to_owned()),
-            ..Filter::default()
+            ..EventFilter::default()
         };
         self.list_events(&filter)
     }
@@ -317,7 +317,7 @@ impl Default for MemoryJournal {
     }
 }
 
-fn event_matches(event: &Event, filter: &Filter) -> bool {
+fn event_matches(event: &Event, filter: &EventFilter) -> bool {
     let Event {
         id: _id,
         event_type,
@@ -331,7 +331,7 @@ fn event_matches(event: &Event, filter: &Filter) -> bool {
         timestamp_ms: _timestamp_ms,
         cursor,
     } = event;
-    let Filter {
+    let EventFilter {
         event_type: expected_event_type,
         event_type_prefix,
         session_id: expected_session_id,

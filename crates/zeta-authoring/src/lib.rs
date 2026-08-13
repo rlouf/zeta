@@ -15,17 +15,17 @@ mod parse;
 mod project;
 mod spec;
 
-pub use error::{AuthoringError, AuthoringErrorKind, SpecError, SpecErrorKind};
+pub use error::{AgentSpecError, AuthoringError, AuthoringErrorKind, SpecErrorKind};
 pub use parse::{
     load_agent, parse_agent, parse_skill, render_prompt, validate_prompt, SkillResource, SkillSpec,
 };
 pub use spec::{
-    compile_project, derive_returns_schema, execution_manifest, matches, parse_connector,
-    project_manifest, restore_execution_manifest, restore_project_manifest, scheduled_event_type,
-    validate_agent, verify_execution_manifest, verify_project_manifest, AgentProject,
-    AgentProjectInput, AgentSpec, AgentValidationContext, CapabilityId, CapabilitySpec,
-    ConnectorOperation, ConnectorSpec, DeliverySemantics, EgressBinding, EventRegistry,
-    ExecutionManifest, ExecutionManifestId, ExecutorProviderSpec, ExecutorSpec,
+    agent_accepts_event, compile_project, derive_returns_schema, execution_manifest,
+    parse_connector, project_manifest, restore_execution_manifest, restore_project_manifest,
+    scheduled_event_type, validate_agent, verify_execution_manifest, verify_project_manifest,
+    AgentProject, AgentProjectInput, AgentSpec, AgentValidationContext, CapabilityId,
+    CapabilitySpec, ConnectorOperation, ConnectorSpec, DeliverySemantics, EgressBinding,
+    EventRegistry, ExecutionManifest, ExecutionManifestId, ExecutorProviderSpec, ExecutorSpec,
     ImplementationFingerprint, IngressBinding, ModelSelectionSpec, ModelSpec, ProjectGenerationId,
     ProjectManifest, RetrySpec, ScheduleEntry, EXECUTION_MANIFEST_SCHEMA,
     EXECUTION_MANIFEST_VERSION, PROJECT_MANIFEST_SCHEMA, PROJECT_MANIFEST_VERSION,

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use serde_json::Value;
 use zeta_journal::{
     canonical_chain_bytes, canonical_payload, entry_address, payload_address, verify, Event,
-    Filter, HeadExpectation, MemoryJournal,
+    EventFilter, HeadExpectation, MemoryJournal,
 };
 use zeta_substrate::Hash;
 
@@ -80,7 +80,7 @@ fn python_operation_vectors_replay_exactly() {
     }
 
     for query in document["queries"].as_array().unwrap() {
-        let filter: Filter = serde_json::from_value(query["filter"].clone()).unwrap();
+        let filter: EventFilter = serde_json::from_value(query["filter"].clone()).unwrap();
         let events = journal.list_events(&filter);
         let mut ids = Vec::new();
         for event in events {

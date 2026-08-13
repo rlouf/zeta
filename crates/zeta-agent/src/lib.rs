@@ -14,14 +14,14 @@ mod tools;
 mod trace;
 
 pub use capability::{
-    resolve_capabilities, ArgumentAdapter, Capability, CapabilityId, CapabilityInvocation,
-    DeliverySemantics, DraftRecorder, IdSource, ResolvedCapability, ToolExecutor, ToolFuture,
-    ToolProfile,
+    resolve_capabilities, ArgumentAdapter, Capability, CapabilityExecutor, CapabilityFuture,
+    CapabilityId, CapabilityInvocation, DeliverySemantics, DraftRecorder, IdSource,
+    ResolvedCapability, ToolProfile,
 };
 pub use content::{
     ContentFuture, ContentOperation, ContentPromotion, ContentSelection, ContentService,
 };
-pub use control::AgentRequest;
+pub use control::AgentProposal;
 pub use error::{AgentError, AgentErrorKind, AgentRunAborted, AgentRunError};
 pub use history::{HistoryFuture, HistoryService};
 pub use invocation::{AgentInvocation, PromptEnvironment};

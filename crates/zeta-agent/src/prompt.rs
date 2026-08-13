@@ -200,12 +200,8 @@ pub fn build_prompt(
         content_components,
         transform,
     } = input;
-    let system_content = render_system_prompt(
-        system.as_deref(),
-        allowed_capabilities,
-        tools,
-        &environment.calendar_date,
-    )?;
+    let system_content =
+        render_system_prompt(system.as_deref(), tools, &environment.calendar_date)?;
     let mut allowed_tools = Vec::new();
     for id in allowed_capabilities {
         allowed_tools.push(Value::String(id.to_string()));
@@ -324,7 +320,6 @@ pub fn build_prompt(
         tool_choice: tool_choice.clone(),
         max_tokens: *max_tokens,
         selected_model: selected_model.clone(),
-        selected_url: None,
         session_id: None,
         thinking: thinking.clone(),
     };
@@ -663,7 +658,6 @@ fn is_result_for_calls(component: &PromptComponent, call_ids: &HashSet<String>) 
 
 fn render_system_prompt(
     base_prompt: Option<&str>,
-    allowed_capabilities: &[CapabilityId],
     tools: &[Value],
     calendar_date: &str,
 ) -> Result<String, AgentError> {
@@ -677,7 +671,7 @@ fn render_system_prompt(
     if tool_available("grep", tools) {
         sections.push(format!("Tool policy:\n\n- {GREP_POLICY}"));
     }
-    sections.push(tools_prompt(allowed_capabilities, tools));
+    sections.push(tools_prompt(tools));
     Ok(sections.join("\n\n"))
 }
 
@@ -770,7 +764,7 @@ fn tool_available(name: &str, tools: &[Value]) -> bool {
     false
 }
 
-fn tools_prompt(_allowed_capabilities: &[CapabilityId], tools: &[Value]) -> String {
+fn tools_prompt(tools: &[Value]) -> String {
     if tools.is_empty() {
         return "Available tools:\n(none)".to_owned();
     }
@@ -1254,7 +1248,6 @@ fn request_payload(input: &ModelInput) -> Map<String, Value> {
         tool_choice,
         max_tokens,
         selected_model,
-        selected_url: _selected_url,
         session_id: _session_id,
         thinking,
     } = input;

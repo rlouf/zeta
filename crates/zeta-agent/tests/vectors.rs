@@ -14,17 +14,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use zeta_agent::{
     build_prompt, resolve_capabilities, AbortReason, AbortSignal, AddressedDerivation,
-    AddressedObject, AgentErrorKind, AgentInvocation, AgentObserver, AgentRequest, AgentRunError,
-    AgentRunResult, AgentRunner, ArgumentAdapter, Capability, CapabilityInvocation, Clock,
-    ContentFuture, ContentOperation, ContentPromotion, ContentSelection, ContentService,
-    DeliverySemantics, DraftRecorder, HistoryFuture, HistoryService, IdSource, ModelGateway,
-    ModelInput, ModelOutput, ModelRequest, Observation, PromptComponent, PromptEnvironment,
-    PromptInput, PromptTransform, RunStopReason, ToolExecutor, ToolProfile, TraceBatch,
+    AddressedObject, AgentErrorKind, AgentInvocation, AgentObserver, AgentProposal, AgentRunError,
+    AgentRunResult, AgentRunner, ArgumentAdapter, Capability, CapabilityExecutor,
+    CapabilityInvocation, Clock, ContentFuture, ContentOperation, ContentPromotion,
+    ContentSelection, ContentService, DeliverySemantics, DraftRecorder, HistoryFuture,
+    HistoryService, IdSource, ModelGateway, ModelInput, ModelOutput, ModelRequest, Observation,
+    PromptComponent, PromptEnvironment, PromptInput, PromptTransform, RunStopReason, StepName,
+    ToolProfile, TraceBatch,
 };
 use zeta_substrate::{Derivation, Object};
 
 #[derive(Deserialize)]
 struct PromptVectors {
+    version: u64,
     environment: PromptEnvironment,
     cases: Vec<PromptCase>,
 }
@@ -38,6 +40,7 @@ struct PromptCase {
 
 #[derive(Deserialize)]
 struct InvocationVectors {
+    version: u64,
     environment: PromptEnvironment,
     cases: Vec<InvocationCase>,
 }
@@ -152,7 +155,7 @@ struct RecordedInvocation {
     recorded_event_types: Option<Vec<String>>,
 }
 
-impl ToolExecutor for ScriptedExecutor {
+impl CapabilityExecutor for ScriptedExecutor {
     fn execute<'a>(
         &'a mut self,
         invocation: &'a CapabilityInvocation,
@@ -197,7 +200,7 @@ struct AbortReturningExecutor {
     observed: Option<AbortReason>,
 }
 
-impl ToolExecutor for AbortReturningExecutor {
+impl CapabilityExecutor for AbortReturningExecutor {
     fn execute<'a>(
         &'a mut self,
         _invocation: &'a CapabilityInvocation,
@@ -281,6 +284,18 @@ struct FixedAbort {
 impl AbortSignal for FixedAbort {
     fn reason(&self) -> Option<AbortReason> {
         self.reason
+    }
+}
+
+struct CountingAbort {
+    calls: Cell<usize>,
+    reason: AbortReason,
+}
+
+impl AbortSignal for CountingAbort {
+    fn reason(&self) -> Option<AbortReason> {
+        self.calls.set(self.calls.get() + 1);
+        Some(self.reason)
     }
 }
 
@@ -725,6 +740,30 @@ struct AbortAwareGateway {
     observed: Option<AbortReason>,
 }
 
+#[derive(Default)]
+struct SuccessfulDeadlineCrossingGateway {
+    observed: Option<AbortReason>,
+}
+
+impl ModelGateway for SuccessfulDeadlineCrossingGateway {
+    fn generate<'a>(
+        &'a mut self,
+        _input: &'a ModelInput,
+        _request: &'a ModelRequest,
+        _observer: &'a mut dyn AgentObserver,
+        abort: &'a dyn AbortSignal,
+    ) -> Pin<Box<dyn Future<Output = Result<ModelOutput, zeta_agent::AgentError>> + 'a>> {
+        Box::pin(async move {
+            self.observed = abort.reason();
+            Ok(ModelOutput {
+                message: json!({"content": "done"}).as_object().unwrap().clone(),
+                telemetry: Map::new(),
+                streamed_content: false,
+            })
+        })
+    }
+}
+
 impl ModelGateway for AbortAwareGateway {
     fn generate<'a>(
         &'a mut self,
@@ -907,6 +946,7 @@ fn scripted_run_with_history(
 #[test]
 fn shared_prompt_vectors_match_python_ground_truth() {
     let vectors: PromptVectors = serde_json::from_value(vectors("prompts.json")).unwrap();
+    assert_eq!(vectors.version, 2);
     for case in vectors.cases {
         let actual = build_prompt(&case.input, &vectors.environment).unwrap();
         assert_eq!(
@@ -1119,6 +1159,7 @@ fn context_budget_uses_latest_provider_telemetry() {
 #[test]
 fn shared_invocation_vectors_match_python_ground_truth() {
     let vectors: InvocationVectors = serde_json::from_value(vectors("invocations.json")).unwrap();
+    assert_eq!(vectors.version, 2);
     for case in vectors.cases {
         let InvocationCase {
             name,
@@ -1206,7 +1247,7 @@ fn shared_invocation_vectors_match_python_ground_truth() {
             "model_telemetry_calls": result.model_telemetry_calls,
             "events": result.events,
             "observations": observer.observations,
-            "requests": result.requests,
+            "requests": result.proposals,
             "prompt_traces": result.prompt_traces,
             "steps": result.steps,
             "model_call_count": gateway.inputs.len(),
@@ -1235,6 +1276,41 @@ fn unknown_capability_grants_are_rejected_before_model_work() {
     assert_eq!(error.kind, AgentErrorKind::Invocation);
     assert_eq!(error.message, "unknown capability grant: missing.lookup");
     assert!(run.gateway.inputs.is_empty());
+}
+
+#[test]
+fn model_call_limit_finishes_before_polling_abort() {
+    let mut invocation = invocation();
+    invocation.max_model_calls = 0;
+    let mut gateway = ScriptedGateway::default();
+    let mut executor = ScriptedExecutor::default();
+    let mut observer = RecordingObserver::default();
+    let mut drafts = RecordingDrafts::default();
+    let mut ids = ScriptedIds {
+        values: VecDeque::new(),
+    };
+    let abort = CountingAbort {
+        calls: Cell::new(0),
+        reason: AbortReason::Cancelled,
+    };
+    let clock = FixedClock;
+    let runner = AgentRunner::new(
+        &[],
+        &mut gateway,
+        &mut executor,
+        &mut observer,
+        &mut drafts,
+        &mut ids,
+        &abort,
+        &clock,
+    );
+
+    let result = block_on(runner.run(&invocation)).unwrap();
+
+    assert_eq!(result.stop_reason, Some(RunStopReason::MaxModelCalls));
+    assert_eq!(result.steps, [StepName::FinishRun]);
+    assert_eq!(abort.calls.get(), 0);
+    assert!(gateway.inputs.is_empty());
 }
 
 #[test]
@@ -1296,11 +1372,93 @@ fn pending_tool_batch_finishes_after_the_last_model_call() {
     );
     let result = run.result.unwrap();
 
-    assert_eq!(result.stop_reason, Some(RunStopReason::MaxTurns));
+    assert_eq!(result.stop_reason, Some(RunStopReason::MaxModelCalls));
     assert_eq!(run.gateway.inputs.len(), 1);
     assert_eq!(run.executor.calls.len(), 2);
     assert_eq!(result.events.len(), 5);
     assert!(run.ids.values.is_empty());
+}
+
+#[test]
+fn stopping_tool_suppresses_later_calls_in_the_same_batch() {
+    let mut invocation = invocation();
+    invocation.max_model_calls = 1;
+    invocation.source_queue_item_id = Some("qi-stop".to_owned());
+    invocation
+        .allowed_capabilities
+        .push("test.lookup".parse().unwrap());
+    let capability = capability(json!({"type": "object"}), None);
+    let script = vec![model_turn(json!({
+        "tool_calls": [
+            tool_call("call-wait", "wait_for", "{\"event_type\":\"review.completed\"}"),
+            tool_call("call-lookup", "lookup", "{}"),
+        ],
+    }))];
+
+    let run = scripted_run(
+        &invocation,
+        &[capability],
+        script,
+        HashMap::new(),
+        vec!["model-1", "result-1"],
+    );
+    let result = run.result.unwrap();
+
+    assert_eq!(result.stop_reason, Some(RunStopReason::ToolStop));
+    assert_eq!(result.proposals.len(), 1);
+    assert!(run.executor.calls.is_empty());
+    assert_eq!(result.events.len(), 3);
+    assert!(run.ids.values.is_empty());
+}
+
+#[test]
+fn model_telemetry_is_attached_only_to_the_first_result_in_a_batch() {
+    let mut invocation = invocation();
+    invocation.max_model_calls = 1;
+    invocation
+        .allowed_capabilities
+        .push("test.lookup".parse().unwrap());
+    let capability = capability(json!({"type": "object"}), None);
+    let mut turn = model_turn(json!({
+        "tool_calls": [
+            tool_call("call-1", "lookup", "{}"),
+            tool_call("call-2", "lookup", "{}"),
+        ],
+    }));
+    turn.telemetry = json!({"request_id": "request-1"})
+        .as_object()
+        .unwrap()
+        .clone();
+    let mut tool_results = HashMap::new();
+    tool_results.insert(
+        "test.lookup".to_owned(),
+        VecDeque::from([
+            json!({"ok": true}).as_object().unwrap().clone(),
+            json!({"ok": true}).as_object().unwrap().clone(),
+        ]),
+    );
+
+    let run = scripted_run(
+        &invocation,
+        &[capability],
+        vec![turn],
+        tool_results,
+        vec!["model-1", "result-1", "result-2"],
+    );
+    let result = run.result.unwrap();
+    let mut tool_results = Vec::new();
+    for event in &result.events {
+        if event.payload.get("_timeline_type") == Some(&json!("tool_result")) {
+            tool_results.push(event);
+        }
+    }
+
+    assert_eq!(tool_results.len(), 2);
+    assert_eq!(
+        tool_results[0].payload.get("model_telemetry"),
+        Some(&json!({"request_id": "request-1"}))
+    );
+    assert_eq!(tool_results[1].payload.get("model_telemetry"), None);
 }
 
 #[test]
@@ -1338,23 +1496,23 @@ fn control_positions_increase_across_model_turns() {
     let result = run.result.unwrap();
 
     assert_eq!(result.stop_reason, Some(RunStopReason::ToolStop));
-    assert_eq!(result.requests.len(), 2);
-    match &result.requests[0] {
-        AgentRequest::Publish { position, .. } => assert_eq!(*position, 0),
-        AgentRequest::Wait { .. }
-        | AgentRequest::Cancel { .. }
-        | AgentRequest::ContentPromotion { .. } => panic!("expected publish request"),
+    assert_eq!(result.proposals.len(), 2);
+    match &result.proposals[0] {
+        AgentProposal::Publish { position, .. } => assert_eq!(*position, 0),
+        AgentProposal::Wait { .. }
+        | AgentProposal::Cancel { .. }
+        | AgentProposal::ContentPromotion { .. } => panic!("expected publish proposal"),
     }
-    match &result.requests[1] {
-        AgentRequest::Wait { position, .. } => assert_eq!(*position, 1),
-        AgentRequest::Publish { .. }
-        | AgentRequest::Cancel { .. }
-        | AgentRequest::ContentPromotion { .. } => panic!("expected wait request"),
+    match &result.proposals[1] {
+        AgentProposal::Wait { position, .. } => assert_eq!(*position, 1),
+        AgentProposal::Publish { .. }
+        | AgentProposal::Cancel { .. }
+        | AgentProposal::ContentPromotion { .. } => panic!("expected wait proposal"),
     }
 }
 
 #[test]
-fn publish_requests_must_match_the_declared_event_schema() {
+fn publish_proposals_must_match_the_declared_event_schema() {
     let mut invocation = invocation();
     invocation.max_model_calls = 1;
     invocation.source_queue_item_id = Some("qi-publish".to_owned());
@@ -1388,7 +1546,7 @@ fn publish_requests_must_match_the_declared_event_schema() {
     );
     let result = run.result.unwrap();
 
-    assert!(result.requests.is_empty());
+    assert!(result.proposals.is_empty());
     let tool_result = result.events[2]
         .payload
         .get("result")
@@ -1797,4 +1955,46 @@ fn a_deadline_that_expires_during_model_work_aborts_the_run() {
     assert_eq!(gateway.observed, Some(AbortReason::DeadlineExceeded));
     assert_eq!(aborted.reason, AbortReason::DeadlineExceeded);
     assert_eq!(aborted.result.events.len(), 1);
+}
+
+#[test]
+fn successful_model_response_survives_a_newly_crossed_deadline() {
+    let mut invocation = invocation();
+    invocation.deadline_ms = Some(100);
+    let mut gateway = SuccessfulDeadlineCrossingGateway::default();
+    let mut executor = ScriptedExecutor::default();
+    let mut observer = RecordingObserver::default();
+    let mut drafts = RecordingDrafts::default();
+    let mut ids = ScriptedIds {
+        values: VecDeque::from(["model-1".to_owned()]),
+    };
+    let abort = FixedAbort { reason: None };
+    let clock = CrossingDeadlineClock {
+        calls: Cell::new(0),
+    };
+    let runner = AgentRunner::new(
+        &[],
+        &mut gateway,
+        &mut executor,
+        &mut observer,
+        &mut drafts,
+        &mut ids,
+        &abort,
+        &clock,
+    );
+
+    let result = block_on(runner.run(&invocation)).unwrap();
+
+    assert_eq!(gateway.observed, Some(AbortReason::DeadlineExceeded));
+    assert_eq!(result.stop_reason, Some(RunStopReason::Finished));
+    assert_eq!(result.final_answer, "done");
+    assert_eq!(
+        result
+            .events
+            .iter()
+            .map(|event| event.event_type.as_str())
+            .collect::<Vec<_>>(),
+        ["zeta.model_call.completed"]
+    );
+    assert_eq!(clock.calls.get(), 2);
 }

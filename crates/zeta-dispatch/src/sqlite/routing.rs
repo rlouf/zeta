@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::str::FromStr;
 
-use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 use serde_json::{Map, Value};
 use zeta_journal::Event;
 
@@ -10,13 +10,37 @@ use super::journal::{
     validate_event_identity,
 };
 use super::projection::index_event;
-use super::{database_error, Dispatch, DispatchError};
+use super::{
+    corrupt_projection, database_error, nonnegative_u32_projection, optional_payload_string,
+    positive_u64_projection, required_payload_string, required_runtime_id,
+    validate_optional_runtime_id, Dispatch, DispatchError,
+};
 use crate::dispatch::{QueueItem, RoutingOutcome, RuntimeEventIdentity};
 use crate::identity::{pending_queue_item_id, queue_item_idempotency_key, QueueItemId, SessionId};
 use crate::routing::{route_event, Route};
 use crate::state::QueueItemStatus;
 
 impl Dispatch {
+    /// Returns one durable queue-item read model.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DispatchError`] when the projection row cannot be read or
+    /// rehydrated as the public typed model.
+    pub fn queue_item(&self, id: &QueueItemId) -> Result<Option<QueueItem>, DispatchError> {
+        load_queue_item(&self.connection, id.as_str())
+    }
+
+    /// Returns all queue items in input-cursor and identity order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DispatchError`] when a projection row cannot be read or
+    /// rehydrated as the public typed model.
+    pub fn list_queue_items(&self) -> Result<Vec<QueueItem>, DispatchError> {
+        load_queue_items(&self.connection)
+    }
+
     /// Resolves and persists one ingress event's route plan atomically.
     ///
     /// No match records the unbound item as unhandled. One match binds the
@@ -340,6 +364,518 @@ pub(super) fn queue_item_payload(
         );
     }
     payload
+}
+
+pub(super) fn index_queue_item_cancel_requested(
+    connection: &Connection,
+    event: &Event,
+) -> Result<(), DispatchError> {
+    let queue_item_id = required_runtime_id(event, "queue_item_id")?;
+    let queue_item_id = QueueItemId::from_str(&queue_item_id).map_err(|_error| {
+        DispatchError::InvalidLifecycleEvent {
+            event_id: event.id.clone(),
+            field: "queue_item_id",
+        }
+    })?;
+    let input_event_id = required_runtime_id(event, "event_id")?;
+    let target_agent = required_payload_string(event, "target_agent", true)?;
+    let supplied_status = required_payload_string(event, "status", false)?;
+    QueueItemStatus::from_str(&supplied_status).map_err(|_error| {
+        DispatchError::InvalidLifecycleEvent {
+            event_id: event.id.clone(),
+            field: "status",
+        }
+    })?;
+    let reason = optional_payload_string(event, "reason")?;
+    let changed = connection
+        .execute(
+            "UPDATE queue_items
+             SET cancel_requested_event_id = COALESCE(cancel_requested_event_id, ?1),
+                 cancel_requested_at = COALESCE(cancel_requested_at, ?2),
+                 cancel_reason = COALESCE(cancel_reason, ?3)
+             WHERE queue_item_id = ?4
+               AND event_id = ?5
+               AND target_agent = ?6",
+            params![
+                &event.id,
+                event.timestamp_ms,
+                reason,
+                queue_item_id.as_str(),
+                input_event_id,
+                target_agent,
+            ],
+        )
+        .map_err(|database| database_error("project cancellation request", database))?;
+    if changed != 1 {
+        return Err(DispatchError::InvalidLifecycleEvent {
+            event_id: event.id.clone(),
+            field: "queue_item_id",
+        });
+    }
+    Ok(())
+}
+
+pub(super) fn index_pending_queue_item(
+    connection: &Connection,
+    event: &Event,
+) -> Result<(), DispatchError> {
+    let Some(cursor) = event.cursor else {
+        return Err(DispatchError::InvalidLifecycleEvent {
+            event_id: event.id.clone(),
+            field: "cursor",
+        });
+    };
+    if cursor > i64::MAX as u64 {
+        return Err(DispatchError::InvalidLifecycleEvent {
+            event_id: event.id.clone(),
+            field: "cursor",
+        });
+    }
+    let queue_item_id = pending_queue_item_id(&event.id);
+    connection
+        .execute(
+            "INSERT INTO queue_items (
+                queue_item_id, event_id, target_agent, input_cursor, status,
+                available_at, updated_at
+             ) VALUES (?1, ?2, '', ?3, 'pending', ?4, ?4)
+             ON CONFLICT(queue_item_id) DO NOTHING",
+            params![
+                queue_item_id.as_str(),
+                &event.id,
+                cursor as i64,
+                event.timestamp_ms
+            ],
+        )
+        .map_err(|error| database_error("project pending queue item", error))?;
+    Ok(())
+}
+
+pub(super) fn index_queue_item(
+    connection: &Connection,
+    event: &Event,
+) -> Result<(), DispatchError> {
+    let queue_item_id = required_runtime_id(event, "queue_item_id")?;
+    let queue_item_id = QueueItemId::from_str(&queue_item_id).map_err(|_error| {
+        DispatchError::InvalidLifecycleEvent {
+            event_id: event.id.clone(),
+            field: "queue_item_id",
+        }
+    })?;
+    let input_event_id = required_runtime_id(event, "event_id")?;
+    let target_agent = required_payload_string(event, "target_agent", true)?;
+    let status = lifecycle_queue_status(event)?;
+    let pending_id = pending_queue_item_id(&input_event_id);
+    if queue_item_id != pending_id {
+        connection
+            .execute(
+                "DELETE FROM queue_items
+                 WHERE queue_item_id = ?1 AND target_agent = ''",
+                params![pending_id.as_str()],
+            )
+            .map_err(|error| database_error("close pending route barrier", error))?;
+    }
+
+    let previous = connection
+        .query_row(
+            "SELECT event_id, target_agent, status
+             FROM queue_items WHERE queue_item_id = ?1",
+            params![queue_item_id.as_str()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| database_error("read queue transition", error))?;
+    let previous_status = match previous {
+        Some((previous_event_id, previous_target_agent, previous_status)) => {
+            if previous_event_id != input_event_id {
+                return Err(DispatchError::InvalidLifecycleEvent {
+                    event_id: event.id.clone(),
+                    field: "event_id",
+                });
+            }
+            if previous_target_agent != target_agent
+                && previous_status != QueueItemStatus::Pending.to_string()
+            {
+                return Err(DispatchError::InvalidLifecycleEvent {
+                    event_id: event.id.clone(),
+                    field: "target_agent",
+                });
+            }
+            Some(
+                QueueItemStatus::from_str(&previous_status).map_err(|_error| {
+                    DispatchError::CorruptProjection {
+                        table: "queue_items",
+                        field: "status",
+                    }
+                })?,
+            )
+        }
+        None => None,
+    };
+    let closes_unbound_barrier = previous_status == Some(QueueItemStatus::Pending)
+        && queue_item_id == pending_id
+        && target_agent.is_empty()
+        && status == QueueItemStatus::Completed;
+    let cancels_pending_item = previous_status == Some(QueueItemStatus::Pending)
+        && status == QueueItemStatus::Cancelled
+        && connection
+            .query_row(
+                "SELECT 1 FROM queue_items
+                 WHERE queue_item_id = ?1
+                   AND cancel_requested_event_id IS NOT NULL",
+                params![queue_item_id.as_str()],
+                |_row| Ok(()),
+            )
+            .optional()
+            .map_err(|database| database_error("check pending cancellation", database))?
+            .is_some();
+    if !closes_unbound_barrier && !cancels_pending_item {
+        QueueItemStatus::validate_transition(previous_status, status)?;
+    }
+
+    let input_cursor = input_event_cursor(connection, &input_event_id, event)?;
+    let session_id =
+        optional_payload_string(event, "session_id")?.or_else(|| event.session_id.clone());
+    validate_optional_runtime_id(event, "session_id", session_id.as_deref())?;
+    let project_generation = optional_payload_string(event, "project_generation")?;
+    validate_optional_runtime_id(event, "project_generation", project_generation.as_deref())?;
+    let lock_keys = optional_payload_string_array(event, "lock_keys")?;
+    let lock_keys_json = lock_keys
+        .map(|keys| serde_json::to_string(&keys))
+        .transpose()
+        .map_err(|_error| DispatchError::InvalidLifecycleEvent {
+            event_id: event.id.clone(),
+            field: "lock_keys",
+        })?;
+    let last_error = queue_last_error(event)?;
+    let available_at = if status == QueueItemStatus::Available {
+        Some(queue_available_at(event)?)
+    } else {
+        None
+    };
+    connection
+        .execute(
+            "INSERT INTO queue_items (
+                queue_item_id, event_id, target_agent, project_generation,
+                session_id, lock_keys_json, input_cursor, status, available_at,
+                last_error, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, COALESCE(?6, '[]'), ?7, ?8, ?9, ?10, ?11)
+             ON CONFLICT(queue_item_id) DO UPDATE SET
+                event_id = excluded.event_id,
+                target_agent = excluded.target_agent,
+                project_generation = COALESCE(
+                    excluded.project_generation,
+                    queue_items.project_generation
+                ),
+                session_id = COALESCE(excluded.session_id, queue_items.session_id),
+                lock_keys_json = COALESCE(?6, queue_items.lock_keys_json),
+                input_cursor = excluded.input_cursor,
+                status = excluded.status,
+                available_at = CASE
+                    WHEN excluded.status = 'available' THEN excluded.available_at
+                    ELSE queue_items.available_at
+                END,
+                last_error = excluded.last_error,
+                updated_at = excluded.updated_at",
+            params![
+                queue_item_id.as_str(),
+                input_event_id,
+                target_agent,
+                project_generation,
+                session_id,
+                lock_keys_json,
+                input_cursor,
+                status.to_string(),
+                available_at,
+                last_error,
+                event.timestamp_ms,
+            ],
+        )
+        .map_err(|error| database_error("project queue lifecycle", error))?;
+    Ok(())
+}
+
+fn lifecycle_queue_status(event: &Event) -> Result<QueueItemStatus, DispatchError> {
+    let suffix = event.event_type.rsplit('.').next().unwrap_or_default();
+    let expected = QueueItemStatus::from_str(suffix).map_err(|_error| {
+        DispatchError::InvalidLifecycleEvent {
+            event_id: event.id.clone(),
+            field: "event_type",
+        }
+    })?;
+    let actual = match event.payload.get("status") {
+        Some(Value::String(status)) => QueueItemStatus::from_str(status).map_err(|_error| {
+            DispatchError::InvalidLifecycleEvent {
+                event_id: event.id.clone(),
+                field: "status",
+            }
+        })?,
+        Some(_value) => {
+            return Err(DispatchError::InvalidLifecycleEvent {
+                event_id: event.id.clone(),
+                field: "status",
+            });
+        }
+        None => expected,
+    };
+    if actual != expected {
+        return Err(DispatchError::InvalidLifecycleEvent {
+            event_id: event.id.clone(),
+            field: "status",
+        });
+    }
+    Ok(actual)
+}
+
+fn optional_payload_string_array(
+    event: &Event,
+    field: &'static str,
+) -> Result<Option<Vec<String>>, DispatchError> {
+    let Some(value) = event.payload.get(field) else {
+        return Ok(None);
+    };
+    let Value::Array(values) = value else {
+        return Err(DispatchError::InvalidLifecycleEvent {
+            event_id: event.id.clone(),
+            field,
+        });
+    };
+    let mut result = Vec::new();
+    let mut seen = HashSet::new();
+    for value in values {
+        let Value::String(value) = value else {
+            return Err(DispatchError::InvalidLifecycleEvent {
+                event_id: event.id.clone(),
+                field,
+            });
+        };
+        if value.is_empty() || !seen.insert(value) {
+            return Err(DispatchError::InvalidLifecycleEvent {
+                event_id: event.id.clone(),
+                field,
+            });
+        }
+        result.push(value.clone());
+    }
+    Ok(Some(result))
+}
+
+fn queue_last_error(event: &Event) -> Result<Option<String>, DispatchError> {
+    if let Some(error) = optional_payload_string(event, "error")? {
+        return Ok(Some(error));
+    }
+    let Some(value) = event.payload.get("last_error") else {
+        return Ok(None);
+    };
+    let Value::Object(last_error) = value else {
+        return Err(DispatchError::InvalidLifecycleEvent {
+            event_id: event.id.clone(),
+            field: "last_error",
+        });
+    };
+    match last_error.get("message") {
+        Some(Value::String(message)) => Ok(Some(message.clone())),
+        _ => Err(DispatchError::InvalidLifecycleEvent {
+            event_id: event.id.clone(),
+            field: "last_error",
+        }),
+    }
+}
+
+fn queue_available_at(event: &Event) -> Result<i64, DispatchError> {
+    let Some(value) = event.payload.get("not_before") else {
+        return Ok(event.timestamp_ms);
+    };
+    let Value::Number(number) = value else {
+        return Err(DispatchError::InvalidLifecycleEvent {
+            event_id: event.id.clone(),
+            field: "not_before",
+        });
+    };
+    if let Some(value) = number.as_i64() {
+        return Ok(value);
+    }
+    let Some(value) = number.as_f64() else {
+        return Err(DispatchError::InvalidLifecycleEvent {
+            event_id: event.id.clone(),
+            field: "not_before",
+        });
+    };
+    if !value.is_finite() || value < i64::MIN as f64 || value >= i64::MAX as f64 {
+        return Err(DispatchError::InvalidLifecycleEvent {
+            event_id: event.id.clone(),
+            field: "not_before",
+        });
+    }
+    Ok(value as i64)
+}
+
+fn input_event_cursor(
+    connection: &Connection,
+    event_id: &str,
+    lifecycle_event: &Event,
+) -> Result<i64, DispatchError> {
+    let cursor = connection
+        .query_row(
+            "SELECT cursor FROM journal_entries WHERE event_id = ?1",
+            params![event_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(|error| database_error("read input event cursor", error))?;
+    let Some(cursor) = cursor else {
+        return Err(DispatchError::InvalidLifecycleEvent {
+            event_id: lifecycle_event.id.clone(),
+            field: "event_id",
+        });
+    };
+    if cursor <= 0 {
+        return Err(DispatchError::CorruptJournal {
+            cursor: None,
+            field: "cursor",
+        });
+    }
+    Ok(cursor)
+}
+
+const QUEUE_ITEM_COLUMNS: &str = "queue.queue_item_id, queue.event_id,
+    queue.target_agent, queue.project_generation, queue.session_id,
+    queue.lock_keys_json, queue.input_cursor,
+    CASE WHEN claim.queue_item_id IS NULL THEN queue.status ELSE 'claimed' END,
+    queue.available_at, claim.worker_name, claim.claimed_until,
+    queue.cancel_requested_event_id, queue.cancel_requested_at,
+    queue.cancel_reason, queue.attempt_count, queue.last_error, queue.updated_at";
+
+pub(super) fn load_queue_item(
+    connection: &Connection,
+    queue_item_id: &str,
+) -> Result<Option<QueueItem>, DispatchError> {
+    let sql = format!(
+        "SELECT {QUEUE_ITEM_COLUMNS}
+         FROM queue_items AS queue
+         LEFT JOIN queue_claims AS claim
+           ON claim.queue_item_id = queue.queue_item_id
+         WHERE queue.queue_item_id = ?1"
+    );
+    let stored = connection
+        .query_row(&sql, params![queue_item_id], StoredQueueItem::from_row)
+        .optional()
+        .map_err(|error| database_error("read queue item", error))?;
+    stored.map(StoredQueueItem::into_model).transpose()
+}
+
+pub(super) fn load_queue_items(connection: &Connection) -> Result<Vec<QueueItem>, DispatchError> {
+    let sql = format!(
+        "SELECT {QUEUE_ITEM_COLUMNS}
+         FROM queue_items AS queue
+         LEFT JOIN queue_claims AS claim
+           ON claim.queue_item_id = queue.queue_item_id
+         ORDER BY queue.input_cursor ASC, queue.queue_item_id ASC"
+    );
+    let mut statement = connection
+        .prepare(&sql)
+        .map_err(|error| database_error("prepare queue item read", error))?;
+    let rows = statement
+        .query_map([], StoredQueueItem::from_row)
+        .map_err(|error| database_error("read queue items", error))?;
+    let mut items = Vec::new();
+    for row in rows {
+        let stored = row.map_err(|error| database_error("read queue item", error))?;
+        items.push(stored.into_model()?);
+    }
+    Ok(items)
+}
+
+struct StoredQueueItem {
+    queue_item_id: String,
+    event_id: String,
+    target_agent: String,
+    project_generation: Option<String>,
+    session_id: Option<String>,
+    lock_keys_json: String,
+    input_cursor: i64,
+    status: String,
+    available_at: Option<i64>,
+    claimed_by: Option<String>,
+    claimed_until: Option<i64>,
+    cancellation_requested_event_id: Option<String>,
+    cancellation_requested_at: Option<i64>,
+    cancellation_reason: Option<String>,
+    attempt_count: i64,
+    last_error: Option<String>,
+    updated_at: i64,
+}
+
+impl StoredQueueItem {
+    fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+        Ok(StoredQueueItem {
+            queue_item_id: row.get(0)?,
+            event_id: row.get(1)?,
+            target_agent: row.get(2)?,
+            project_generation: row.get(3)?,
+            session_id: row.get(4)?,
+            lock_keys_json: row.get(5)?,
+            input_cursor: row.get(6)?,
+            status: row.get(7)?,
+            available_at: row.get(8)?,
+            claimed_by: row.get(9)?,
+            claimed_until: row.get(10)?,
+            cancellation_requested_event_id: row.get(11)?,
+            cancellation_requested_at: row.get(12)?,
+            cancellation_reason: row.get(13)?,
+            attempt_count: row.get(14)?,
+            last_error: row.get(15)?,
+            updated_at: row.get(16)?,
+        })
+    }
+
+    fn into_model(self) -> Result<QueueItem, DispatchError> {
+        let id = QueueItemId::from_str(&self.queue_item_id)
+            .map_err(|_error| corrupt_projection("queue_items", "queue_item_id"))?;
+        let session_id = self
+            .session_id
+            .map(|id| SessionId::from_str(&id))
+            .transpose()
+            .map_err(|_error| corrupt_projection("queue_items", "session_id"))?;
+        let status = QueueItemStatus::from_str(&self.status)
+            .map_err(|_error| corrupt_projection("queue_items", "status"))?;
+        let lock_keys: Vec<String> = serde_json::from_str(&self.lock_keys_json)
+            .map_err(|_error| corrupt_projection("queue_items", "lock_keys_json"))?;
+        let mut seen_lock_keys = HashSet::new();
+        for lock_key in &lock_keys {
+            if lock_key.is_empty() || !seen_lock_keys.insert(lock_key) {
+                return Err(corrupt_projection("queue_items", "lock_keys_json"));
+            }
+        }
+        let input_cursor =
+            positive_u64_projection(self.input_cursor, "queue_items", "input_cursor")?;
+        let attempt_count =
+            nonnegative_u32_projection(self.attempt_count, "queue_items", "attempt_count")?;
+        Ok(QueueItem {
+            id,
+            event_id: self.event_id,
+            target_agent: self.target_agent,
+            project_generation: self.project_generation,
+            session_id,
+            lock_keys,
+            input_cursor,
+            status,
+            available_at: self.available_at,
+            claimed_by: self.claimed_by,
+            claimed_until: self.claimed_until,
+            cancellation_requested_event_id: self.cancellation_requested_event_id,
+            cancellation_requested_at: self.cancellation_requested_at,
+            cancellation_reason: self.cancellation_reason,
+            attempt_count,
+            last_error: self.last_error,
+            updated_at: self.updated_at,
+        })
+    }
 }
 
 fn queue_status_and_target(

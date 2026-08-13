@@ -18,7 +18,8 @@ use std::time::Duration;
 
 use rusqlite::ffi::ErrorCode;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
-use zeta_journal::{AppendError, VerificationError};
+use serde_json::{Map, Value};
+use zeta_journal::{AppendError, Event, VerificationError};
 
 use crate::identity::{QueueItemId, SessionId};
 use crate::routing::SessionError;
@@ -838,6 +839,64 @@ fn has_table(tables: &[String], expected: &str) -> bool {
         }
     }
     false
+}
+
+fn required_runtime_id(event: &Event, field: &'static str) -> Result<String, DispatchError> {
+    required_payload_string(event, field, false)
+}
+
+fn required_payload_object(
+    event: &Event,
+    field: &'static str,
+) -> Result<Map<String, Value>, DispatchError> {
+    match event.payload.get(field) {
+        Some(Value::Object(value)) => Ok(value.clone()),
+        _ => Err(invalid_lifecycle(event, field)),
+    }
+}
+
+fn invalid_lifecycle(event: &Event, field: &'static str) -> DispatchError {
+    DispatchError::InvalidLifecycleEvent {
+        event_id: event.id.clone(),
+        field,
+    }
+}
+
+fn required_payload_string(
+    event: &Event,
+    field: &'static str,
+    allow_empty: bool,
+) -> Result<String, DispatchError> {
+    let Some(Value::String(value)) = event.payload.get(field) else {
+        return Err(invalid_lifecycle(event, field));
+    };
+    if !allow_empty && value.is_empty() {
+        return Err(invalid_lifecycle(event, field));
+    }
+    Ok(value.clone())
+}
+
+fn optional_payload_string(
+    event: &Event,
+    field: &'static str,
+) -> Result<Option<String>, DispatchError> {
+    match event.payload.get(field) {
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(Value::Null) => Ok(None),
+        Some(_value) => Err(invalid_lifecycle(event, field)),
+        None => Ok(None),
+    }
+}
+
+fn validate_optional_runtime_id(
+    event: &Event,
+    field: &'static str,
+    value: Option<&str>,
+) -> Result<(), DispatchError> {
+    if value == Some("") {
+        return Err(invalid_lifecycle(event, field));
+    }
+    Ok(())
 }
 
 fn corrupt_projection(table: &'static str, field: &'static str) -> DispatchError {

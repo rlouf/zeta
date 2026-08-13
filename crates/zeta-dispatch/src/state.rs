@@ -329,7 +329,7 @@ pub enum FailureClass {
 /// Names every structured failure class emitted by Dispatch execution.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum DispatchErrorCode {
+pub enum AttemptFailureCode {
     /// The stored or authored agent declaration is invalid.
     AgentSpecInvalid,
     /// The triggering event does not satisfy its declared payload contract.
@@ -348,56 +348,56 @@ pub enum DispatchErrorCode {
     UnsafeEffectAmbiguous,
 }
 
-impl DispatchErrorCode {
+impl AttemptFailureCode {
     /// Lists the complete structured error-code vocabulary.
-    pub const ALL: [DispatchErrorCode; 8] = [
-        DispatchErrorCode::AgentSpecInvalid,
-        DispatchErrorCode::MalformedEventPayload,
-        DispatchErrorCode::ProviderTimeout,
-        DispatchErrorCode::NetworkError,
-        DispatchErrorCode::ToolFailed,
-        DispatchErrorCode::AgentExecutionFailed,
-        DispatchErrorCode::EffectDeliveryFailed,
-        DispatchErrorCode::UnsafeEffectAmbiguous,
+    pub const ALL: [AttemptFailureCode; 8] = [
+        AttemptFailureCode::AgentSpecInvalid,
+        AttemptFailureCode::MalformedEventPayload,
+        AttemptFailureCode::ProviderTimeout,
+        AttemptFailureCode::NetworkError,
+        AttemptFailureCode::ToolFailed,
+        AttemptFailureCode::AgentExecutionFailed,
+        AttemptFailureCode::EffectDeliveryFailed,
+        AttemptFailureCode::UnsafeEffectAmbiguous,
     ];
 }
 
-impl fmt::Display for DispatchErrorCode {
+impl fmt::Display for AttemptFailureCode {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let text = match self {
-            DispatchErrorCode::AgentSpecInvalid => "agent_spec_invalid",
-            DispatchErrorCode::MalformedEventPayload => "malformed_event_payload",
-            DispatchErrorCode::ProviderTimeout => "provider_timeout",
-            DispatchErrorCode::NetworkError => "network_error",
-            DispatchErrorCode::ToolFailed => "tool_failed",
-            DispatchErrorCode::AgentExecutionFailed => "agent_execution_failed",
-            DispatchErrorCode::EffectDeliveryFailed => "effect_delivery_failed",
-            DispatchErrorCode::UnsafeEffectAmbiguous => "unsafe_effect_ambiguous",
+            AttemptFailureCode::AgentSpecInvalid => "agent_spec_invalid",
+            AttemptFailureCode::MalformedEventPayload => "malformed_event_payload",
+            AttemptFailureCode::ProviderTimeout => "provider_timeout",
+            AttemptFailureCode::NetworkError => "network_error",
+            AttemptFailureCode::ToolFailed => "tool_failed",
+            AttemptFailureCode::AgentExecutionFailed => "agent_execution_failed",
+            AttemptFailureCode::EffectDeliveryFailed => "effect_delivery_failed",
+            AttemptFailureCode::UnsafeEffectAmbiguous => "unsafe_effect_ambiguous",
         };
         formatter.write_str(text)
     }
 }
 
-impl FromStr for DispatchErrorCode {
+impl FromStr for AttemptFailureCode {
     type Err = StateParseError;
 
     fn from_str(text: &str) -> Result<Self, Self::Err> {
         let code = if text == "agent_spec_invalid" {
-            DispatchErrorCode::AgentSpecInvalid
+            AttemptFailureCode::AgentSpecInvalid
         } else if text == "malformed_event_payload" {
-            DispatchErrorCode::MalformedEventPayload
+            AttemptFailureCode::MalformedEventPayload
         } else if text == "provider_timeout" {
-            DispatchErrorCode::ProviderTimeout
+            AttemptFailureCode::ProviderTimeout
         } else if text == "network_error" {
-            DispatchErrorCode::NetworkError
+            AttemptFailureCode::NetworkError
         } else if text == "tool_failed" {
-            DispatchErrorCode::ToolFailed
+            AttemptFailureCode::ToolFailed
         } else if text == "agent_execution_failed" {
-            DispatchErrorCode::AgentExecutionFailed
+            AttemptFailureCode::AgentExecutionFailed
         } else if text == "effect_delivery_failed" {
-            DispatchErrorCode::EffectDeliveryFailed
+            AttemptFailureCode::EffectDeliveryFailed
         } else if text == "unsafe_effect_ambiguous" {
-            DispatchErrorCode::UnsafeEffectAmbiguous
+            AttemptFailureCode::UnsafeEffectAmbiguous
         } else {
             return Err(StateParseError {
                 resource: "dispatch error code",
@@ -409,16 +409,16 @@ impl FromStr for DispatchErrorCode {
 }
 
 /// Classifies a structured dispatch error without matching display text.
-pub fn classify_error_code(error_code: DispatchErrorCode) -> FailureClass {
+pub fn classify_attempt_failure_code(error_code: AttemptFailureCode) -> FailureClass {
     match error_code {
-        DispatchErrorCode::AgentSpecInvalid => FailureClass::Permanent,
-        DispatchErrorCode::MalformedEventPayload => FailureClass::Permanent,
-        DispatchErrorCode::ProviderTimeout => FailureClass::Retryable,
-        DispatchErrorCode::NetworkError => FailureClass::Retryable,
-        DispatchErrorCode::ToolFailed => FailureClass::Retryable,
-        DispatchErrorCode::AgentExecutionFailed => FailureClass::Retryable,
-        DispatchErrorCode::EffectDeliveryFailed => FailureClass::Retryable,
-        DispatchErrorCode::UnsafeEffectAmbiguous => FailureClass::Permanent,
+        AttemptFailureCode::AgentSpecInvalid => FailureClass::Permanent,
+        AttemptFailureCode::MalformedEventPayload => FailureClass::Permanent,
+        AttemptFailureCode::ProviderTimeout => FailureClass::Retryable,
+        AttemptFailureCode::NetworkError => FailureClass::Retryable,
+        AttemptFailureCode::ToolFailed => FailureClass::Retryable,
+        AttemptFailureCode::AgentExecutionFailed => FailureClass::Retryable,
+        AttemptFailureCode::EffectDeliveryFailed => FailureClass::Retryable,
+        AttemptFailureCode::UnsafeEffectAmbiguous => FailureClass::Permanent,
     }
 }
 

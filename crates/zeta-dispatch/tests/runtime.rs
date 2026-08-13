@@ -9,18 +9,18 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use tempfile::tempdir;
 use zeta_dispatch::{
-    attempt_id, attempt_idempotency_key, classify_error_code, derived_run_id, effect_key,
+    attempt_id, attempt_idempotency_key, classify_attempt_failure_code, derived_run_id, effect_key,
     pending_queue_item_id, publish_event_handle, queue_item_attempt_idempotency_key, queue_item_id,
     queue_item_idempotency_key, route_event, run_id_for_attempt, safe_agent_id,
     unhandled_queue_item_id, unhandled_queue_item_idempotency_key, wait_handle, AttemptCompletion,
-    AttemptCompletionDisposition, AttemptControl, AttemptFailure, AttemptStatus,
-    CancellationFinalizationIdentities, CancellationIdentities, CancellationStatus, ClaimToken,
-    DeferredPublicationStatus, Dispatch, DispatchError, DispatchErrorCode, EffectStatus,
-    EventPattern, FailureClass, QueueClaim, QueueItemId, QueueItemStatus,
+    AttemptCompletionDisposition, AttemptControl, AttemptFailure, AttemptFailureCode,
+    AttemptStatus, CancellationFinalizationIdentities, CancellationIdentities, CancellationStatus,
+    ClaimToken, DeferredPublicationStatus, Dispatch, DispatchError, EffectDeliverySemantics,
+    EffectStatus, EventPattern, FailureClass, QueueClaim, QueueItemId, QueueItemStatus,
     ResourceCancellationStatus, ResourceKind, RetryPolicy, Route, RunId, RuntimeEventIdentity,
     SessionId, SessionMessageIdentities, SessionMessageRequest, SessionRule, WaitStatus,
 };
-use zeta_journal::{Event, Filter, HeadExpectation};
+use zeta_journal::{Event, EventFilter, HeadExpectation};
 
 #[derive(Debug, Deserialize)]
 struct RuntimeVectors {
@@ -267,7 +267,7 @@ fn route_specific_work(
         );
     }
     dispatch
-        .append_event(Event {
+        .append_trusted_event(Event {
             id: format!("available-{}-{agent_id}", event.id),
             event_type: "runtime.queue_item.available".to_owned(),
             source: "zeta".to_owned(),
@@ -519,16 +519,16 @@ fn runtime_failure_classification_vectors_match() {
     let vectors = vectors();
     assert_eq!(
         vectors.failure_classification.len(),
-        DispatchErrorCode::ALL.len()
+        AttemptFailureCode::ALL.len()
     );
     let mut seen = Vec::new();
     for case in vectors.failure_classification {
-        let code = DispatchErrorCode::from_str(&case.error_code).unwrap();
+        let code = AttemptFailureCode::from_str(&case.error_code).unwrap();
         assert!(!seen.contains(&code));
         seen.push(code);
-        assert_eq!(classify_error_code(code), case.failure_class);
+        assert_eq!(classify_attempt_failure_code(code), case.failure_class);
     }
-    for code in DispatchErrorCode::ALL {
+    for code in AttemptFailureCode::ALL {
         assert!(seen.contains(&code));
     }
 }
@@ -713,7 +713,7 @@ fn sqlite_journal_replays_normative_operations() {
         let expected = &append["expected"];
         if let Some(reason) = expected["error"].as_str() {
             let head = dispatch.head().unwrap();
-            let error = dispatch.append_event(event).unwrap_err();
+            let error = dispatch.append_trusted_event(event).unwrap_err();
             let DispatchError::Append(error) = error else {
                 panic!("expected append error, got {error:?}");
             };
@@ -721,7 +721,7 @@ fn sqlite_journal_replays_normative_operations() {
             assert_eq!(dispatch.head().unwrap(), head, "{}", append["name"]);
             continue;
         }
-        let outcome = dispatch.append_event(event).unwrap();
+        let outcome = dispatch.append_trusted_event(event).unwrap();
         assert_eq!(outcome.inserted, expected["inserted"].as_bool().unwrap());
         assert_eq!(outcome.event.id, expected["returned_id"]);
         assert_eq!(outcome.event.cursor, expected["cursor"].as_u64());
@@ -732,7 +732,7 @@ fn sqlite_journal_replays_normative_operations() {
     }
 
     for query in document["queries"].as_array().unwrap() {
-        let filter: Filter = serde_json::from_value(query["filter"].clone()).unwrap();
+        let filter: EventFilter = serde_json::from_value(query["filter"].clone()).unwrap();
         let events = dispatch.list_events(&filter).unwrap();
         let ids: Vec<&str> = events.iter().map(|event| event.id.as_str()).collect();
         let expected: Vec<&str> = query["expected_ids"]
@@ -773,10 +773,10 @@ fn sqlite_journal_persists_complete_verifiable_entries() {
     let expected_head = {
         let mut dispatch = Dispatch::open(&path).unwrap();
         dispatch
-            .append_event(journal_event("evt_1", Some("key:1")))
+            .append_trusted_event(journal_event("evt_1", Some("key:1")))
             .unwrap();
         dispatch
-            .append_event(journal_event("evt_2", Some("key:2")))
+            .append_trusted_event(journal_event("evt_2", Some("key:2")))
             .unwrap();
         dispatch.head().unwrap().unwrap()
     };
@@ -925,7 +925,7 @@ fn sqlite_journal_serializes_concurrent_appends() {
             let mut dispatch = Dispatch::open(path).unwrap();
             barrier.wait();
             dispatch
-                .append_event(journal_event(&format!("evt_{number}"), None))
+                .append_trusted_event(journal_event(&format!("evt_{number}"), None))
                 .unwrap()
         }));
     }
@@ -935,7 +935,7 @@ fn sqlite_journal_serializes_concurrent_appends() {
     }
 
     let dispatch = Dispatch::open(&path).unwrap();
-    let events = dispatch.list_events(&Filter::default()).unwrap();
+    let events = dispatch.list_events(&EventFilter::default()).unwrap();
     assert_eq!(events.len(), 2);
     assert_eq!(events[0].cursor, Some(1));
     assert_eq!(events[1].cursor, Some(2));
@@ -962,7 +962,7 @@ fn sqlite_journal_deduplicates_concurrent_global_keys() {
             let mut dispatch = Dispatch::open(path).unwrap();
             barrier.wait();
             dispatch
-                .append_event(journal_event(&format!("evt_{number}"), Some("same-key")))
+                .append_trusted_event(journal_event(&format!("evt_{number}"), Some("same-key")))
                 .unwrap()
         }));
     }
@@ -980,7 +980,10 @@ fn sqlite_journal_deduplicates_concurrent_global_keys() {
     assert_eq!(returned_ids[0], returned_ids[1]);
 
     let dispatch = Dispatch::open(&path).unwrap();
-    assert_eq!(dispatch.list_events(&Filter::default()).unwrap().len(), 1);
+    assert_eq!(
+        dispatch.list_events(&EventFilter::default()).unwrap().len(),
+        1
+    );
 }
 
 #[test]
@@ -989,7 +992,9 @@ fn sqlite_journal_failure_does_not_advance_the_derived_head() {
     let path = directory.path().join("rollback.sqlite3");
     let expected_head = {
         let mut dispatch = Dispatch::open(&path).unwrap();
-        dispatch.append_event(journal_event("evt_1", None)).unwrap();
+        dispatch
+            .append_trusted_event(journal_event("evt_1", None))
+            .unwrap();
         dispatch.head().unwrap()
     };
     rusqlite::Connection::open(&path)
@@ -1003,11 +1008,14 @@ fn sqlite_journal_failure_does_not_advance_the_derived_head() {
         .unwrap();
     let mut dispatch = Dispatch::open(&path).unwrap();
     let error = dispatch
-        .append_event(journal_event("evt_rejected", None))
+        .append_trusted_event(journal_event("evt_rejected", None))
         .unwrap_err();
     assert_eq!(error.reason(), "database");
     assert_eq!(dispatch.head().unwrap(), expected_head);
-    assert_eq!(dispatch.list_events(&Filter::default()).unwrap().len(), 1);
+    assert_eq!(
+        dispatch.list_events(&EventFilter::default()).unwrap().len(),
+        1
+    );
 }
 
 #[test]
@@ -1038,7 +1046,10 @@ fn dispatch_ingress_is_idempotent_and_reserves_runtime_events() {
     assert!(first.inserted);
     assert!(!repeated.inserted);
     assert_eq!(first.event.id, repeated.event.id);
-    assert_eq!(dispatch.list_events(&Filter::default()).unwrap().len(), 1);
+    assert_eq!(
+        dispatch.list_events(&EventFilter::default()).unwrap().len(),
+        1
+    );
     let queue_items = dispatch.list_queue_items().unwrap();
     assert_eq!(queue_items.len(), 1);
     let pending = &queue_items[0];
@@ -1062,7 +1073,10 @@ fn dispatch_ingress_is_idempotent_and_reserves_runtime_events() {
     };
     let error = dispatch.ingest_event(reserved).unwrap_err();
     assert_eq!(error.reason(), "reserved_runtime_event");
-    assert_eq!(dispatch.list_events(&Filter::default()).unwrap().len(), 1);
+    assert_eq!(
+        dispatch.list_events(&EventFilter::default()).unwrap().len(),
+        1
+    );
 }
 
 #[test]
@@ -1233,7 +1247,10 @@ fn route_commit_rejects_generated_identity_collisions_atomically() {
         .unwrap_err();
 
     assert_eq!(error.reason(), "duplicate_runtime_event_identity");
-    assert_eq!(dispatch.list_events(&Filter::default()).unwrap().len(), 1);
+    assert_eq!(
+        dispatch.list_events(&EventFilter::default()).unwrap().len(),
+        1
+    );
     assert_eq!(
         dispatch
             .queue_item(&pending_queue_item_id(&event.id))
@@ -1244,7 +1261,7 @@ fn route_commit_rejects_generated_identity_collisions_atomically() {
     );
 
     dispatch
-        .append_event(Event {
+        .append_trusted_event(Event {
             id: "collision-id".to_owned(),
             event_type: "unrelated.event".to_owned(),
             source: "test".to_owned(),
@@ -1269,7 +1286,10 @@ fn route_commit_rejects_generated_identity_collisions_atomically() {
         .unwrap_err();
 
     assert_eq!(error.reason(), "runtime_event_identity_collision");
-    assert_eq!(dispatch.list_events(&Filter::default()).unwrap().len(), 2);
+    assert_eq!(
+        dispatch.list_events(&EventFilter::default()).unwrap().len(),
+        2
+    );
     assert_eq!(
         dispatch
             .queue_item(&pending_queue_item_id(&event.id))
@@ -1316,10 +1336,13 @@ fn invalid_projected_transition_rolls_back_its_journal_entry() {
         cursor: None,
     };
 
-    let error = dispatch.append_event(completed).unwrap_err();
+    let error = dispatch.append_trusted_event(completed).unwrap_err();
 
     assert_eq!(error.reason(), "queue_transition");
-    assert_eq!(dispatch.list_events(&Filter::default()).unwrap().len(), 2);
+    assert_eq!(
+        dispatch.list_events(&EventFilter::default()).unwrap().len(),
+        2
+    );
     assert_eq!(
         dispatch
             .queue_item(&pending_queue_item_id(&event.id))
@@ -1343,7 +1366,7 @@ fn projection_rebuild_preserves_running_attempt_and_releases_claimed_item() {
     }
     for value in case["lifecycle_events"].as_array().unwrap() {
         let event = runtime_event(value);
-        dispatch.append_event(event).unwrap();
+        dispatch.append_trusted_event(event).unwrap();
     }
 
     let replayed = dispatch.rebuild_projections().unwrap();
@@ -1364,7 +1387,7 @@ fn projection_rebuild_preserves_running_attempt_and_releases_claimed_item() {
     assert_eq!(attempts[0].queue_item_id().as_str(), "qi_evt_recover");
     assert_eq!(attempts[0].attempt_number(), 1);
     let event_ids: Vec<String> = dispatch
-        .list_events(&Filter::default())
+        .list_events(&EventFilter::default())
         .unwrap()
         .into_iter()
         .map(|event| event.id)
@@ -1453,7 +1476,10 @@ fn ingress_projection_failure_rolls_back_the_journal_append() {
 
     assert_eq!(error.reason(), "database");
     assert_eq!(dispatch.head().unwrap(), None);
-    assert!(dispatch.list_events(&Filter::default()).unwrap().is_empty());
+    assert!(dispatch
+        .list_events(&EventFilter::default())
+        .unwrap()
+        .is_empty());
     assert!(dispatch.list_queue_items().unwrap().is_empty());
 }
 
@@ -1818,7 +1844,7 @@ fn failed_attempts_retry_then_dead_letter_from_vector() {
     let mut dispatch = Dispatch::open_in_memory().unwrap();
     dispatch.ingest_event(event.clone()).unwrap();
     dispatch
-        .append_event(Event {
+        .append_trusted_event(Event {
             id: "retry-route".to_owned(),
             event_type: "runtime.queue_item.available".to_owned(),
             source: "zeta".to_owned(),
@@ -1894,7 +1920,7 @@ fn failed_attempts_retry_then_dead_letter_from_vector() {
                     &AttemptFailure::new(
                         format!("2026-08-12T10:01:0{attempt_number}Z"),
                         case["failure_message"].as_str().unwrap(),
-                        DispatchErrorCode::AgentExecutionFailed,
+                        AttemptFailureCode::AgentExecutionFailed,
                         policy,
                     ),
                 )
@@ -1970,7 +1996,7 @@ fn permanent_attempt_failure_dead_letters_without_retry() {
             &AttemptFailure::new(
                 "2026-08-12T10:00:01Z",
                 "invalid result",
-                DispatchErrorCode::MalformedEventPayload,
+                AttemptFailureCode::MalformedEventPayload,
                 RetryPolicy::default(),
             ),
         )
@@ -2008,7 +2034,7 @@ fn queued_cancellation_commits_intent_and_terminal_fact_once() {
     dispatch.ingest_event(message.clone()).unwrap();
     let queue_item_id = queue_item_id(&message.id, "master");
     dispatch
-        .append_event(Event {
+        .append_trusted_event(Event {
             id: "cancel-available".to_owned(),
             event_type: "runtime.queue_item.available".to_owned(),
             source: "zeta".to_owned(),
@@ -2097,9 +2123,9 @@ fn queued_cancellation_commits_intent_and_terminal_fact_once() {
     assert!(!repeated.changed());
     assert_eq!(
         dispatch
-            .list_events(&Filter {
+            .list_events(&EventFilter {
                 event_type: Some("runtime.queue_item.cancel_requested".to_owned()),
-                ..Filter::default()
+                ..EventFilter::default()
             })
             .unwrap()
             .len(),
@@ -2217,7 +2243,7 @@ fn cancellation_wins_inside_a_fenced_failure_transaction() {
             &AttemptFailure::new(
                 "2026-08-12T10:00:01Z",
                 "this failure must not retry",
-                DispatchErrorCode::NetworkError,
+                AttemptFailureCode::NetworkError,
                 RetryPolicy::default(),
             ),
         )
@@ -2246,9 +2272,9 @@ fn cancellation_wins_inside_a_fenced_failure_transaction() {
     assert!(!dispatch.claim_is_current(&claim, 104).unwrap());
     assert!(dispatch.list_locks().unwrap().is_empty());
     assert!(dispatch
-        .list_events(&Filter {
+        .list_events(&EventFilter {
             event_type: Some("runtime.queue_item.available".to_owned()),
-            ..Filter::default()
+            ..EventFilter::default()
         })
         .unwrap()
         .iter()
@@ -2488,7 +2514,7 @@ fn completion_vector_commits_ordered_controls_atomically() {
     );
     assert!(!dispatch.claim_is_current(&claim, 203).unwrap());
     let journal_types: Vec<String> = dispatch
-        .list_events(&Filter::default())
+        .list_events(&EventFilter::default())
         .unwrap()
         .into_iter()
         .map(|event| event.event_type)
@@ -2635,7 +2661,7 @@ fn completion_cancels_owned_resources_in_control_order() {
     let session_id = "agent/worker/evt-cancel-control";
     route_specific_work(&mut dispatch, event, "worker", session_id, None);
     dispatch
-        .append_event(Event {
+        .append_trusted_event(Event {
             id: "wait-control-created".to_owned(),
             event_type: "runtime.wait.created".to_owned(),
             source: "zeta".to_owned(),
@@ -2757,7 +2783,7 @@ fn invalid_completion_proposal_writes_no_partial_success() {
             None,
         )
         .unwrap();
-    let before = dispatch.list_events(&Filter::default()).unwrap().len();
+    let before = dispatch.list_events(&EventFilter::default()).unwrap().len();
 
     let error = dispatch
         .complete_claimed_attempt(
@@ -2785,7 +2811,7 @@ fn invalid_completion_proposal_writes_no_partial_success() {
 
     assert_eq!(error.reason(), "cancellation_resource_not_found");
     assert_eq!(
-        dispatch.list_events(&Filter::default()).unwrap().len(),
+        dispatch.list_events(&EventFilter::default()).unwrap().len(),
         before
     );
     assert_eq!(
@@ -2813,7 +2839,7 @@ fn invalid_completion_proposal_writes_no_partial_success() {
             &AttemptFailure::new(
                 "2026-08-12T10:00:02Z",
                 "unknown cancellation handle",
-                DispatchErrorCode::MalformedEventPayload,
+                AttemptFailureCode::MalformedEventPayload,
                 RetryPolicy::default(),
             ),
         )
@@ -2864,7 +2890,7 @@ fn explicit_cancelled_completion_records_proposals_without_applying_them() {
     );
     assert_eq!(
         dispatch
-            .list_events(&Filter::default())
+            .list_events(&EventFilter::default())
             .unwrap()
             .iter()
             .filter(|event| event.event_type == "work.must-not-publish")
@@ -2885,7 +2911,7 @@ fn explicit_cancelled_completion_records_proposals_without_applying_them() {
 fn cancelled_completion_rejects_excess_identities_atomically() {
     let (mut dispatch, claim, _queue_item_id) =
         running_completion_attempt("cancelled-excess-identities");
-    let before = dispatch.list_events(&Filter::default()).unwrap().len();
+    let before = dispatch.list_events(&EventFilter::default()).unwrap().len();
 
     let error = dispatch
         .complete_claimed_attempt(
@@ -2920,7 +2946,7 @@ fn cancelled_completion_rejects_excess_identities_atomically() {
         error => panic!("unexpected error: {error}"),
     }
     assert_eq!(
-        dispatch.list_events(&Filter::default()).unwrap().len(),
+        dispatch.list_events(&EventFilter::default()).unwrap().len(),
         before
     );
     assert_eq!(
@@ -2933,7 +2959,7 @@ fn cancelled_completion_rejects_excess_identities_atomically() {
 #[test]
 fn cancelled_disposition_still_validates_typed_controls() {
     let (mut dispatch, claim, _queue_item_id) = running_completion_attempt("cancel-validation");
-    let before = dispatch.list_events(&Filter::default()).unwrap().len();
+    let before = dispatch.list_events(&EventFilter::default()).unwrap().len();
 
     let error = dispatch
         .complete_claimed_attempt(
@@ -2962,7 +2988,7 @@ fn cancelled_disposition_still_validates_typed_controls() {
         error => panic!("unexpected error: {error}"),
     }
     assert_eq!(
-        dispatch.list_events(&Filter::default()).unwrap().len(),
+        dispatch.list_events(&EventFilter::default()).unwrap().len(),
         before
     );
     assert!(dispatch.claim_is_current(&claim, 203).unwrap());
@@ -3017,7 +3043,7 @@ fn durable_cancellation_wins_over_a_valid_success_proposal() {
     );
     assert_eq!(
         dispatch
-            .list_events(&Filter::default())
+            .list_events(&EventFilter::default())
             .unwrap()
             .iter()
             .filter(|event| event.event_type == "work.must-not-publish")
@@ -3062,7 +3088,7 @@ fn successful_disposition_does_not_infer_cancellation_from_metadata() {
 #[test]
 fn reserved_control_metadata_is_rejected_before_any_success_fact() {
     let (mut dispatch, claim, _queue_item_id) = running_completion_attempt("typed-reserved");
-    let before = dispatch.list_events(&Filter::default()).unwrap().len();
+    let before = dispatch.list_events(&EventFilter::default()).unwrap().len();
 
     let error = dispatch
         .complete_claimed_attempt(
@@ -3088,7 +3114,7 @@ fn reserved_control_metadata_is_rejected_before_any_success_fact() {
         error => panic!("unexpected error: {error}"),
     }
     assert_eq!(
-        dispatch.list_events(&Filter::default()).unwrap().len(),
+        dispatch.list_events(&EventFilter::default()).unwrap().len(),
         before
     );
     assert!(dispatch.claim_is_current(&claim, 203).unwrap());
@@ -3097,7 +3123,7 @@ fn reserved_control_metadata_is_rejected_before_any_success_fact() {
 #[test]
 fn duplicate_typed_control_positions_are_rejected_atomically() {
     let (mut dispatch, claim, _queue_item_id) = running_completion_attempt("typed-duplicate");
-    let before = dispatch.list_events(&Filter::default()).unwrap().len();
+    let before = dispatch.list_events(&EventFilter::default()).unwrap().len();
     let controls = vec![
         AttemptControl::publish("pub-first", "work.first", Map::new(), None, 0),
         AttemptControl::wait("wait-second", "work.second", Map::new(), None, 0),
@@ -3127,7 +3153,7 @@ fn duplicate_typed_control_positions_are_rejected_atomically() {
         error => panic!("unexpected error: {error}"),
     }
     assert_eq!(
-        dispatch.list_events(&Filter::default()).unwrap().len(),
+        dispatch.list_events(&EventFilter::default()).unwrap().len(),
         before
     );
     assert!(dispatch.claim_is_current(&claim, 203).unwrap());
@@ -3161,7 +3187,7 @@ fn invalid_typed_control_fields_are_rejected_before_any_success_fact() {
 
     for (prefix, control, field) in cases {
         let (mut dispatch, claim, _queue_item_id) = running_completion_attempt(prefix);
-        let before = dispatch.list_events(&Filter::default()).unwrap().len();
+        let before = dispatch.list_events(&EventFilter::default()).unwrap().len();
         let error = dispatch
             .complete_claimed_attempt(
                 &claim,
@@ -3184,7 +3210,7 @@ fn invalid_typed_control_fields_are_rejected_before_any_success_fact() {
             error => panic!("unexpected error: {error}"),
         }
         assert_eq!(
-            dispatch.list_events(&Filter::default()).unwrap().len(),
+            dispatch.list_events(&EventFilter::default()).unwrap().len(),
             before
         );
         assert!(dispatch.claim_is_current(&claim, 203).unwrap());
@@ -3196,7 +3222,7 @@ fn matching_event_resumes_wait_once() {
     let case = scripted_case("waits", "matching_event_resumes_once");
     let mut dispatch = Dispatch::open_in_memory().unwrap();
     let wait_created = runtime_event(&case["created_event"]);
-    dispatch.append_event(wait_created.clone()).unwrap();
+    dispatch.append_trusted_event(wait_created.clone()).unwrap();
 
     let matching_draft = &case["matching_draft"];
     let matching_input = Event {
@@ -3233,7 +3259,7 @@ fn matching_event_resumes_wait_once() {
         .unwrap()
         .is_empty());
 
-    let events = dispatch.list_events(&Filter::default()).unwrap();
+    let events = dispatch.list_events(&EventFilter::default()).unwrap();
     let expected = case["expected"]["events"].as_array().unwrap();
     assert_eq!(events.len(), expected.len());
     for (actual, expected) in events.iter().zip(expected) {
@@ -3285,7 +3311,7 @@ fn matching_event_resumes_wait_once() {
 fn due_wait_timeout_resumes_session_once() {
     let mut dispatch = Dispatch::open_in_memory().unwrap();
     dispatch
-        .append_event(Event {
+        .append_trusted_event(Event {
             id: "wait-timeout-created".to_owned(),
             event_type: "runtime.wait.created".to_owned(),
             source: "zeta".to_owned(),
@@ -3387,7 +3413,7 @@ fn due_wait_timeout_resumes_session_once() {
 fn resource_cancellation_is_authorized_atomic_and_idempotent() {
     let mut dispatch = Dispatch::open_in_memory().unwrap();
     dispatch
-        .append_event(Event {
+        .append_trusted_event(Event {
             id: "wait-cancel-created".to_owned(),
             event_type: "runtime.wait.created".to_owned(),
             source: "zeta".to_owned(),
@@ -3468,7 +3494,7 @@ fn resource_cancellation_is_authorized_atomic_and_idempotent() {
     assert!(repeated.event().is_none());
 
     dispatch
-        .append_event(Event {
+        .append_trusted_event(Event {
             id: "deferred-cancel-created".to_owned(),
             event_type: "runtime.deferred_publication.created".to_owned(),
             source: "zeta".to_owned(),
@@ -3548,7 +3574,7 @@ fn direct_session_message_cancels_wait_and_binds_queue_atomically() {
     let mut dispatch = Dispatch::open_in_memory().unwrap();
     let session_id = SessionId::from_str("session-direct").unwrap();
     dispatch
-        .append_event(Event {
+        .append_trusted_event(Event {
             id: "direct-wait-created".to_owned(),
             event_type: "runtime.wait.created".to_owned(),
             source: "zeta".to_owned(),
@@ -3656,7 +3682,10 @@ fn direct_session_message_cancels_wait_and_binds_queue_atomically() {
     assert!(!repeated.changed());
     assert_eq!(repeated.event_id(), "direct-message-requested");
     assert_eq!(repeated.events().len(), 2);
-    assert_eq!(dispatch.list_events(&Filter::default()).unwrap().len(), 4);
+    assert_eq!(
+        dispatch.list_events(&EventFilter::default()).unwrap().len(),
+        4
+    );
     dispatch.rebuild_projections().unwrap();
     assert_eq!(
         dispatch.list_waits().unwrap()[0].status(),
@@ -3677,7 +3706,7 @@ fn direct_session_message_owner_conflict_writes_nothing() {
     let mut dispatch = Dispatch::open_in_memory().unwrap();
     let session_id = SessionId::from_str("session-conflict").unwrap();
     dispatch
-        .append_event(Event {
+        .append_trusted_event(Event {
             id: "conflict-wait-created".to_owned(),
             event_type: "runtime.wait.created".to_owned(),
             source: "zeta".to_owned(),
@@ -3720,7 +3749,10 @@ fn direct_session_message_owner_conflict_writes_nothing() {
         .unwrap_err();
 
     assert_eq!(error.reason(), "cancellation_authority_mismatch");
-    assert_eq!(dispatch.list_events(&Filter::default()).unwrap().len(), 1);
+    assert_eq!(
+        dispatch.list_events(&EventFilter::default()).unwrap().len(),
+        1
+    );
     assert_eq!(
         dispatch.list_waits().unwrap()[0].status(),
         WaitStatus::Active
@@ -3736,7 +3768,7 @@ fn due_publication_consumes_pending_deferred_publication_once() {
     );
     let mut dispatch = Dispatch::open_in_memory().unwrap();
     dispatch
-        .append_event(runtime_event(&case["created_event"]))
+        .append_trusted_event(runtime_event(&case["created_event"]))
         .unwrap();
 
     let published = dispatch
@@ -3755,7 +3787,7 @@ fn due_publication_consumes_pending_deferred_publication_once() {
         .unwrap()
         .is_none());
 
-    let events = dispatch.list_events(&Filter::default()).unwrap();
+    let events = dispatch.list_events(&EventFilter::default()).unwrap();
     let expected = case["expected"]["events"].as_array().unwrap();
     assert_eq!(events.len(), expected.len());
     for (actual, expected) in events.iter().zip(expected) {
@@ -3795,7 +3827,7 @@ fn due_publication_consumes_pending_deferred_publication_once() {
 fn due_publication_and_matching_waits_commit_or_roll_back_together() {
     let mut dispatch = Dispatch::open_in_memory().unwrap();
     dispatch
-        .append_event(Event {
+        .append_trusted_event(Event {
             id: "publication-wait-created".to_owned(),
             event_type: "runtime.wait.created".to_owned(),
             source: "zeta".to_owned(),
@@ -3819,7 +3851,7 @@ fn due_publication_and_matching_waits_commit_or_roll_back_together() {
         })
         .unwrap();
     dispatch
-        .append_event(Event {
+        .append_trusted_event(Event {
             id: "publication-created".to_owned(),
             event_type: "runtime.deferred_publication.created".to_owned(),
             source: "zeta".to_owned(),
@@ -3845,7 +3877,7 @@ fn due_publication_and_matching_waits_commit_or_roll_back_together() {
         .unwrap();
     let mut collision = journal_event("publication-terminal-collision", None);
     collision.event_type = "zeta.test".to_owned();
-    dispatch.append_event(collision).unwrap();
+    dispatch.append_trusted_event(collision).unwrap();
 
     let error = dispatch
         .publish_next_due_deferred_publication(
@@ -3860,7 +3892,10 @@ fn due_publication_and_matching_waits_commit_or_roll_back_together() {
         .unwrap_err();
 
     assert_eq!(error.reason(), "runtime_event_identity_collision");
-    assert_eq!(dispatch.list_events(&Filter::default()).unwrap().len(), 3);
+    assert_eq!(
+        dispatch.list_events(&EventFilter::default()).unwrap().len(),
+        3
+    );
     assert_eq!(
         dispatch.list_waits().unwrap()[0].status(),
         WaitStatus::Active
@@ -3910,6 +3945,314 @@ fn due_publication_and_matching_waits_commit_or_roll_back_together() {
     assert_eq!(queue_items[1].status(), QueueItemStatus::Available);
 }
 
+#[derive(Clone, Copy)]
+enum EffectResultShape {
+    Absent,
+    Object,
+    Scalar,
+}
+
+struct EffectProjectionCase {
+    name: &'static str,
+    semantics: &'static str,
+    expected_semantics: EffectDeliverySemantics,
+    lifecycle: &'static [(&'static str, EffectResultShape)],
+    expected_status: EffectStatus,
+}
+
+struct InvalidEffectProjectionCase {
+    name: &'static str,
+    semantics: &'static str,
+    lifecycle: &'static [(&'static str, EffectResultShape, Option<&'static str>)],
+    expected_field: &'static str,
+}
+
+struct EffectEventFields<'a> {
+    name: &'a str,
+    key: &'a str,
+    semantics: &'a str,
+    status: &'a str,
+    result_shape: EffectResultShape,
+    payload_status: Option<&'a str>,
+    position: usize,
+}
+
+fn effect_result_value(name: &str, status: &str, result_shape: EffectResultShape) -> Option<Value> {
+    match result_shape {
+        EffectResultShape::Absent => None,
+        EffectResultShape::Object => Some(json!({"case": name, "status": status})),
+        EffectResultShape::Scalar => Some(json!("invalid result")),
+    }
+}
+
+fn effect_projection_event(fields: EffectEventFields<'_>) -> Event {
+    let EffectEventFields {
+        name,
+        key,
+        semantics,
+        status,
+        result_shape,
+        payload_status,
+        position,
+    } = fields;
+    let operation = format!("test.{name}");
+    let mut payload: Map<String, Value> = serde_json::from_value(json!({
+        "effect_key": key,
+        "operation": operation,
+        "semantics": semantics,
+        "scope": format!("scope-{name}"),
+        "params": {"case": name},
+        "status": payload_status.unwrap_or(status),
+    }))
+    .unwrap();
+    if let Some(result) = effect_result_value(name, status, result_shape) {
+        payload.insert("result".to_owned(), result);
+    }
+    Event {
+        id: format!("effect-{name}-{position}"),
+        event_type: format!("runtime.effect.{status}"),
+        source: "capability:test.effect".to_owned(),
+        payload,
+        idempotency_key: Some(format!("runtime.effect.{status}:{key}")),
+        caused_by: Some(format!("attempt-{name}")),
+        session_id: None,
+        run_id: None,
+        turn_id: None,
+        timestamp_ms: 10_000 + position as i64,
+        cursor: None,
+    }
+}
+
+#[test]
+fn effect_projection_codecs_transitions_and_rebuild_are_stable() {
+    let cases = [
+        EffectProjectionCase {
+            name: "planned",
+            semantics: "idempotent_with_key",
+            expected_semantics: EffectDeliverySemantics::IdempotentWithKey,
+            lifecycle: &[("planned", EffectResultShape::Absent)],
+            expected_status: EffectStatus::Planned,
+        },
+        EffectProjectionCase {
+            name: "started",
+            semantics: "connector_deduplicated",
+            expected_semantics: EffectDeliverySemantics::ConnectorDeduplicated,
+            lifecycle: &[
+                ("planned", EffectResultShape::Absent),
+                ("started", EffectResultShape::Absent),
+            ],
+            expected_status: EffectStatus::Started,
+        },
+        EffectProjectionCase {
+            name: "completed",
+            semantics: "at_least_once",
+            expected_semantics: EffectDeliverySemantics::AtLeastOnce,
+            lifecycle: &[
+                ("planned", EffectResultShape::Absent),
+                ("started", EffectResultShape::Absent),
+                ("completed", EffectResultShape::Object),
+            ],
+            expected_status: EffectStatus::Completed,
+        },
+        EffectProjectionCase {
+            name: "failed",
+            semantics: "idempotent_with_key",
+            expected_semantics: EffectDeliverySemantics::IdempotentWithKey,
+            lifecycle: &[
+                ("planned", EffectResultShape::Absent),
+                ("started", EffectResultShape::Absent),
+                ("failed", EffectResultShape::Object),
+            ],
+            expected_status: EffectStatus::Failed,
+        },
+        EffectProjectionCase {
+            name: "ambiguous",
+            semantics: "unsafe_to_retry",
+            expected_semantics: EffectDeliverySemantics::UnsafeToRetry,
+            lifecycle: &[
+                ("planned", EffectResultShape::Absent),
+                ("started", EffectResultShape::Absent),
+                ("ambiguous", EffectResultShape::Object),
+            ],
+            expected_status: EffectStatus::Ambiguous,
+        },
+    ];
+    let mut dispatch = Dispatch::open_in_memory().unwrap();
+    for EffectProjectionCase {
+        name,
+        semantics,
+        expected_semantics,
+        lifecycle,
+        expected_status,
+    } in cases
+    {
+        let operation = format!("test.{name}");
+        let params = serde_json::from_value(json!({"case": name})).unwrap();
+        let key = effect_key(&format!("scope-{name}"), &operation, &params).unwrap();
+        for (position, &(status, result_shape)) in lifecycle.iter().enumerate() {
+            dispatch
+                .append_trusted_event(effect_projection_event(EffectEventFields {
+                    name,
+                    key: &key,
+                    semantics,
+                    status,
+                    result_shape,
+                    payload_status: None,
+                    position,
+                }))
+                .unwrap();
+        }
+        let effects = dispatch.list_effects().unwrap();
+        let effect = &effects[effects.len() - 1];
+        assert_eq!(effect.key(), key);
+        assert_eq!(effect.semantics(), expected_semantics);
+        assert_eq!(effect.status(), expected_status);
+        let &(terminal_status, result_shape) = lifecycle.last().unwrap();
+        let expected_result = effect_result_value(name, terminal_status, result_shape)
+            .and_then(|value| value.as_object().cloned());
+        assert_eq!(effect.result(), expected_result.as_ref());
+        let terminal = match expected_status {
+            EffectStatus::Planned => false,
+            EffectStatus::Started => false,
+            EffectStatus::Completed => true,
+            EffectStatus::Failed => true,
+            EffectStatus::Ambiguous => true,
+        };
+        assert_eq!(effect.terminal_event_id().is_some(), terminal);
+    }
+    let before_rebuild = dispatch.list_effects().unwrap();
+    dispatch.rebuild_projections().unwrap();
+    assert_eq!(dispatch.list_effects().unwrap(), before_rebuild);
+
+    let invalid_cases = [
+        InvalidEffectProjectionCase {
+            name: "unknown-semantics",
+            semantics: "unknown",
+            lifecycle: &[("planned", EffectResultShape::Absent, None)],
+            expected_field: "semantics",
+        },
+        InvalidEffectProjectionCase {
+            name: "unknown-status",
+            semantics: "idempotent_with_key",
+            lifecycle: &[("unknown", EffectResultShape::Absent, None)],
+            expected_field: "status",
+        },
+        InvalidEffectProjectionCase {
+            name: "status-mismatch",
+            semantics: "idempotent_with_key",
+            lifecycle: &[("planned", EffectResultShape::Absent, Some("started"))],
+            expected_field: "status",
+        },
+        InvalidEffectProjectionCase {
+            name: "nonterminal-result",
+            semantics: "idempotent_with_key",
+            lifecycle: &[("planned", EffectResultShape::Object, None)],
+            expected_field: "result",
+        },
+        InvalidEffectProjectionCase {
+            name: "missing-terminal-result",
+            semantics: "idempotent_with_key",
+            lifecycle: &[
+                ("planned", EffectResultShape::Absent, None),
+                ("started", EffectResultShape::Absent, None),
+                ("completed", EffectResultShape::Absent, None),
+            ],
+            expected_field: "result",
+        },
+        InvalidEffectProjectionCase {
+            name: "scalar-terminal-result",
+            semantics: "idempotent_with_key",
+            lifecycle: &[
+                ("planned", EffectResultShape::Absent, None),
+                ("started", EffectResultShape::Absent, None),
+                ("completed", EffectResultShape::Scalar, None),
+            ],
+            expected_field: "result",
+        },
+        InvalidEffectProjectionCase {
+            name: "illegal-transition",
+            semantics: "idempotent_with_key",
+            lifecycle: &[
+                ("planned", EffectResultShape::Absent, None),
+                ("completed", EffectResultShape::Object, None),
+            ],
+            expected_field: "status",
+        },
+        InvalidEffectProjectionCase {
+            name: "unsafe-failure",
+            semantics: "unsafe_to_retry",
+            lifecycle: &[
+                ("planned", EffectResultShape::Absent, None),
+                ("started", EffectResultShape::Absent, None),
+                ("failed", EffectResultShape::Object, None),
+            ],
+            expected_field: "status",
+        },
+        InvalidEffectProjectionCase {
+            name: "retry-safe-ambiguity",
+            semantics: "at_least_once",
+            lifecycle: &[
+                ("planned", EffectResultShape::Absent, None),
+                ("started", EffectResultShape::Absent, None),
+                ("ambiguous", EffectResultShape::Object, None),
+            ],
+            expected_field: "semantics",
+        },
+    ];
+    for InvalidEffectProjectionCase {
+        name,
+        semantics,
+        lifecycle,
+        expected_field,
+    } in invalid_cases
+    {
+        let mut dispatch = Dispatch::open_in_memory().unwrap();
+        let operation = format!("test.{name}");
+        let params = serde_json::from_value(json!({"case": name})).unwrap();
+        let key = effect_key(&format!("scope-{name}"), &operation, &params).unwrap();
+        let Some((candidate, prelude)) = lifecycle.split_last() else {
+            panic!("invalid effect case must include a candidate");
+        };
+        for (position, &(status, result_shape, payload_status)) in prelude.iter().enumerate() {
+            dispatch
+                .append_trusted_event(effect_projection_event(EffectEventFields {
+                    name,
+                    key: &key,
+                    semantics,
+                    status,
+                    result_shape,
+                    payload_status,
+                    position,
+                }))
+                .unwrap();
+        }
+        let retained_events = dispatch.list_events(&EventFilter::default()).unwrap();
+        let retained_effects = dispatch.list_effects().unwrap();
+        let &(status, result_shape, payload_status) = candidate;
+        let error = dispatch
+            .append_trusted_event(effect_projection_event(EffectEventFields {
+                name,
+                key: &key,
+                semantics,
+                status,
+                result_shape,
+                payload_status,
+                position: prelude.len(),
+            }))
+            .unwrap_err();
+        let DispatchError::InvalidLifecycleEvent { event_id, field } = error else {
+            panic!("unexpected invalid effect error: {error}");
+        };
+        assert_eq!(event_id, format!("effect-{name}-{}", prelude.len()));
+        assert_eq!(field, expected_field);
+        assert_eq!(
+            dispatch.list_events(&EventFilter::default()).unwrap(),
+            retained_events
+        );
+        assert_eq!(dispatch.list_effects().unwrap(), retained_effects);
+    }
+}
+
 #[test]
 fn unsafe_effect_failure_projects_as_a_retry_blocker() {
     let case = scripted_case("effects", "unsafe_failure_becomes_ambiguous");
@@ -3935,7 +4278,7 @@ fn unsafe_effect_failure_projects_as_a_retry_blocker() {
             payload.insert("result".to_owned(), result.clone());
         }
         dispatch
-            .append_event(Event {
+            .append_trusted_event(Event {
                 id: format!("effect-event-{position}"),
                 event_type: format!("runtime.effect.{status}"),
                 source: "capability:test.bash".to_owned(),
@@ -3952,7 +4295,7 @@ fn unsafe_effect_failure_projects_as_a_retry_blocker() {
     }
 
     let expected = case["expected"].as_array().unwrap();
-    let events = dispatch.list_events(&Filter::default()).unwrap();
+    let events = dispatch.list_events(&EventFilter::default()).unwrap();
     assert_eq!(events.len(), expected.len());
     for (actual, expected) in events.iter().zip(expected) {
         assert_eq!(actual.event_type, expected["type"]);
@@ -4119,7 +4462,7 @@ fn append_session_queue_for_agent(
             Value::String(session_id.to_owned()),
         );
         dispatch
-            .append_event(Event {
+            .append_trusted_event(Event {
                 id: format!("session-{event_id}-{suffix}-{position}"),
                 event_type: format!("runtime.queue_item.{suffix}"),
                 source: "zeta".to_owned(),
@@ -4194,7 +4537,7 @@ fn append_session_cancellation_request(dispatch: &mut Dispatch) {
     );
     payload.insert("status".to_owned(), Value::String("claimed".to_owned()));
     dispatch
-        .append_event(Event {
+        .append_trusted_event(Event {
             id: "evt_cancel_request".to_owned(),
             event_type: "runtime.queue_item.cancel_requested".to_owned(),
             source: "zeta".to_owned(),
@@ -4237,7 +4580,7 @@ fn append_session_running_attempt(dispatch: &mut Dispatch) {
     );
     payload.insert("run_id".to_owned(), Value::String("run_running".to_owned()));
     dispatch
-        .append_event(Event {
+        .append_trusted_event(Event {
             id: "session-attempt-running".to_owned(),
             event_type: "runtime.attempt.started".to_owned(),
             source: "zeta".to_owned(),
@@ -4273,7 +4616,7 @@ fn append_session_wait(dispatch: &mut Dispatch) {
     );
     payload.insert("project_generation".to_owned(), Value::Null);
     dispatch
-        .append_event(Event {
+        .append_trusted_event(Event {
             id: "session-wait-active".to_owned(),
             event_type: "runtime.wait.created".to_owned(),
             source: "zeta".to_owned(),

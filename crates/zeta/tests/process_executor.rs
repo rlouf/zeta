@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde_json::{json, Map, Value};
 use tempfile::TempDir;
 use zeta::{CancellationToken, ProcessExecutor, ProcessExecutorConfig, ProcessLaunch};
-use zeta_agent::{AbortReason, AbortSignal, CapabilityInvocation, ToolExecutor};
+use zeta_agent::{AbortReason, AbortSignal, CapabilityExecutor, CapabilityInvocation};
 
 struct ActiveAbort;
 
@@ -122,6 +122,12 @@ fn process_executor_preserves_provider_retryability() {
         error.message,
         "provider call failed [provider_rejected, retryable=true]: rejected by fixture"
     );
+
+    let again = effectful_invocation(json!({"text": "again"}));
+    let result =
+        run(executor.execute(&again, &ActiveAbort)).expect("the provider must remain reusable");
+    assert_eq!(result["delivered"], "again");
+    assert_eq!(executor.initialization_count(), 1);
 }
 
 #[test]
@@ -174,6 +180,28 @@ fn process_executor_recycles_after_child_exit() {
     let error =
         run(executor.execute(&exit, &ActiveAbort)).expect_err("the exiting provider must fail");
     assert!(error.message.contains("closed stdout"));
+
+    let again = effectful_invocation(json!({"text": "again"}));
+    let result =
+        run(executor.execute(&again, &ActiveAbort)).expect("the recycled provider must succeed");
+    assert_eq!(result["delivered"], "again");
+    assert_eq!(executor.initialization_count(), 2);
+}
+
+#[test]
+fn process_executor_recycles_after_a_non_object_result() {
+    let temp = TempDir::new().expect("temporary directory");
+    let marker = temp.path().join("runs");
+    let mut executor = ProcessExecutor::new(marker_launch(&marker)).expect("valid launch");
+
+    let invalid = effectful_invocation(json!({"non_object": true}));
+    let error = run(executor.execute(&invalid, &ActiveAbort))
+        .expect_err("the provider result must be an object");
+    assert_eq!(
+        error.message,
+        "JSON-RPC error -32600: the result of \"test.deliver\" must be an object"
+    );
+    assert!(!executor.is_running());
 
     let again = effectful_invocation(json!({"text": "again"}));
     let result =

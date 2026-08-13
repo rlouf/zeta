@@ -215,7 +215,6 @@ pub struct PreparedAgent {
     project_generation_id: ProjectGenerationId,
     agent_slug: String,
     agent_description: String,
-    allowed_capabilities: Vec<zeta_agent::CapabilityId>,
     capabilities: Vec<ResolvedCapability>,
     model_name: Option<String>,
     model_url: Option<String>,
@@ -359,12 +358,16 @@ impl PreparedAgent {
             base_directory_override,
             self.authored_base_directory.as_deref(),
         )?;
+        let mut allowed_capabilities = Vec::with_capacity(self.capabilities.len());
+        for capability in &self.capabilities {
+            allowed_capabilities.push(capability.canonical.id.clone());
+        }
         Ok(AgentInvocation {
             objective,
             timeline,
             context,
             system_prompt: Some(self.agent_description.clone()),
-            allowed_capabilities: self.allowed_capabilities.clone(),
+            allowed_capabilities,
             tool_profile: self.tool_profile,
             max_model_calls,
             model_name: self.model_name.clone(),
@@ -424,14 +427,13 @@ pub fn prepare_agent(
     })?;
     let (model_name, model_url) = resolved_model_endpoint(execution);
     let (model_api, thinking, tool_profile) = resolved_model_contract(execution)?;
-    let (allowed_capabilities, capabilities) = resolved_capabilities(execution, tool_profile)?;
+    let capabilities = resolved_capabilities(execution, tool_profile)?;
     let publishable_events = publishable_events(execution)?;
     Ok(PreparedAgent {
         execution_manifest_id: execution.id,
         project_generation_id: execution.project_generation,
         agent_slug: execution.agent.slug.clone(),
         agent_description: execution.agent.description.clone(),
-        allowed_capabilities,
         capabilities,
         model_name,
         model_url,
@@ -484,8 +486,7 @@ fn resolved_model_contract(
 fn resolved_capabilities(
     execution: &ExecutionManifest,
     profile: ToolProfile,
-) -> Result<(Vec<zeta_agent::CapabilityId>, Vec<ResolvedCapability>), PrepareAgentError> {
-    let mut allowed = Vec::with_capacity(execution.agent.tools.len());
+) -> Result<Vec<ResolvedCapability>, PrepareAgentError> {
     let mut resolved = Vec::with_capacity(execution.agent.tools.len());
     let mut names = BTreeSet::new();
     for id in &execution.agent.tools {
@@ -514,10 +515,9 @@ fn resolved_capabilities(
                 ),
             ));
         }
-        allowed.push(capability.canonical.id.clone());
         resolved.push(capability);
     }
-    Ok((allowed, resolved))
+    Ok(resolved)
 }
 
 fn delivery_semantics(value: AuthoredDeliverySemantics) -> AgentDeliverySemantics {

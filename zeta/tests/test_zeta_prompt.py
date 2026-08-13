@@ -534,7 +534,7 @@ async def python_prompt_vectors() -> dict[str, Any]:
             }
         )
     document = {
-        "version": 1,
+        "version": 2,
         "environment": asdict(PROMPT_VECTOR_ENVIRONMENT),
         "cases": cases,
     }

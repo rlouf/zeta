@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
 use zeta_authoring::{
-    derive_returns_schema, load_agent, matches, parse_agent, parse_skill, render_prompt,
-    scheduled_event_type, validate_prompt, AgentSpec, AuthoringErrorKind, EgressBinding,
-    EventRegistry, ExecutorSpec, IngressBinding, ModelSpec, RetrySpec, ScheduleEntry,
-    SkillResource, SkillSpec, SpecErrorKind,
+    agent_accepts_event, derive_returns_schema, load_agent, parse_agent, parse_skill,
+    render_prompt, scheduled_event_type, validate_prompt, AgentSpec, AuthoringErrorKind,
+    EgressBinding, EventRegistry, ExecutorSpec, IngressBinding, ModelSpec, RetrySpec,
+    ScheduleEntry, SkillResource, SkillSpec, SpecErrorKind,
 };
 
 const COMPLETE_AGENT: &[u8] = br#"---
@@ -537,20 +537,20 @@ fn schedules_add_one_synthetic_accept_type() {
             "agent.digest.scheduled".to_owned()
         ]
     );
-    assert!(matches(&spec, "repo.changed"));
-    assert!(matches(&spec, "agent.digest.scheduled"));
+    assert!(agent_accepts_event(&spec, "repo.changed"));
+    assert!(agent_accepts_event(&spec, "agent.digest.scheduled"));
     assert_eq!(scheduled_event_type("digest"), "agent.digest.scheduled");
 }
 
 #[test]
-fn disabled_agents_never_match_events() {
+fn disabled_agents_never_accept_events() {
     let spec = parse_agent(
         "worker",
         b"---\nname: Worker\ndescription: Works.\nenabled: false\naccepts: [work.requested]\n---\nWork.\n",
     )
     .unwrap();
 
-    assert!(!matches(&spec, "work.requested"));
+    assert!(!agent_accepts_event(&spec, "work.requested"));
 }
 
 #[test]

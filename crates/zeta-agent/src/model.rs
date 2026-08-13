@@ -44,8 +44,6 @@ pub struct ModelInput {
     pub max_tokens: u64,
     /// Selects a model when the caller resolved one.
     pub selected_model: Option<String>,
-    /// Selects an endpoint when the caller resolved one.
-    pub selected_url: Option<String>,
     /// Associates provider state with a session.
     pub session_id: Option<String>,
     /// Carries the resolved reasoning option.

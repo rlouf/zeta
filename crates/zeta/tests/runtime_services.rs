@@ -1,11 +1,18 @@
 use std::collections::{BTreeMap, VecDeque};
-use std::path::PathBuf;
+use std::fs;
+use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
+use std::os::unix::net::UnixListener;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Map, Value};
 use tempfile::tempdir;
+use zeta::runtime_services::{
+    RuntimeLease, RuntimeMetadata, RuntimeOwnerMode, RuntimePaths, RuntimePhase,
+    RuntimeSocketDisposition,
+};
 use zeta::{
     attempt_completion, prepare_agent, CallbackDraftRecorder, CallbackObserver, CancellationToken,
     CompletionHandoffErrorKind, ExecutorSelection, InvocationInputs, PrepareAgentErrorKind,
@@ -1621,4 +1628,219 @@ fn scheduler_runtime_vectors_match_the_python_ground_truth() {
             "scheduler vector {name:?} status diverged"
         );
     }
+}
+
+fn runtime_metadata(
+    paths: &RuntimePaths,
+    project_root: &Path,
+    instance_id: &str,
+    phase: RuntimePhase,
+) -> RuntimeMetadata {
+    RuntimeMetadata::new(
+        instance_id,
+        42,
+        RuntimeOwnerMode::Foreground,
+        phase,
+        project_root,
+        paths,
+        1_786_614_000_000,
+    )
+}
+
+#[test]
+fn runtime_paths_use_the_project_local_lifecycle_names() {
+    let directory = tempdir().expect("the runtime path directory must exist");
+    let paths = RuntimePaths::new(directory.path());
+
+    assert_eq!(paths.state_dir(), directory.path());
+    assert_eq!(paths.lock(), directory.path().join("runtime.lock"));
+    assert_eq!(paths.metadata(), directory.path().join("runtime.json"));
+    assert_eq!(paths.socket(), directory.path().join("runtime.sock"));
+    assert_eq!(
+        paths.control_socket(),
+        directory.path().join("runtime-control.sock")
+    );
+    assert_eq!(paths.log(), directory.path().join("runtime.log"));
+}
+
+#[test]
+fn runtime_lease_creates_owner_only_state_and_holds_one_persistent_inode() {
+    let directory = tempdir().expect("the runtime lease parent must exist");
+    let state_dir = directory.path().join(".zeta");
+    let paths = RuntimePaths::new(&state_dir);
+    let lease = RuntimeLease::acquire(paths.clone()).expect("the first owner must acquire");
+
+    let state_mode = fs::symlink_metadata(&state_dir)
+        .expect("the state directory must exist")
+        .permissions()
+        .mode()
+        & 0o777;
+    let lock_metadata = fs::symlink_metadata(paths.lock()).expect("the lock must exist");
+    assert_eq!(state_mode, 0o700);
+    assert_eq!(lock_metadata.permissions().mode() & 0o777, 0o600);
+    let inode = (lock_metadata.dev(), lock_metadata.ino());
+
+    let error = RuntimeLease::acquire(paths.clone())
+        .expect_err("a second owner must not acquire the held lease");
+    assert_eq!(error.reason(), "lease_held");
+
+    drop(lease);
+    let lease = RuntimeLease::acquire(paths.clone()).expect("the released lease must be reusable");
+    let reused = fs::symlink_metadata(paths.lock()).expect("the lock must remain");
+    assert_eq!((reused.dev(), reused.ino()), inode);
+    drop(lease);
+    assert!(paths.lock().exists());
+}
+
+#[test]
+fn runtime_metadata_replaces_atomically_with_owner_only_permissions() {
+    let directory = tempdir().expect("the runtime metadata directory must exist");
+    let state_dir = directory.path().join(".zeta");
+    let paths = RuntimePaths::new(&state_dir);
+    let lease = RuntimeLease::acquire(paths.clone()).expect("the owner must acquire");
+    let running = runtime_metadata(
+        &paths,
+        directory.path(),
+        "instance-running",
+        RuntimePhase::Running,
+    );
+    lease
+        .write_metadata(&running)
+        .expect("running metadata must commit");
+    let stopping = runtime_metadata(
+        &paths,
+        directory.path(),
+        "instance-stopping",
+        RuntimePhase::Stopping,
+    );
+    lease
+        .write_metadata(&stopping)
+        .expect("stopping metadata must replace running metadata");
+
+    let retained = RuntimeMetadata::read(&paths)
+        .expect("metadata must be readable")
+        .expect("metadata must exist");
+    assert_eq!(retained, stopping);
+    assert_eq!(retained.schema_version, 1);
+    assert_eq!(retained.zeta_version, env!("CARGO_PKG_VERSION"));
+    assert_eq!(retained.instance_id, "instance-stopping");
+    assert_eq!(retained.pid, 42);
+    assert_eq!(retained.mode, RuntimeOwnerMode::Foreground);
+    assert_eq!(retained.phase, RuntimePhase::Stopping);
+    assert_eq!(retained.project_root, directory.path());
+    assert_eq!(retained.state_dir, state_dir);
+    assert_eq!(retained.socket, paths.socket());
+    assert_eq!(retained.control_socket, paths.control_socket());
+    assert_eq!(retained.started_at_ms, 1_786_614_000_000);
+    let metadata_mode = fs::symlink_metadata(paths.metadata())
+        .expect("the metadata must exist")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(metadata_mode, 0o600);
+    assert!(!state_dir.join("runtime.json.tmp").exists());
+}
+
+#[test]
+fn runtime_lease_removes_only_matching_or_regular_stale_metadata() {
+    let directory = tempdir().expect("the runtime metadata directory must exist");
+    let paths = RuntimePaths::new(directory.path());
+    let lease = RuntimeLease::acquire(paths.clone()).expect("the owner must acquire");
+    let metadata = runtime_metadata(
+        &paths,
+        directory.path(),
+        "current-instance",
+        RuntimePhase::Running,
+    );
+    lease
+        .write_metadata(&metadata)
+        .expect("owner metadata must commit");
+
+    assert!(!lease
+        .remove_metadata("replacement-instance")
+        .expect("replacement metadata must be preserved"));
+    assert!(paths.metadata().exists());
+    assert!(lease
+        .remove_metadata("current-instance")
+        .expect("matching metadata must be removed"));
+
+    fs::write(paths.metadata(), "not json\n").expect("stale metadata must exist");
+    assert!(lease
+        .remove_stale_metadata()
+        .expect("regular stale metadata must be removed"));
+    assert!(!paths.metadata().exists());
+
+    let target = directory.path().join("metadata-target");
+    symlink(&target, paths.metadata()).expect("the metadata symlink must exist");
+    let error = lease
+        .remove_stale_metadata()
+        .expect_err("metadata symlinks must be preserved");
+    assert_eq!(error.reason(), "metadata");
+    assert!(fs::symlink_metadata(paths.metadata())
+        .expect("the metadata symlink must remain")
+        .file_type()
+        .is_symlink());
+}
+
+#[test]
+fn runtime_lease_removes_only_stale_lifecycle_sockets() {
+    let directory = tempdir().expect("the stale socket directory must exist");
+    let paths = RuntimePaths::new(directory.path());
+    let lease = RuntimeLease::acquire(paths.clone()).expect("the owner must acquire");
+    let runtime = UnixListener::bind(paths.socket()).expect("the stale fixture must bind");
+    let control = UnixListener::bind(paths.control_socket()).expect("the stale fixture must bind");
+    drop(runtime);
+    drop(control);
+
+    let reconciled = lease
+        .reconcile_stale_sockets()
+        .expect("stale sockets must reconcile");
+
+    assert_eq!(reconciled.runtime, RuntimeSocketDisposition::RemovedStale);
+    assert_eq!(reconciled.control, RuntimeSocketDisposition::RemovedStale);
+    assert!(!paths.socket().exists());
+    assert!(!paths.control_socket().exists());
+}
+
+#[test]
+fn runtime_lease_preserves_live_sockets_without_partial_stale_cleanup() {
+    let directory = tempdir().expect("the live socket directory must exist");
+    let paths = RuntimePaths::new(directory.path());
+    let lease = RuntimeLease::acquire(paths.clone()).expect("the owner must acquire");
+    let stale = UnixListener::bind(paths.socket()).expect("the stale fixture must bind");
+    drop(stale);
+    let live = UnixListener::bind(paths.control_socket()).expect("the live fixture must bind");
+
+    let error = lease
+        .reconcile_stale_sockets()
+        .expect_err("a live endpoint must prevent reconciliation");
+
+    assert_eq!(error.reason(), "socket_live");
+    assert!(paths.socket().exists());
+    assert!(paths.control_socket().exists());
+    drop(live);
+}
+
+#[test]
+fn runtime_lease_preserves_regular_files_and_symlinks() {
+    let directory = tempdir().expect("the occupied socket directory must exist");
+    let paths = RuntimePaths::new(directory.path());
+    let lease = RuntimeLease::acquire(paths.clone()).expect("the owner must acquire");
+    fs::write(paths.socket(), "occupied").expect("the regular fixture must exist");
+    let target = directory.path().join("control-target");
+    symlink(&target, paths.control_socket()).expect("the symlink fixture must exist");
+
+    let error = lease
+        .reconcile_stale_sockets()
+        .expect_err("non-socket entries must prevent reconciliation");
+
+    assert_eq!(error.reason(), "socket_occupied");
+    assert_eq!(
+        fs::read_to_string(paths.socket()).expect("the regular fixture must remain"),
+        "occupied"
+    );
+    assert!(fs::symlink_metadata(paths.control_socket())
+        .expect("the symlink fixture must remain")
+        .file_type()
+        .is_symlink());
 }

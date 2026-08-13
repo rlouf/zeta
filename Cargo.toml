@@ -15,11 +15,13 @@ base64 = "=0.22.1"
 blake3 = { version = "=1.5.5", features = ["mmap"] }
 chrono = "0.4"
 chrono-tz = "0.10"
+clap = { version = "4", features = ["derive"] }
 croner = "3"
 jsonschema = { version = "0.33", default-features = false }
 minijinja = { version = "2", default-features = false, features = ["builtins", "macros", "serde"] }
 num-bigint = "0.4"
 rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
+rustix = { version = "0.38", features = ["fs", "process", "stdio"] }
 rustpython-format = { version = "0.4", default-features = false, features = ["num-bigint"] }
 serde = { version = "=1.0.219", features = ["derive"] }
 serde_json = { version = "=1.0.140", features = ["arbitrary_precision"] }

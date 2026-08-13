@@ -13,7 +13,8 @@ embed and test.
 ## What it contains
 
 - A supervised executor for installed capability providers that speak Zeta IPC.
-- A local Unix-socket JSON-RPC endpoint for embedding the application host.
+- Separate application and lifecycle-control Unix-socket JSON-RPC endpoints.
+- Native `up`, `down`, and `status` process lifecycle commands.
 - A verified bridge from authored manifests to portable agent invocations.
 - A compiled recurring scheduler backed by durable Dispatch journal facts.
 - Conversion from verified project manifests to deterministic Dispatch routes.
@@ -28,11 +29,13 @@ checks the declared methods, sends direct calls, and reaps the whole process
 group on cancellation, timeout, exit, shutdown, or drop.
 
 `LocalSocketServer` binds an explicitly supplied absolute path, restricts the
-socket to its owner, and serves multiple initialized Zeta IPC clients. Host
-requests are delegated through a caller-provided function, while durable events
-can be broadcast as notifications. Client shutdown requests are disabled, and
-cleanup removes the filesystem entry only while it still identifies the socket
-created by that server. No CLI command starts this endpoint yet.
+socket to its owner, and serves multiple initialized Zeta IPC clients. The
+application endpoint delegates host requests through a caller-provided
+function, broadcasts durable event notifications, and disables client shutdown
+requests. The distinct control endpoint exposes only lifecycle health and
+shutdown authority. Both endpoints report the same runtime instance ID, and
+cleanup removes a filesystem entry only while it still identifies the socket
+created by that server.
 
 `routes_from_project` is owned by this host because it is the composition point
 between `zeta-manifest` and `zeta-dispatch`; those domain crates remain
@@ -48,9 +51,11 @@ Dispatch does not parse calendar policy; future agent publications remain its
 separate deferred-publication concern.
 
 The native crate currently exposes this host operation without a native worker
-loop. The future `zeta up` lifecycle must construct `Scheduler` for the active
-project generation and call `tick` before deferred publications, wait timeouts,
-and queue claims, matching the existing Python worker order.
+loop. `zeta up` therefore means that the native process and control plane are
+ready; application requests return `runtime_not_available`. A later worker
+slice must construct `Scheduler` for the active project generation and call
+`tick` before deferred publications, wait timeouts, and queue claims, matching
+the existing Python worker order.
 
 ```rust
 use zeta::Scheduler;
@@ -100,3 +105,35 @@ to the host that owns provider lifecycle.
 ```console
 $ cargo build -p zeta
 ```
+
+## Native lifecycle
+
+Run the control plane in the foreground or detach it after a readiness
+handshake:
+
+```console
+$ cargo run -p zeta -- up
+running 12345
+
+$ cargo run -p zeta -- up --detach
+started 12346
+```
+
+Inspect or stop the runtime from the same project tree:
+
+```console
+$ cargo run -p zeta -- status
+running
+
+$ cargo run -p zeta -- status --json
+{"status":"running","pid":12346,"instance_id":"...","project_root":"/...","state_dir":"/.../.zeta","socket":"/.../.zeta/runtime.sock","control_socket":"/.../.zeta/runtime-control.sock","detail":null}
+
+$ cargo run -p zeta -- down
+stopped
+```
+
+`--state-dir DIR` overrides project-local state discovery for all three
+commands. `up --project-root DIR` changes the authored project root. Runtime
+state uses an advisory lease, atomic owner metadata, separate owner-only
+application and control sockets, and `runtime.log` for detached diagnostics.
+`status` is read-only, and `down` never signals a PID read from metadata.

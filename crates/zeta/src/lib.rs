@@ -18,7 +18,7 @@ use zeta_dispatch::{AttemptCompletion, AttemptCompletionDisposition, AttemptCont
 use zeta_ipc::{
     validate_message, Action, ErrorObject, ErrorResponse, Frame, FrameReader, Message,
     Notification, PeerIdentity, Request, Role, RuntimeConfig, Session, ShutdownDirection,
-    MAX_FRAME_BYTES,
+    MAX_FRAME_BYTES, METHOD_NOT_FOUND,
 };
 use zeta_journal::Event;
 
@@ -36,6 +36,48 @@ const LOCAL_NOTIFICATION_CAPACITY: usize = 64;
 
 type LocalRequestHandler = dyn Fn(Request) -> Result<Value, ErrorObject> + Send + Sync + 'static;
 
+/// Selects the protocol surface and shutdown authority of a local socket.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LocalSocketPurpose {
+    /// Serves application requests and event notifications without host shutdown authority.
+    Application,
+    /// Serves lifecycle requests and allows a client to request host shutdown.
+    Control,
+}
+
+/// Configures one local socket with its purpose and shared runtime identity.
+///
+/// # Examples
+///
+/// ```
+/// let application = zeta::LocalSocketConfig::application("instance-1");
+/// let control = zeta::LocalSocketConfig::control("instance-1");
+/// # let _configs = (application, control);
+/// ```
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LocalSocketConfig {
+    purpose: LocalSocketPurpose,
+    instance_id: String,
+}
+
+impl LocalSocketConfig {
+    /// Configures an application endpoint with shutdown disabled.
+    pub fn application(instance_id: impl Into<String>) -> Self {
+        Self {
+            purpose: LocalSocketPurpose::Application,
+            instance_id: instance_id.into(),
+        }
+    }
+
+    /// Configures a client-only lifecycle endpoint with shutdown enabled.
+    pub fn control(instance_id: impl Into<String>) -> Self {
+        Self {
+            purpose: LocalSocketPurpose::Control,
+            instance_id: instance_id.into(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SocketIdentity {
     device: u64,
@@ -50,6 +92,7 @@ struct SocketIdentity {
 /// # async fn example() {
 /// let error = zeta::LocalSocketServer::bind(
 ///     "relative.sock",
+///     zeta::LocalSocketConfig::application("instance-1"),
 ///     |_request| Ok::<_, zeta_ipc::ErrorObject>(serde_json::json!({})),
 /// )
 /// .await
@@ -81,6 +124,7 @@ impl LocalSocketError {
     /// # async fn example() {
     /// let error = zeta::LocalSocketServer::bind(
     ///     "relative.sock",
+    ///     zeta::LocalSocketConfig::application("instance-1"),
     ///     |_request| Ok::<_, zeta_ipc::ErrorObject>(serde_json::json!({})),
     /// )
     /// .await
@@ -109,8 +153,8 @@ impl std::error::Error for LocalSocketError {}
 /// Owns one project-local Unix socket for native client connections.
 ///
 /// The socket accepts the existing `zeta-ipc` client protocol while process
-/// ownership remains with the caller. Client disconnects and `shutdown`
-/// requests cannot stop the server.
+/// ownership remains with the caller. Application endpoints keep `shutdown`
+/// disabled; control endpoints report accepted shutdown requests to the host.
 ///
 /// # Examples
 ///
@@ -119,6 +163,7 @@ impl std::error::Error for LocalSocketError {}
 /// let path = std::env::temp_dir().join("zeta-example.sock");
 /// let server = zeta::LocalSocketServer::bind(
 ///     path,
+///     zeta::LocalSocketConfig::application("instance-1"),
 ///     |_request| Ok::<_, zeta_ipc::ErrorObject>(serde_json::json!({})),
 /// )
 /// .await?;
@@ -129,6 +174,7 @@ impl std::error::Error for LocalSocketError {}
 pub struct LocalSocketServer {
     path: PathBuf,
     notifications: broadcast::Sender<Map<String, Value>>,
+    host_shutdown: watch::Sender<bool>,
     shutdown: watch::Sender<bool>,
     task: Option<JoinHandle<Result<(), LocalSocketError>>>,
 }
@@ -146,6 +192,7 @@ impl LocalSocketServer {
     /// let path = std::env::temp_dir().join("zeta-bind-example.sock");
     /// let server = zeta::LocalSocketServer::bind(
     ///     path,
+    ///     zeta::LocalSocketConfig::application("instance-1"),
     ///     |_request| Ok::<_, zeta_ipc::ErrorObject>(serde_json::json!({})),
     /// )
     /// .await?;
@@ -158,7 +205,11 @@ impl LocalSocketServer {
     ///
     /// Returns [`LocalSocketError`] when the path is relative or occupied, the
     /// listener cannot bind, or owner-only permissions cannot be applied.
-    pub async fn bind<H>(path: impl AsRef<Path>, handler: H) -> Result<Self, LocalSocketError>
+    pub async fn bind<H>(
+        path: impl AsRef<Path>,
+        config: LocalSocketConfig,
+        handler: H,
+    ) -> Result<Self, LocalSocketError>
     where
         H: Fn(Request) -> Result<Value, ErrorObject> + Send + Sync + 'static,
     {
@@ -211,15 +262,19 @@ impl LocalSocketServer {
         let handler: Arc<LocalRequestHandler> = Arc::new(handler);
         let (notifications, _notification_receiver) =
             broadcast::channel(LOCAL_NOTIFICATION_CAPACITY);
+        let (host_shutdown, _host_shutdown_receiver) = watch::channel(false);
         let (shutdown, shutdown_receiver) = watch::channel(false);
         let task_path = path.clone();
         let task_notifications = notifications.clone();
+        let task_host_shutdown = host_shutdown.clone();
         let task = tokio::spawn(async move {
             let result = run_local_listener(
                 listener,
                 &task_path,
+                config,
                 handler,
                 task_notifications,
+                task_host_shutdown,
                 shutdown_receiver,
             )
             .await;
@@ -234,9 +289,23 @@ impl LocalSocketServer {
         Ok(Self {
             path,
             notifications,
+            host_shutdown,
             shutdown,
             task: Some(task),
         })
+    }
+
+    /// Subscribes to accepted control requests that should stop the host.
+    ///
+    /// The value becomes `true` only after the successful control response is
+    /// flushed and the connection's write side is closed.
+    pub fn host_shutdown(&self) -> watch::Receiver<bool> {
+        self.host_shutdown.subscribe()
+    }
+
+    /// Reports whether the listener task stopped before explicit shutdown.
+    pub fn is_finished(&self) -> bool {
+        self.task.as_ref().is_none_or(JoinHandle::is_finished)
     }
 
     /// Broadcasts one committed event to every initialized client.
@@ -331,8 +400,10 @@ impl Drop for LocalSocketServer {
 async fn run_local_listener(
     listener: UnixListener,
     path: &Path,
+    config: LocalSocketConfig,
     handler: Arc<LocalRequestHandler>,
     notifications: broadcast::Sender<Map<String, Value>>,
+    host_shutdown: watch::Sender<bool>,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<(), LocalSocketError> {
     let mut connections = JoinSet::new();
@@ -352,14 +423,18 @@ async fn run_local_listener(
                     }
                 };
                 let (stream, _address) = accepted;
+                let config = config.clone();
                 let handler = Arc::clone(&handler);
                 let notifications = notifications.subscribe();
+                let host_shutdown = host_shutdown.clone();
                 let shutdown = shutdown.clone();
                 connections.spawn(async move {
                     let _result = serve_local_connection(
                         stream,
+                        config,
                         handler,
                         notifications,
+                        host_shutdown,
                         shutdown,
                     )
                     .await;
@@ -386,16 +461,34 @@ async fn run_local_listener(
 
 async fn serve_local_connection(
     stream: UnixStream,
+    socket_config: LocalSocketConfig,
     handler: Arc<LocalRequestHandler>,
     mut notifications: broadcast::Receiver<Map<String, Value>>,
+    host_shutdown: watch::Sender<bool>,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<(), String> {
+    let LocalSocketConfig {
+        purpose,
+        instance_id,
+    } = socket_config;
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
     let runtime = PeerIdentity::new("zeta", env!("CARGO_PKG_VERSION"));
     let mut config = RuntimeConfig::new(runtime);
-    config.supported_roles = vec![Role::Client, Role::Source];
-    let mut session = Session::runtime(config, ShutdownDirection::Disabled);
+    config
+        .config
+        .insert("instance_id".to_owned(), Value::String(instance_id));
+    let shutdown_direction = match purpose {
+        LocalSocketPurpose::Application => {
+            config.supported_roles = vec![Role::Client, Role::Source];
+            ShutdownDirection::Disabled
+        }
+        LocalSocketPurpose::Control => {
+            config.supported_roles = vec![Role::Client];
+            ShutdownDirection::RemoteSupervisesLocal
+        }
+    };
+    let mut session = Session::runtime(config, shutdown_direction);
     loop {
         tokio::select! {
             changed = shutdown.changed() => {
@@ -411,8 +504,39 @@ async fn serve_local_connection(
                 };
                 match frame {
                     Frame::Message(message) => {
+                        let requests_host_shutdown = match &message {
+                            Message::Request(request) => {
+                                session.is_initialized() && request.method == "shutdown"
+                            }
+                            Message::Notification(_notification) => false,
+                            Message::Success(_response) => false,
+                            Message::Error(_response) => false,
+                        };
                         let actions = session.receive(message);
-                        if drive_local_actions(&mut session, &mut writer, &handler, actions).await? {
+                        if drive_local_actions(
+                            &mut session,
+                            &mut writer,
+                            purpose,
+                            &handler,
+                            actions,
+                        )
+                        .await?
+                        {
+                            match purpose {
+                                LocalSocketPurpose::Application => {}
+                                LocalSocketPurpose::Control => {
+                                    if requests_host_shutdown {
+                                        writer
+                                            .shutdown()
+                                            .await
+                                            .map_err(|error| error.to_string())?;
+                                        drop(writer);
+                                        drop(reader);
+                                        host_shutdown.send_replace(true);
+                                        return Ok(());
+                                    }
+                                }
+                            }
                             return Ok(());
                         }
                     }
@@ -431,6 +555,10 @@ async fn serve_local_connection(
                 }
             }
             notification = notifications.recv() => {
+                match purpose {
+                    LocalSocketPurpose::Application => {}
+                    LocalSocketPurpose::Control => continue,
+                }
                 match notification {
                     Ok(params) => {
                         if !session.is_initialized() {
@@ -440,7 +568,15 @@ async fn serve_local_connection(
                         let Ok(actions) = actions else {
                             continue;
                         };
-                        if drive_local_actions(&mut session, &mut writer, &handler, actions).await? {
+                        if drive_local_actions(
+                            &mut session,
+                            &mut writer,
+                            purpose,
+                            &handler,
+                            actions,
+                        )
+                        .await?
+                        {
                             return Ok(());
                         }
                     }
@@ -455,6 +591,7 @@ async fn serve_local_connection(
 async fn drive_local_actions(
     session: &mut Session,
     writer: &mut OwnedWriteHalf,
+    purpose: LocalSocketPurpose,
     handler: &Arc<LocalRequestHandler>,
     actions: Vec<Action>,
 ) -> Result<bool, String> {
@@ -464,15 +601,23 @@ async fn drive_local_actions(
             Action::Send(message) => write_local_message(writer, &message).await?,
             Action::HandleRequest(request) => {
                 let request_id = request.id.clone();
-                let handler = Arc::clone(handler);
-                let outcome = tokio::task::spawn_blocking(move || handler(request)).await;
-                let outcome = match outcome {
-                    Ok(outcome) => outcome,
-                    Err(error) => return Err(error.to_string()),
-                };
-                let completed = match outcome {
-                    Ok(result) => session.complete_request(&request_id, result),
-                    Err(error) => session.fail_request(&request_id, error),
+                let completed = match purpose {
+                    LocalSocketPurpose::Application => {
+                        let handler = Arc::clone(handler);
+                        let outcome = tokio::task::spawn_blocking(move || handler(request)).await;
+                        let outcome = match outcome {
+                            Ok(outcome) => outcome,
+                            Err(error) => return Err(error.to_string()),
+                        };
+                        match outcome {
+                            Ok(result) => session.complete_request(&request_id, result),
+                            Err(error) => session.fail_request(&request_id, error),
+                        }
+                    }
+                    LocalSocketPurpose::Control => session.fail_request(
+                        &request_id,
+                        ErrorObject::new(METHOD_NOT_FOUND, "Method not found", None),
+                    ),
                 };
                 let completed = match completed {
                     Ok(completed) => completed,

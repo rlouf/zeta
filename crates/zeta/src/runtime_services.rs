@@ -2,6 +2,10 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::fs::{self, File};
+use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -10,6 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use chrono::{DateTime, LocalResult, SecondsFormat, TimeZone, Timelike, Utc};
 use chrono_tz::Tz;
 use croner::Cron;
+use rustix::fs::{flock, open, FlockOperation, Mode, OFlags};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use uuid::Uuid;
@@ -28,6 +33,680 @@ use zeta_manifest::{
 
 const SCHEDULER_SOURCE: &str = "zeta:scheduler";
 const SCHEDULER_TICK_PREFIX: &str = "zeta.scheduler.tick.";
+const RUNTIME_METADATA_SCHEMA_VERSION: u64 = 1;
+const RUNTIME_LOCK_NAME: &str = "runtime.lock";
+const RUNTIME_METADATA_NAME: &str = "runtime.json";
+const RUNTIME_METADATA_TEMP_NAME: &str = "runtime.json.tmp";
+const RUNTIME_SOCKET_NAME: &str = "runtime.sock";
+const RUNTIME_CONTROL_SOCKET_NAME: &str = "runtime-control.sock";
+const RUNTIME_LOG_NAME: &str = "runtime.log";
+
+/// Names the process mode recorded by one runtime owner.
+///
+/// # Examples
+///
+/// ```
+/// let mode = zeta::runtime_services::RuntimeOwnerMode::Detached;
+/// assert_eq!(serde_json::to_value(mode)?, "detached");
+/// # Ok::<(), serde_json::Error>(())
+/// ```
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeOwnerMode {
+    /// Keeps the runtime attached to the invoking terminal.
+    Foreground,
+    /// Runs the runtime independently after a readiness handshake.
+    Detached,
+}
+
+/// Names the lifecycle phase recorded by one runtime owner.
+///
+/// # Examples
+///
+/// ```
+/// let phase = zeta::runtime_services::RuntimePhase::Running;
+/// assert_eq!(serde_json::to_value(phase)?, "running");
+/// # Ok::<(), serde_json::Error>(())
+/// ```
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimePhase {
+    /// Accepts lifecycle and application traffic.
+    Running,
+    /// Rejects new ownership while resources shut down.
+    Stopping,
+}
+
+/// Contains every project-local path owned by the runtime lifecycle.
+///
+/// # Examples
+///
+/// ```
+/// let paths = zeta::runtime_services::RuntimePaths::new("/tmp/project/.zeta");
+/// assert_eq!(paths.socket(), std::path::Path::new("/tmp/project/.zeta/runtime.sock"));
+/// ```
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimePaths {
+    state_dir: PathBuf,
+    lock: PathBuf,
+    metadata: PathBuf,
+    socket: PathBuf,
+    control_socket: PathBuf,
+    log: PathBuf,
+}
+
+impl RuntimePaths {
+    /// Derives lifecycle entries beneath one resolved state directory.
+    pub fn new(state_dir: impl AsRef<Path>) -> Self {
+        let state_dir = state_dir.as_ref().to_path_buf();
+        Self {
+            lock: state_dir.join(RUNTIME_LOCK_NAME),
+            metadata: state_dir.join(RUNTIME_METADATA_NAME),
+            socket: state_dir.join(RUNTIME_SOCKET_NAME),
+            control_socket: state_dir.join(RUNTIME_CONTROL_SOCKET_NAME),
+            log: state_dir.join(RUNTIME_LOG_NAME),
+            state_dir,
+        }
+    }
+
+    /// Returns the directory containing native runtime state.
+    pub fn state_dir(&self) -> &Path {
+        &self.state_dir
+    }
+
+    /// Returns the persistent advisory-lock path.
+    pub fn lock(&self) -> &Path {
+        &self.lock
+    }
+
+    /// Returns the atomically replaced owner-metadata path.
+    pub fn metadata(&self) -> &Path {
+        &self.metadata
+    }
+
+    /// Returns the ordinary application-client socket path.
+    pub fn socket(&self) -> &Path {
+        &self.socket
+    }
+
+    /// Returns the owner-authorized control socket path.
+    pub fn control_socket(&self) -> &Path {
+        &self.control_socket
+    }
+
+    /// Returns the detached-runtime diagnostics path.
+    pub fn log(&self) -> &Path {
+        &self.log
+    }
+}
+
+/// Records the identity and filesystem contract of one runtime owner.
+///
+/// # Examples
+///
+/// ```
+/// let paths = zeta::runtime_services::RuntimePaths::new("/tmp/project/.zeta");
+/// let metadata = zeta::runtime_services::RuntimeMetadata::new(
+///     "instance-1",
+///     42,
+///     zeta::runtime_services::RuntimeOwnerMode::Foreground,
+///     zeta::runtime_services::RuntimePhase::Running,
+///     "/tmp/project",
+///     &paths,
+///     1,
+/// );
+/// assert_eq!(metadata.instance_id, "instance-1");
+/// ```
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RuntimeMetadata {
+    /// Identifies the metadata document schema.
+    pub schema_version: u64,
+    /// Identifies the native Zeta build.
+    pub zeta_version: String,
+    /// Distinguishes this ownership lifetime from every prior process.
+    pub instance_id: String,
+    /// Records the owner process for inspection only.
+    pub pid: u32,
+    /// Records whether the owner is attached or detached.
+    pub mode: RuntimeOwnerMode,
+    /// Records whether the owner is running or stopping.
+    pub phase: RuntimePhase,
+    /// Contains the resolved authored project root.
+    pub project_root: PathBuf,
+    /// Contains the resolved project state directory.
+    pub state_dir: PathBuf,
+    /// Contains the ordinary application socket path.
+    pub socket: PathBuf,
+    /// Contains the process-authority socket path.
+    pub control_socket: PathBuf,
+    /// Records runtime creation in Unix milliseconds.
+    pub started_at_ms: i64,
+}
+
+impl RuntimeMetadata {
+    /// Creates one versioned owner document from resolved lifecycle paths.
+    pub fn new(
+        instance_id: impl Into<String>,
+        pid: u32,
+        mode: RuntimeOwnerMode,
+        phase: RuntimePhase,
+        project_root: impl AsRef<Path>,
+        paths: &RuntimePaths,
+        started_at_ms: i64,
+    ) -> Self {
+        Self {
+            schema_version: RUNTIME_METADATA_SCHEMA_VERSION,
+            zeta_version: env!("CARGO_PKG_VERSION").to_owned(),
+            instance_id: instance_id.into(),
+            pid,
+            mode,
+            phase,
+            project_root: project_root.as_ref().to_path_buf(),
+            state_dir: paths.state_dir.clone(),
+            socket: paths.socket.clone(),
+            control_socket: paths.control_socket.clone(),
+            started_at_ms,
+        }
+    }
+
+    /// Reads the current owner metadata without creating lifecycle state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeLifecycleError`] when metadata cannot be read or does
+    /// not contain one complete owner document.
+    pub fn read(paths: &RuntimePaths) -> Result<Option<Self>, RuntimeLifecycleError> {
+        let file = match open(
+            paths.metadata(),
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::empty(),
+        ) {
+            Ok(file) => file,
+            Err(error) => {
+                if error == rustix::io::Errno::NOENT {
+                    return Ok(None);
+                }
+                return Err(RuntimeLifecycleError::new(
+                    RuntimeLifecycleErrorKind::Metadata,
+                    paths.metadata(),
+                    error.to_string(),
+                ));
+            }
+        };
+        let mut bytes = Vec::new();
+        File::from(file).read_to_end(&mut bytes).map_err(|error| {
+            RuntimeLifecycleError::new(
+                RuntimeLifecycleErrorKind::Metadata,
+                paths.metadata(),
+                error.to_string(),
+            )
+        })?;
+        serde_json::from_slice(&bytes).map(Some).map_err(|error| {
+            RuntimeLifecycleError::new(
+                RuntimeLifecycleErrorKind::Metadata,
+                paths.metadata(),
+                error.to_string(),
+            )
+        })
+    }
+}
+
+/// Classifies one native runtime lifecycle failure.
+///
+/// # Examples
+///
+/// ```
+/// let kind = zeta::runtime_services::RuntimeLifecycleErrorKind::LeaseHeld;
+/// assert_eq!(kind.reason(), "lease_held");
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeLifecycleErrorKind {
+    /// The state directory cannot be created or inspected safely.
+    StateDirectory,
+    /// The persistent lease file cannot be opened or locked.
+    Lease,
+    /// Another process currently owns the lifecycle lease.
+    LeaseHeld,
+    /// Owner metadata cannot be encoded, committed, or read.
+    Metadata,
+    /// A lifecycle socket path contains a non-socket entry.
+    SocketOccupied,
+    /// A lifecycle socket accepts connections without this lease owner.
+    SocketLive,
+    /// A lifecycle socket cannot be inspected safely.
+    SocketInspect,
+    /// A proven stale lifecycle socket cannot be removed.
+    SocketCleanup,
+}
+
+impl RuntimeLifecycleErrorKind {
+    /// Returns the stable machine-readable failure reason.
+    pub fn reason(self) -> &'static str {
+        match self {
+            RuntimeLifecycleErrorKind::StateDirectory => "state_directory",
+            RuntimeLifecycleErrorKind::Lease => "lease",
+            RuntimeLifecycleErrorKind::LeaseHeld => "lease_held",
+            RuntimeLifecycleErrorKind::Metadata => "metadata",
+            RuntimeLifecycleErrorKind::SocketOccupied => "socket_occupied",
+            RuntimeLifecycleErrorKind::SocketLive => "socket_live",
+            RuntimeLifecycleErrorKind::SocketInspect => "socket_inspect",
+            RuntimeLifecycleErrorKind::SocketCleanup => "socket_cleanup",
+        }
+    }
+}
+
+/// Reports why a runtime lease, metadata, or stale socket operation failed.
+#[derive(Debug)]
+pub struct RuntimeLifecycleError {
+    kind: RuntimeLifecycleErrorKind,
+    path: PathBuf,
+    detail: String,
+}
+
+impl RuntimeLifecycleError {
+    fn new(kind: RuntimeLifecycleErrorKind, path: &Path, detail: impl Into<String>) -> Self {
+        Self {
+            kind,
+            path: path.to_path_buf(),
+            detail: detail.into(),
+        }
+    }
+
+    /// Returns the structured lifecycle failure class.
+    pub fn kind(&self) -> RuntimeLifecycleErrorKind {
+        self.kind
+    }
+
+    /// Returns the stable machine-readable failure reason.
+    pub fn reason(&self) -> &'static str {
+        self.kind.reason()
+    }
+}
+
+impl fmt::Display for RuntimeLifecycleError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{} at '{}': {}",
+            self.reason(),
+            self.path.display(),
+            self.detail
+        )
+    }
+}
+
+impl std::error::Error for RuntimeLifecycleError {}
+
+/// Reports how one lifecycle socket changed during stale reconciliation.
+///
+/// # Examples
+///
+/// ```
+/// let disposition = zeta::runtime_services::RuntimeSocketDisposition::Missing;
+/// assert_eq!(disposition, zeta::runtime_services::RuntimeSocketDisposition::Missing);
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeSocketDisposition {
+    /// No filesystem entry existed.
+    Missing,
+    /// A Unix socket that refused connections was removed.
+    RemovedStale,
+}
+
+/// Reports stale reconciliation for both lifecycle endpoints.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeSocketReconciliation {
+    /// Reports the ordinary application socket disposition.
+    pub runtime: RuntimeSocketDisposition,
+    /// Reports the process-authority socket disposition.
+    pub control: RuntimeSocketDisposition,
+}
+
+/// Owns the exclusive advisory lease for one project runtime.
+///
+/// Dropping the value releases the advisory lock but preserves its inode for
+/// the next owner.
+#[derive(Debug)]
+pub struct RuntimeLease {
+    paths: RuntimePaths,
+    _lock: File,
+}
+
+impl RuntimeLease {
+    /// Creates owner-only state and acquires its nonblocking exclusive lease.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeLifecycleError`] when state cannot be prepared, the
+    /// lease entry is unsafe, or another owner holds its advisory lock.
+    pub fn acquire(paths: RuntimePaths) -> Result<Self, RuntimeLifecycleError> {
+        prepare_runtime_state(paths.state_dir())?;
+        let flags = OFlags::RDWR | OFlags::CREATE | OFlags::CLOEXEC | OFlags::NOFOLLOW;
+        let mode = Mode::RUSR | Mode::WUSR;
+        let lock = open(paths.lock(), flags, mode).map_err(|error| {
+            RuntimeLifecycleError::new(
+                RuntimeLifecycleErrorKind::Lease,
+                paths.lock(),
+                error.to_string(),
+            )
+        })?;
+        let lock = File::from(lock);
+        let result = flock(&lock, FlockOperation::NonBlockingLockExclusive);
+        let Ok(()) = result else {
+            let error = result.expect_err("the let-else observed a lease error");
+            let kind = if error == rustix::io::Errno::WOULDBLOCK {
+                RuntimeLifecycleErrorKind::LeaseHeld
+            } else {
+                RuntimeLifecycleErrorKind::Lease
+            };
+            return Err(RuntimeLifecycleError::new(
+                kind,
+                paths.lock(),
+                error.to_string(),
+            ));
+        };
+        lock.set_permissions(fs::Permissions::from_mode(0o600))
+            .map_err(|error| {
+                RuntimeLifecycleError::new(
+                    RuntimeLifecycleErrorKind::Lease,
+                    paths.lock(),
+                    error.to_string(),
+                )
+            })?;
+        Ok(Self { paths, _lock: lock })
+    }
+
+    /// Atomically replaces owner metadata through an owner-only sibling file.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeLifecycleError`] when the document does not describe
+    /// these lifecycle paths or cannot be durably replaced.
+    pub fn write_metadata(&self, metadata: &RuntimeMetadata) -> Result<(), RuntimeLifecycleError> {
+        if metadata.state_dir != self.paths.state_dir
+            || metadata.socket != self.paths.socket
+            || metadata.control_socket != self.paths.control_socket
+        {
+            return Err(RuntimeLifecycleError::new(
+                RuntimeLifecycleErrorKind::Metadata,
+                self.paths.metadata(),
+                "owner metadata does not match the held lifecycle paths",
+            ));
+        }
+        write_runtime_metadata(&self.paths, metadata)
+    }
+
+    /// Removes only lifecycle sockets proven stale while this lease is held.
+    ///
+    /// Both paths are inspected before either stale entry is removed. A live
+    /// socket, regular file, symlink, or ambiguous connection error preserves
+    /// both entries.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeLifecycleError`] when either entry is occupied, live,
+    /// cannot be inspected, or cannot be removed.
+    pub fn reconcile_stale_sockets(
+        &self,
+    ) -> Result<RuntimeSocketReconciliation, RuntimeLifecycleError> {
+        let runtime = inspect_runtime_socket(self.paths.socket())?;
+        let control = inspect_runtime_socket(self.paths.control_socket())?;
+        let runtime = reconcile_runtime_socket(self.paths.socket(), runtime)?;
+        let control = reconcile_runtime_socket(self.paths.control_socket(), control)?;
+        Ok(RuntimeSocketReconciliation { runtime, control })
+    }
+
+    /// Removes metadata only when it still names this ownership lifetime.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeLifecycleError`] when metadata is unsafe, unreadable,
+    /// or cannot be removed. A missing or replaced document is preserved.
+    pub fn remove_metadata(&self, instance_id: &str) -> Result<bool, RuntimeLifecycleError> {
+        let Some(metadata) = RuntimeMetadata::read(&self.paths)? else {
+            return Ok(false);
+        };
+        if metadata.instance_id != instance_id {
+            return Ok(false);
+        }
+        fs::remove_file(self.paths.metadata()).map_err(|error| {
+            RuntimeLifecycleError::new(
+                RuntimeLifecycleErrorKind::Metadata,
+                self.paths.metadata(),
+                error.to_string(),
+            )
+        })?;
+        Ok(true)
+    }
+
+    /// Removes an ownerless regular metadata entry while this lease is held.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeLifecycleError`] when the entry is not a regular file,
+    /// cannot be inspected, or cannot be removed.
+    pub fn remove_stale_metadata(&self) -> Result<bool, RuntimeLifecycleError> {
+        let metadata = match fs::symlink_metadata(self.paths.metadata()) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => {
+                return Err(RuntimeLifecycleError::new(
+                    RuntimeLifecycleErrorKind::Metadata,
+                    self.paths.metadata(),
+                    error.to_string(),
+                ));
+            }
+        };
+        if !metadata.file_type().is_file() {
+            return Err(RuntimeLifecycleError::new(
+                RuntimeLifecycleErrorKind::Metadata,
+                self.paths.metadata(),
+                "stale metadata is not a regular file",
+            ));
+        }
+        fs::remove_file(self.paths.metadata()).map_err(|error| {
+            RuntimeLifecycleError::new(
+                RuntimeLifecycleErrorKind::Metadata,
+                self.paths.metadata(),
+                error.to_string(),
+            )
+        })?;
+        Ok(true)
+    }
+}
+
+fn prepare_runtime_state(state_dir: &Path) -> Result<(), RuntimeLifecycleError> {
+    match fs::symlink_metadata(state_dir) {
+        Ok(metadata) => {
+            if metadata.is_dir() {
+                return Ok(());
+            }
+            if metadata.file_type().is_symlink() {
+                let target = fs::metadata(state_dir).map_err(|error| {
+                    RuntimeLifecycleError::new(
+                        RuntimeLifecycleErrorKind::StateDirectory,
+                        state_dir,
+                        error.to_string(),
+                    )
+                })?;
+                if target.is_dir() {
+                    return Ok(());
+                }
+            }
+            Err(RuntimeLifecycleError::new(
+                RuntimeLifecycleErrorKind::StateDirectory,
+                state_dir,
+                "the runtime state path is not a directory",
+            ))
+        }
+        Err(error) => {
+            if error.kind() != io::ErrorKind::NotFound {
+                return Err(RuntimeLifecycleError::new(
+                    RuntimeLifecycleErrorKind::StateDirectory,
+                    state_dir,
+                    error.to_string(),
+                ));
+            }
+            fs::create_dir_all(state_dir).map_err(|error| {
+                RuntimeLifecycleError::new(
+                    RuntimeLifecycleErrorKind::StateDirectory,
+                    state_dir,
+                    error.to_string(),
+                )
+            })?;
+            fs::set_permissions(state_dir, fs::Permissions::from_mode(0o700)).map_err(|error| {
+                RuntimeLifecycleError::new(
+                    RuntimeLifecycleErrorKind::StateDirectory,
+                    state_dir,
+                    error.to_string(),
+                )
+            })
+        }
+    }
+}
+
+fn write_runtime_metadata(
+    paths: &RuntimePaths,
+    metadata: &RuntimeMetadata,
+) -> Result<(), RuntimeLifecycleError> {
+    let temporary = paths.state_dir().join(RUNTIME_METADATA_TEMP_NAME);
+    let flags =
+        OFlags::WRONLY | OFlags::CREATE | OFlags::TRUNC | OFlags::CLOEXEC | OFlags::NOFOLLOW;
+    let mode = Mode::RUSR | Mode::WUSR;
+    let file = open(&temporary, flags, mode).map_err(|error| {
+        RuntimeLifecycleError::new(
+            RuntimeLifecycleErrorKind::Metadata,
+            &temporary,
+            error.to_string(),
+        )
+    })?;
+    let mut file = File::from(file);
+    let result = write_runtime_metadata_file(&temporary, &mut file, metadata);
+    if let Err(error) = result {
+        let _cleanup = fs::remove_file(&temporary);
+        return Err(error);
+    }
+    drop(file);
+    let result = fs::rename(&temporary, paths.metadata());
+    let Ok(()) = result else {
+        let error = result.expect_err("the let-else observed a metadata rename error");
+        let _cleanup = fs::remove_file(&temporary);
+        return Err(RuntimeLifecycleError::new(
+            RuntimeLifecycleErrorKind::Metadata,
+            paths.metadata(),
+            error.to_string(),
+        ));
+    };
+    let directory = File::open(paths.state_dir()).map_err(|error| {
+        RuntimeLifecycleError::new(
+            RuntimeLifecycleErrorKind::Metadata,
+            paths.state_dir(),
+            error.to_string(),
+        )
+    })?;
+    directory.sync_all().map_err(|error| {
+        RuntimeLifecycleError::new(
+            RuntimeLifecycleErrorKind::Metadata,
+            paths.state_dir(),
+            error.to_string(),
+        )
+    })
+}
+
+fn write_runtime_metadata_file(
+    path: &Path,
+    file: &mut File,
+    metadata: &RuntimeMetadata,
+) -> Result<(), RuntimeLifecycleError> {
+    file.set_permissions(fs::Permissions::from_mode(0o600))
+        .map_err(|error| {
+            RuntimeLifecycleError::new(RuntimeLifecycleErrorKind::Metadata, path, error.to_string())
+        })?;
+    file.seek(SeekFrom::Start(0)).map_err(|error| {
+        RuntimeLifecycleError::new(RuntimeLifecycleErrorKind::Metadata, path, error.to_string())
+    })?;
+    serde_json::to_writer(&mut *file, metadata).map_err(|error| {
+        RuntimeLifecycleError::new(RuntimeLifecycleErrorKind::Metadata, path, error.to_string())
+    })?;
+    file.write_all(b"\n").map_err(|error| {
+        RuntimeLifecycleError::new(RuntimeLifecycleErrorKind::Metadata, path, error.to_string())
+    })?;
+    file.sync_all().map_err(|error| {
+        RuntimeLifecycleError::new(RuntimeLifecycleErrorKind::Metadata, path, error.to_string())
+    })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeSocketInspection {
+    Missing,
+    Stale,
+}
+
+fn inspect_runtime_socket(path: &Path) -> Result<RuntimeSocketInspection, RuntimeLifecycleError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            if error.kind() == io::ErrorKind::NotFound {
+                return Ok(RuntimeSocketInspection::Missing);
+            }
+            return Err(RuntimeLifecycleError::new(
+                RuntimeLifecycleErrorKind::SocketInspect,
+                path,
+                error.to_string(),
+            ));
+        }
+    };
+    if !metadata.file_type().is_socket() {
+        return Err(RuntimeLifecycleError::new(
+            RuntimeLifecycleErrorKind::SocketOccupied,
+            path,
+            "the lifecycle socket path contains a non-socket entry",
+        ));
+    }
+    match UnixStream::connect(path) {
+        Ok(stream) => {
+            drop(stream);
+            Err(RuntimeLifecycleError::new(
+                RuntimeLifecycleErrorKind::SocketLive,
+                path,
+                "the lifecycle socket accepts connections",
+            ))
+        }
+        Err(error) => {
+            let kind = error.kind();
+            if kind == io::ErrorKind::ConnectionRefused {
+                return Ok(RuntimeSocketInspection::Stale);
+            }
+            if kind == io::ErrorKind::NotFound {
+                return Ok(RuntimeSocketInspection::Missing);
+            }
+            Err(RuntimeLifecycleError::new(
+                RuntimeLifecycleErrorKind::SocketInspect,
+                path,
+                error.to_string(),
+            ))
+        }
+    }
+}
+
+fn reconcile_runtime_socket(
+    path: &Path,
+    inspection: RuntimeSocketInspection,
+) -> Result<RuntimeSocketDisposition, RuntimeLifecycleError> {
+    match inspection {
+        RuntimeSocketInspection::Missing => Ok(RuntimeSocketDisposition::Missing),
+        RuntimeSocketInspection::Stale => {
+            fs::remove_file(path).map_err(|error| {
+                RuntimeLifecycleError::new(
+                    RuntimeLifecycleErrorKind::SocketCleanup,
+                    path,
+                    error.to_string(),
+                )
+            })?;
+            Ok(RuntimeSocketDisposition::RemovedStale)
+        }
+    }
+}
 
 /// Classifies a native scheduler failure.
 ///

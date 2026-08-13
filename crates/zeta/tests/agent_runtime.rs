@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::os::unix::fs::{symlink, PermissionsExt};
+use std::io::{BufRead as _, BufReader as StdBufReader};
+use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixListener as StdUnixListener;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::process::{Child, Command as StdCommand, Stdio};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Map, Value};
@@ -12,10 +14,13 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream, UnixStream};
 use tokio::task::JoinHandle;
+use zeta::runtime_services::{
+    RuntimeLease, RuntimeMetadata, RuntimeOwnerMode, RuntimePaths, RuntimePhase,
+};
 use zeta::{
     prepare_agent, CallbackDraftRecorder, CallbackObserver, CancellationToken, ExecutorSelection,
-    InvocationInputs, LocalSocketServer, ProcessExecutor, ProcessLaunch, Scheduler, SystemClock,
-    UuidIdSource,
+    InvocationInputs, LocalSocketConfig, LocalSocketServer, ProcessExecutor, ProcessLaunch,
+    Scheduler, SystemClock, UuidIdSource,
 };
 use zeta_agent::{
     native_capabilities, resolve_capabilities, AgentInvocation, AgentRunResult, AgentRunner,
@@ -25,8 +30,8 @@ use zeta_agent::{
 };
 use zeta_dispatch::{route_event, Dispatch, QueueItemStatus, RuntimeEventIdentity};
 use zeta_ipc::{
-    ErrorObject, ErrorResponse, Message, Notification, Request, SuccessResponse, MAX_FRAME_BYTES,
-    METHOD_NOT_FOUND, PARSE_ERROR, SERVER_ERROR,
+    ErrorObject, ErrorResponse, Message, Notification, Request, SuccessResponse, INVALID_PARAMS,
+    MAX_FRAME_BYTES, METHOD_NOT_FOUND, PARSE_ERROR, SERVER_ERROR,
 };
 use zeta_journal::{DraftEvent, Event, EventFilter};
 use zeta_manifest::{
@@ -975,9 +980,13 @@ fn authored_schedule_occurrence_uses_ordinary_idempotent_dispatch_ingress() {
 async fn local_socket_binds_owner_only_and_reports_invalid_paths() {
     let directory = TempDir::new().expect("the socket test directory must exist");
     let path = directory.path().join("runtime.sock");
-    let server = LocalSocketServer::bind(&path, socket_request)
-        .await
-        .expect("the local socket must bind");
+    let server = LocalSocketServer::bind(
+        &path,
+        LocalSocketConfig::application("application-instance"),
+        socket_request,
+    )
+    .await
+    .expect("the local socket must bind");
     let mode = fs::symlink_metadata(&path)
         .expect("the socket entry must exist")
         .permissions()
@@ -992,16 +1001,24 @@ async fn local_socket_binds_owner_only_and_reports_invalid_paths() {
     assert!(!path.exists());
 
     let relative = Path::new("relative-runtime.sock");
-    let error = LocalSocketServer::bind(relative, socket_request)
-        .await
-        .expect_err("a relative local socket path must be rejected");
+    let error = LocalSocketServer::bind(
+        relative,
+        LocalSocketConfig::application("application-instance"),
+        socket_request,
+    )
+    .await
+    .expect_err("a relative local socket path must be rejected");
     assert_eq!(error.reason(), "relative_path");
     assert!(error.to_string().contains("relative-runtime.sock"));
 
     let path = directory.path().join("x".repeat(256));
-    let error = LocalSocketServer::bind(&path, socket_request)
-        .await
-        .expect_err("an overlong local socket path must be rejected");
+    let error = LocalSocketServer::bind(
+        &path,
+        LocalSocketConfig::application("application-instance"),
+        socket_request,
+    )
+    .await
+    .expect_err("an overlong local socket path must be rejected");
     assert!(error
         .to_string()
         .contains(&path.to_string_lossy().to_string()));
@@ -1013,30 +1030,46 @@ async fn local_socket_refuses_every_preexisting_entry() {
 
     let regular = directory.path().join("regular.sock");
     fs::write(&regular, "occupied").expect("the regular fixture must exist");
-    let error = LocalSocketServer::bind(&regular, socket_request)
-        .await
-        .expect_err("a regular file must not be replaced");
+    let error = LocalSocketServer::bind(
+        &regular,
+        LocalSocketConfig::application("application-instance"),
+        socket_request,
+    )
+    .await
+    .expect_err("a regular file must not be replaced");
     assert_eq!(error.reason(), "path_occupied");
 
     let target = directory.path().join("target");
     let link = directory.path().join("link.sock");
     symlink(&target, &link).expect("the symlink fixture must exist");
-    let error = LocalSocketServer::bind(&link, socket_request)
-        .await
-        .expect_err("a symlink must not be replaced");
+    let error = LocalSocketServer::bind(
+        &link,
+        LocalSocketConfig::application("application-instance"),
+        socket_request,
+    )
+    .await
+    .expect_err("a symlink must not be replaced");
     assert_eq!(error.reason(), "path_occupied");
 
     let socket = directory.path().join("existing.sock");
     let listener = StdUnixListener::bind(&socket).expect("the live socket fixture must bind");
-    let error = LocalSocketServer::bind(&socket, socket_request)
-        .await
-        .expect_err("a live socket must not be replaced");
+    let error = LocalSocketServer::bind(
+        &socket,
+        LocalSocketConfig::application("application-instance"),
+        socket_request,
+    )
+    .await
+    .expect_err("a live socket must not be replaced");
     assert_eq!(error.reason(), "path_occupied");
     drop(listener);
 
-    let error = LocalSocketServer::bind(&socket, socket_request)
-        .await
-        .expect_err("a stale socket must not be removed without an owner lock");
+    let error = LocalSocketServer::bind(
+        &socket,
+        LocalSocketConfig::application("application-instance"),
+        socket_request,
+    )
+    .await
+    .expect_err("a stale socket must not be removed without an owner lock");
     assert_eq!(error.reason(), "path_occupied");
 }
 
@@ -1044,13 +1077,18 @@ async fn local_socket_refuses_every_preexisting_entry() {
 async fn local_socket_initializes_pings_delegates_and_recovers_frames() {
     let directory = TempDir::new().expect("the socket test directory must exist");
     let path = directory.path().join("runtime.sock");
-    let server = LocalSocketServer::bind(&path, socket_request)
-        .await
-        .expect("the local socket must bind");
+    let server = LocalSocketServer::bind(
+        &path,
+        LocalSocketConfig::application("application-instance"),
+        socket_request,
+    )
+    .await
+    .expect("the local socket must bind");
     let mut client = SocketClient::connect(&path).await;
 
     let initialized = client.initialize().await;
     assert_eq!(initialized["roles"], json!(["client"]));
+    assert_eq!(initialized["config"]["instance_id"], "application-instance");
     client.ping(1).await;
 
     client
@@ -1156,9 +1194,13 @@ async fn local_socket_initializes_pings_delegates_and_recovers_frames() {
 async fn local_socket_isolates_clients_and_fans_out_notifications() {
     let directory = TempDir::new().expect("the socket test directory must exist");
     let path = directory.path().join("runtime.sock");
-    let server = LocalSocketServer::bind(&path, socket_request)
-        .await
-        .expect("the local socket must bind");
+    let server = LocalSocketServer::bind(
+        &path,
+        LocalSocketConfig::application("application-instance"),
+        socket_request,
+    )
+    .await
+    .expect("the local socket must bind");
     let mut first = SocketClient::connect(&path).await;
     let mut second = SocketClient::connect(&path).await;
     first.initialize().await;
@@ -1205,9 +1247,13 @@ async fn local_socket_isolates_clients_and_fans_out_notifications() {
 async fn local_socket_shutdown_preserves_a_replacement_entry() {
     let directory = TempDir::new().expect("the socket test directory must exist");
     let path = directory.path().join("runtime.sock");
-    let server = LocalSocketServer::bind(&path, socket_request)
-        .await
-        .expect("the local socket must bind");
+    let server = LocalSocketServer::bind(
+        &path,
+        LocalSocketConfig::application("application-instance"),
+        socket_request,
+    )
+    .await
+    .expect("the local socket must bind");
 
     fs::remove_file(&path).expect("the bound name must be replaceable");
     fs::write(&path, "replacement").expect("the replacement fixture must exist");
@@ -1220,6 +1266,559 @@ async fn local_socket_shutdown_preserves_a_replacement_entry() {
         fs::read_to_string(&path).expect("the replacement must remain"),
         "replacement"
     );
+}
+
+#[tokio::test]
+async fn local_control_socket_reports_identity_and_flushes_shutdown_before_notification() {
+    let directory = TempDir::new().expect("the control socket test directory must exist");
+    let path = directory.path().join("runtime-control.sock");
+    let server = LocalSocketServer::bind(
+        &path,
+        LocalSocketConfig::control("control-instance"),
+        |_request| panic!("control requests must not reach the application handler"),
+    )
+    .await
+    .expect("the control socket must bind");
+    let mut host_shutdown = server.host_shutdown();
+
+    let mut source = SocketClient::connect(&path).await;
+    source
+        .send_json(json!({
+            "jsonrpc": "2.0",
+            "id": "source-initialize",
+            "method": "initialize",
+            "params": {
+                "protocol_versions": [0],
+                "peer": {"name": "socket-test", "version": "0.1.0"},
+                "roles": ["source"]
+            }
+        }))
+        .await;
+    let Message::Error(ErrorResponse { id: _, error }) = source.receive().await else {
+        panic!("the control socket must reject the source role")
+    };
+    assert_eq!(error.code, INVALID_PARAMS);
+    drop(source);
+
+    let mut client = SocketClient::connect(&path).await;
+
+    let initialized = client.initialize().await;
+    assert_eq!(initialized["roles"], json!(["client"]));
+    assert_eq!(initialized["config"]["instance_id"], "control-instance");
+    client.ping(1).await;
+    client
+        .send_json(json!({
+            "jsonrpc": "2.0",
+            "id": "stop-host",
+            "method": "shutdown",
+            "params": {"reason": "test complete"}
+        }))
+        .await;
+
+    host_shutdown
+        .changed()
+        .await
+        .expect("the control request must notify the host");
+    assert!(*host_shutdown.borrow());
+    let Message::Success(SuccessResponse { id, result }) = client.receive().await else {
+        panic!("the flushed shutdown response must remain readable")
+    };
+    assert_eq!(id, "stop-host".into());
+    assert_eq!(result, json!({}));
+
+    server
+        .shutdown()
+        .await
+        .expect("the control socket must stop cleanly");
+}
+
+#[tokio::test]
+async fn malformed_control_clients_cannot_stop_or_poison_the_control_socket() {
+    let directory = TempDir::new().expect("the control socket test directory must exist");
+    let path = directory.path().join("runtime-control.sock");
+    let server = LocalSocketServer::bind(
+        &path,
+        LocalSocketConfig::control("control-instance"),
+        |_request| panic!("control requests must not reach the application handler"),
+    )
+    .await
+    .expect("the control socket must bind");
+    let mut host_shutdown = server.host_shutdown();
+    let stream = UnixStream::connect(&path)
+        .await
+        .expect("the malformed control client must connect");
+    let (reader, mut writer) = stream.into_split();
+    writer
+        .write_all(b"not json\n")
+        .await
+        .expect("the malformed control client must write");
+    writer
+        .flush()
+        .await
+        .expect("the malformed control client must flush");
+    let mut reader = BufReader::new(reader);
+    let mut line = String::new();
+    reader
+        .read_line(&mut line)
+        .await
+        .expect("the malformed control client must receive an error");
+    let Message::Error(ErrorResponse { id: _, error }) =
+        Message::parse_str(line.trim_end()).expect("the control error must be valid IPC")
+    else {
+        panic!("malformed control input must produce an error")
+    };
+    assert_eq!(error.code, PARSE_ERROR);
+    drop(reader);
+    drop(writer);
+    assert!(!*host_shutdown.borrow());
+
+    let mut premature = SocketClient::connect(&path).await;
+    premature
+        .send_json(json!({
+            "jsonrpc": "2.0",
+            "id": "premature-shutdown",
+            "method": "shutdown",
+            "params": {}
+        }))
+        .await;
+    let Message::Error(ErrorResponse { id: _, error: _ }) = premature.receive().await else {
+        panic!("shutdown before initialization must be rejected")
+    };
+    tokio::time::timeout(Duration::from_millis(50), host_shutdown.changed())
+        .await
+        .expect_err("a rejected shutdown must not notify the host");
+    assert!(!*host_shutdown.borrow());
+
+    let mut healthy = SocketClient::connect(&path).await;
+    healthy.initialize().await;
+    healthy.ping(2).await;
+    healthy
+        .send_json(json!({
+            "jsonrpc": "2.0",
+            "id": "application-method",
+            "method": "events.list",
+            "params": {}
+        }))
+        .await;
+    let Message::Error(ErrorResponse { id: _, error }) = healthy.receive().await else {
+        panic!("the control endpoint must reject application methods")
+    };
+    assert_eq!(error.code, METHOD_NOT_FOUND);
+    assert!(!*host_shutdown.borrow());
+
+    server
+        .shutdown()
+        .await
+        .expect("the control socket must stop cleanly");
+}
+
+#[test]
+fn lifecycle_cli_detaches_reports_status_and_stops_idempotently() {
+    let directory = TempDir::new().expect("the lifecycle directory must exist");
+    let project = directory.path().join("project");
+    let state = directory.path().join("state");
+    fs::create_dir(&project).expect("the lifecycle project must exist");
+    let binary = env!("CARGO_BIN_EXE_zeta");
+
+    let fresh = StdCommand::new(binary)
+        .args(["status", "--state-dir"])
+        .arg(&state)
+        .output()
+        .expect("fresh status must execute");
+    assert!(!fresh.status.success());
+    assert_eq!(String::from_utf8_lossy(&fresh.stdout), "stopped\n");
+    assert!(!state.exists(), "status must not create runtime state");
+
+    let started = StdCommand::new(binary)
+        .args(["up", "--detach", "--project-root"])
+        .arg(&project)
+        .arg("--state-dir")
+        .arg(&state)
+        .output()
+        .expect("detached up must execute");
+    assert!(
+        started.status.success(),
+        "detached up failed: {}",
+        String::from_utf8_lossy(&started.stderr)
+    );
+    let started = String::from_utf8(started.stdout).expect("started output must be UTF-8");
+    assert!(
+        started.starts_with("started "),
+        "unexpected output: {started:?}"
+    );
+    assert_eq!(
+        fs::symlink_metadata(state.join("runtime.log"))
+            .expect("detached diagnostics must exist")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+
+    let status = StdCommand::new(binary)
+        .args(["status", "--state-dir"])
+        .arg(&state)
+        .output()
+        .expect("running status must execute");
+    assert!(status.status.success());
+    assert_eq!(String::from_utf8_lossy(&status.stdout), "running\n");
+
+    let already = StdCommand::new(binary)
+        .args(["up", "--detach", "--project-root"])
+        .arg(&project)
+        .arg("--state-dir")
+        .arg(&state)
+        .output()
+        .expect("second detached up must execute");
+    assert!(already.status.success());
+    assert!(String::from_utf8_lossy(&already.stdout).starts_with("already running "));
+
+    let json_status = StdCommand::new(binary)
+        .args(["status", "--json", "--state-dir"])
+        .arg(&state)
+        .output()
+        .expect("JSON status must execute");
+    assert!(json_status.status.success());
+    let report: Value =
+        serde_json::from_slice(&json_status.stdout).expect("status must emit compact JSON");
+    assert_eq!(
+        report
+            .as_object()
+            .expect("status report must be an object")
+            .len(),
+        8
+    );
+    assert_eq!(report["status"], "running");
+    assert!(report["pid"].is_number());
+    assert_eq!(
+        report["state_dir"],
+        fs::canonicalize(&state)
+            .expect("runtime state must resolve")
+            .display()
+            .to_string()
+    );
+    assert_eq!(
+        report["project_root"],
+        fs::canonicalize(&project)
+            .expect("project root must resolve")
+            .display()
+            .to_string()
+    );
+
+    let stopped = StdCommand::new(binary)
+        .args(["down", "--state-dir"])
+        .arg(&state)
+        .output()
+        .expect("down must execute");
+    assert!(
+        stopped.status.success(),
+        "down failed: {}",
+        String::from_utf8_lossy(&stopped.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&stopped.stdout), "stopped\n");
+
+    let stopped_again = StdCommand::new(binary)
+        .args(["down", "--state-dir"])
+        .arg(&state)
+        .output()
+        .expect("idempotent down must execute");
+    assert!(stopped_again.status.success());
+    assert_eq!(String::from_utf8_lossy(&stopped_again.stdout), "stopped\n");
+}
+
+#[tokio::test]
+async fn lifecycle_application_socket_is_ready_without_shutdown_authority() {
+    let directory = TempDir::new().expect("the lifecycle directory must exist");
+    let project = directory.path().join("project");
+    let state = directory.path().join("state");
+    fs::create_dir(&project).expect("the lifecycle project must exist");
+    let binary = env!("CARGO_BIN_EXE_zeta");
+    let started = StdCommand::new(binary)
+        .args(["up", "--detach", "--project-root"])
+        .arg(&project)
+        .arg("--state-dir")
+        .arg(&state)
+        .output()
+        .expect("detached up must execute");
+    assert!(
+        started.status.success(),
+        "{}",
+        String::from_utf8_lossy(&started.stderr)
+    );
+
+    let mut client = SocketClient::connect(&state.join("runtime.sock")).await;
+    let initialized = client.initialize().await;
+    assert!(initialized["config"]["instance_id"].is_string());
+    client
+        .send_json(json!({
+            "jsonrpc": "2.0",
+            "id": "application",
+            "method": "events.list",
+            "params": {}
+        }))
+        .await;
+    let Message::Error(ErrorResponse { id: _, error }) = client.receive().await else {
+        panic!("the lifecycle application seam must return an error")
+    };
+    assert_eq!(error.code, SERVER_ERROR);
+    assert_eq!(
+        error.data.expect("the error must be structured")["code"],
+        "runtime_not_available"
+    );
+
+    client
+        .send_json(json!({
+            "jsonrpc": "2.0",
+            "id": "unauthorized-shutdown",
+            "method": "shutdown",
+            "params": {}
+        }))
+        .await;
+    let Message::Error(ErrorResponse { id: _, error }) = client.receive().await else {
+        panic!("the application socket must reject shutdown")
+    };
+    assert_eq!(error.code, METHOD_NOT_FOUND);
+
+    let status = StdCommand::new(binary)
+        .args(["status", "--state-dir"])
+        .arg(&state)
+        .output()
+        .expect("status must execute");
+    assert!(status.status.success());
+    let stopped = StdCommand::new(binary)
+        .args(["down", "--state-dir"])
+        .arg(&state)
+        .output()
+        .expect("down must execute");
+    assert!(stopped.status.success());
+}
+
+struct ForegroundRuntime {
+    child: Child,
+}
+
+impl ForegroundRuntime {
+    fn start(project: &Path, state: &Path) -> Self {
+        let mut child = StdCommand::new(env!("CARGO_BIN_EXE_zeta"))
+            .args(["up", "--project-root"])
+            .arg(project)
+            .arg("--state-dir")
+            .arg(state)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("foreground up must start");
+        let stdout = child.stdout.take().expect("up must expose readiness");
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut line = String::new();
+            let result = StdBufReader::new(stdout).read_line(&mut line).map(|_| line);
+            let _sent = sender.send(result);
+        });
+        let readiness = receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("foreground up must become ready")
+            .expect("foreground readiness must be readable");
+        assert!(
+            readiness.starts_with("running "),
+            "unexpected readiness: {readiness:?}"
+        );
+        Self { child }
+    }
+
+    fn wait_for_clean_exit(&mut self) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let status = self
+                .child
+                .try_wait()
+                .expect("foreground runtime status must be readable");
+            if let Some(status) = status {
+                assert!(status.success(), "foreground runtime exited {status}");
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "foreground runtime did not exit"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+}
+
+impl Drop for ForegroundRuntime {
+    fn drop(&mut self) {
+        let _killed = self.child.kill();
+        let _status = self.child.wait();
+    }
+}
+
+#[test]
+fn lifecycle_cli_foreground_is_ready_and_down_releases_ownership() {
+    let directory = TempDir::new().expect("the lifecycle directory must exist");
+    let project = directory.path().join("project");
+    let state = directory.path().join("state");
+    fs::create_dir(&project).expect("the lifecycle project must exist");
+    let mut runtime = ForegroundRuntime::start(&project, &state);
+    let metadata_before = fs::read(state.join("runtime.json")).expect("metadata must exist");
+    let socket_before =
+        fs::symlink_metadata(state.join("runtime.sock")).expect("application socket must exist");
+    let control_before = fs::symlink_metadata(state.join("runtime-control.sock"))
+        .expect("control socket must exist");
+
+    let already = StdCommand::new(env!("CARGO_BIN_EXE_zeta"))
+        .args(["up", "--project-root"])
+        .arg(&project)
+        .arg("--state-dir")
+        .arg(&state)
+        .output()
+        .expect("second foreground up must execute");
+    assert!(already.status.success());
+    assert!(String::from_utf8_lossy(&already.stdout).starts_with("already running "));
+    assert_eq!(
+        fs::read(state.join("runtime.json")).expect("metadata must remain"),
+        metadata_before
+    );
+    let socket_after =
+        fs::symlink_metadata(state.join("runtime.sock")).expect("application socket must remain");
+    let control_after = fs::symlink_metadata(state.join("runtime-control.sock"))
+        .expect("control socket must remain");
+    assert_eq!(
+        (socket_after.dev(), socket_after.ino()),
+        (socket_before.dev(), socket_before.ino())
+    );
+    assert_eq!(
+        (control_after.dev(), control_after.ino()),
+        (control_before.dev(), control_before.ino())
+    );
+
+    let down = StdCommand::new(env!("CARGO_BIN_EXE_zeta"))
+        .args(["down", "--state-dir"])
+        .arg(&state)
+        .output()
+        .expect("down must execute");
+    assert!(
+        down.status.success(),
+        "{}",
+        String::from_utf8_lossy(&down.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&down.stdout), "stopped\n");
+    runtime.wait_for_clean_exit();
+    assert!(!state.join("runtime.json").exists());
+    assert!(!state.join("runtime.sock").exists());
+    assert!(!state.join("runtime-control.sock").exists());
+    assert!(state.join("runtime.lock").exists());
+}
+
+#[test]
+fn lifecycle_cli_handles_operator_signals_as_clean_shutdown() {
+    for signal in [
+        rustix::process::Signal::Int,
+        rustix::process::Signal::Term,
+        rustix::process::Signal::Hup,
+    ] {
+        let directory = TempDir::new().expect("the lifecycle directory must exist");
+        let project = directory.path().join("project");
+        let state = directory.path().join("state");
+        fs::create_dir(&project).expect("the lifecycle project must exist");
+        let mut runtime = ForegroundRuntime::start(&project, &state);
+        rustix::process::kill_process(rustix::process::Pid::from_child(&runtime.child), signal)
+            .expect("the operator signal must be delivered");
+        runtime.wait_for_clean_exit();
+        assert!(!state.join("runtime.json").exists());
+        assert!(!state.join("runtime.sock").exists());
+        assert!(!state.join("runtime-control.sock").exists());
+    }
+}
+
+#[test]
+fn lifecycle_cli_reports_stopping_degraded_and_stale_without_repairing_status() {
+    let binary = env!("CARGO_BIN_EXE_zeta");
+    let directory = TempDir::new().expect("the lifecycle directory must exist");
+    let root = fs::canonicalize(directory.path()).expect("the lifecycle root must resolve");
+    let project = root.join("project");
+    fs::create_dir(&project).expect("the lifecycle project must exist");
+
+    let stopping_state = root.join("stopping");
+    let stopping_paths = RuntimePaths::new(&stopping_state);
+    let stopping_lease =
+        RuntimeLease::acquire(stopping_paths.clone()).expect("the stopping lease must be held");
+    let stopping_metadata = RuntimeMetadata::new(
+        "00000000-0000-4000-8000-000000000001",
+        4242,
+        RuntimeOwnerMode::Foreground,
+        RuntimePhase::Stopping,
+        &project,
+        &stopping_paths,
+        1,
+    );
+    stopping_lease
+        .write_metadata(&stopping_metadata)
+        .expect("stopping metadata must be written");
+    let stopping = StdCommand::new(binary)
+        .args(["status", "--state-dir"])
+        .arg(&stopping_state)
+        .output()
+        .expect("stopping status must execute");
+    assert!(!stopping.status.success());
+    assert_eq!(String::from_utf8_lossy(&stopping.stdout), "stopping\n");
+    assert_eq!(
+        fs::read_to_string(stopping_paths.metadata()).expect("metadata must remain"),
+        serde_json::to_string(&stopping_metadata).expect("metadata must serialize") + "\n"
+    );
+    drop(stopping_lease);
+
+    let degraded_state = root.join("degraded");
+    let degraded_paths = RuntimePaths::new(&degraded_state);
+    let degraded_lease =
+        RuntimeLease::acquire(degraded_paths.clone()).expect("the degraded lease must be held");
+    let degraded = StdCommand::new(binary)
+        .args(["status", "--json", "--state-dir"])
+        .arg(&degraded_state)
+        .output()
+        .expect("degraded status must execute");
+    assert!(!degraded.status.success());
+    let degraded_report: Value =
+        serde_json::from_slice(&degraded.stdout).expect("degraded status must be JSON");
+    assert_eq!(degraded_report["status"], "degraded");
+    assert!(degraded_report["detail"].is_string());
+    assert!(!degraded_paths.metadata().exists());
+    let refused_down = StdCommand::new(binary)
+        .args(["down", "--state-dir"])
+        .arg(&degraded_state)
+        .output()
+        .expect("degraded down must execute");
+    assert!(!refused_down.status.success());
+    drop(degraded_lease);
+
+    let stale_state = root.join("stale");
+    fs::create_dir(&stale_state).expect("the stale state directory must exist");
+    fs::write(stale_state.join("runtime.json"), "not json\n")
+        .expect("invalid stale metadata must exist");
+    let stale = StdCommand::new(binary)
+        .args(["status", "--state-dir"])
+        .arg(&stale_state)
+        .output()
+        .expect("stale status must execute");
+    assert!(!stale.status.success());
+    assert_eq!(String::from_utf8_lossy(&stale.stdout), "stale\n");
+    assert_eq!(
+        fs::read_to_string(stale_state.join("runtime.json"))
+            .expect("status must preserve stale metadata"),
+        "not json\n"
+    );
+    let cleaned = StdCommand::new(binary)
+        .args(["down", "--state-dir"])
+        .arg(&stale_state)
+        .output()
+        .expect("stale down must execute");
+    assert!(
+        cleaned.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cleaned.stderr)
+    );
+    assert!(!stale_state.join("runtime.json").exists());
 }
 
 fn object(value: Value) -> Map<String, Value> {

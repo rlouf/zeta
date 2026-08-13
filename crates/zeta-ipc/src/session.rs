@@ -856,6 +856,8 @@ impl Session {
 
 fn is_client_method(method: &str) -> bool {
     method == "events.list"
+        || method == "agents.list"
+        || method == "project.reload"
         || method == "session.start"
         || method == "session.send"
         || method == "session.status"

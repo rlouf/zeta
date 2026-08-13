@@ -2954,6 +2954,7 @@ dependencies = [
  "zeta-ipc",
  "zeta-journal",
  "zeta-manifest",
+ "zeta-substrate",
 ]
 
 [[package]]

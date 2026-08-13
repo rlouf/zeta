@@ -23,6 +23,12 @@ Use Zeta to give an agent an ongoing responsibility:
 Your first agent can stay on top of an inbox. You give it the responsibility
 once. When a file arrives, it writes a summary where you can use it.
 
+## Native runtime CLI
+
+The Rust native CLI now has an explicit project lifecycle. It validates,
+activates, starts, inspects, and stops one project generation. See the
+[Native CLI guide](docs/native-cli.md).
+
 ## Give an agent its first responsibility
 
 Zeta needs Python 3.11+ and Codex. Run `codex login` once before you start.

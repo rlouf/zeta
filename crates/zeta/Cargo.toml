@@ -22,6 +22,7 @@ zeta-manifest = { path = "../zeta-manifest" }
 zeta-dispatch = { path = "../zeta-dispatch" }
 zeta-ipc = { path = "../zeta-ipc" }
 zeta-journal = { path = "../zeta-journal" }
+zeta-substrate = { path = "../zeta-substrate" }
 
 [dev-dependencies]
 tempfile.workspace = true

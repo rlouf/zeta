@@ -23,9 +23,13 @@ use zeta_ipc::{
 use zeta_journal::Event;
 
 pub mod process_executor;
+pub mod project_runtime;
 pub mod runtime_services;
 
 pub use process_executor::{ProcessExecutor, ProcessExecutorConfig, ProcessLaunch};
+pub use project_runtime::{
+    ActiveAgent, ActiveProjectStatus, ProjectGeneration, ProjectRuntimeError,
+};
 pub use runtime_services::{
     prepare_agent, CallbackDraftRecorder, CallbackObserver, CancellationToken, ExecutorSelection,
     InvocationInputs, PrepareAgentError, PrepareAgentErrorKind, PreparedAgent, ScheduleStatus,

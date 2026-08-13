@@ -20,7 +20,7 @@ use zeta::runtime_services::{
 use zeta::{
     prepare_agent, CallbackDraftRecorder, CallbackObserver, CancellationToken, ExecutorSelection,
     InvocationInputs, LocalSocketConfig, LocalSocketServer, ProcessExecutor, ProcessLaunch,
-    Scheduler, SystemClock, UuidIdSource,
+    ProjectGeneration, Scheduler, SystemClock, UuidIdSource,
 };
 use zeta_agent::{
     native_capabilities, resolve_capabilities, AgentInvocation, AgentRunResult, AgentRunner,
@@ -1426,8 +1426,12 @@ fn lifecycle_cli_detaches_reports_status_and_stops_idempotently() {
         .output()
         .expect("fresh status must execute");
     assert!(!fresh.status.success());
-    assert_eq!(String::from_utf8_lossy(&fresh.stdout), "stopped\n");
+    assert_eq!(
+        String::from_utf8_lossy(&fresh.stdout),
+        "Runtime: stopped\nNext: zeta up --project-root <PROJECT_ROOT>\n"
+    );
     assert!(!state.exists(), "status must not create runtime state");
+    activate_lifecycle_project(&project, &state);
 
     let started = StdCommand::new(binary)
         .args(["up", "--detach", "--project-root"])
@@ -1443,7 +1447,7 @@ fn lifecycle_cli_detaches_reports_status_and_stops_idempotently() {
     );
     let started = String::from_utf8(started.stdout).expect("started output must be UTF-8");
     assert!(
-        started.starts_with("started "),
+        started.starts_with("Runtime started.\nPID: "),
         "unexpected output: {started:?}"
     );
     assert_eq!(
@@ -1461,7 +1465,7 @@ fn lifecycle_cli_detaches_reports_status_and_stops_idempotently() {
         .output()
         .expect("running status must execute");
     assert!(status.status.success());
-    assert_eq!(String::from_utf8_lossy(&status.stdout), "running\n");
+    assert!(String::from_utf8_lossy(&status.stdout).starts_with("Runtime: running\n"));
 
     let already = StdCommand::new(binary)
         .args(["up", "--detach", "--project-root"])
@@ -1471,7 +1475,9 @@ fn lifecycle_cli_detaches_reports_status_and_stops_idempotently() {
         .output()
         .expect("second detached up must execute");
     assert!(already.status.success());
-    assert!(String::from_utf8_lossy(&already.stdout).starts_with("already running "));
+    assert!(
+        String::from_utf8_lossy(&already.stdout).starts_with("Runtime is already running.\nPID: ")
+    );
 
     let json_status = StdCommand::new(binary)
         .args(["status", "--json", "--state-dir"])
@@ -1486,8 +1492,10 @@ fn lifecycle_cli_detaches_reports_status_and_stops_idempotently() {
             .as_object()
             .expect("status report must be an object")
             .len(),
-        8
+        11
     );
+    assert_eq!(report["schema"], "zeta.status");
+    assert_eq!(report["version"], 1);
     assert_eq!(report["status"], "running");
     assert!(report["pid"].is_number());
     assert_eq!(
@@ -1504,6 +1512,7 @@ fn lifecycle_cli_detaches_reports_status_and_stops_idempotently() {
             .display()
             .to_string()
     );
+    assert_eq!(report["active_project"]["agents"][0]["slug"], "worker");
 
     let stopped = StdCommand::new(binary)
         .args(["down", "--state-dir"])
@@ -1515,7 +1524,10 @@ fn lifecycle_cli_detaches_reports_status_and_stops_idempotently() {
         "down failed: {}",
         String::from_utf8_lossy(&stopped.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&stopped.stdout), "stopped\n");
+    assert_eq!(
+        String::from_utf8_lossy(&stopped.stdout),
+        "Runtime is stopped.\n"
+    );
 
     let stopped_again = StdCommand::new(binary)
         .args(["down", "--state-dir"])
@@ -1523,7 +1535,10 @@ fn lifecycle_cli_detaches_reports_status_and_stops_idempotently() {
         .output()
         .expect("idempotent down must execute");
     assert!(stopped_again.status.success());
-    assert_eq!(String::from_utf8_lossy(&stopped_again.stdout), "stopped\n");
+    assert_eq!(
+        String::from_utf8_lossy(&stopped_again.stdout),
+        "Runtime is stopped.\n"
+    );
 }
 
 #[tokio::test]
@@ -1532,6 +1547,7 @@ async fn lifecycle_application_socket_is_ready_without_shutdown_authority() {
     let project = directory.path().join("project");
     let state = directory.path().join("state");
     fs::create_dir(&project).expect("the lifecycle project must exist");
+    activate_lifecycle_project(&project, &state);
     let binary = env!("CARGO_BIN_EXE_zeta");
     let started = StdCommand::new(binary)
         .args(["up", "--detach", "--project-root"])
@@ -1553,18 +1569,28 @@ async fn lifecycle_application_socket_is_ready_without_shutdown_authority() {
         .send_json(json!({
             "jsonrpc": "2.0",
             "id": "application",
-            "method": "events.list",
+            "method": "agents.list",
             "params": {}
         }))
         .await;
-    let Message::Error(ErrorResponse { id: _, error }) = client.receive().await else {
-        panic!("the lifecycle application seam must return an error")
+    let Message::Success(SuccessResponse { id: _, result }) = client.receive().await else {
+        panic!("the lifecycle application seam must list active agents")
     };
-    assert_eq!(error.code, SERVER_ERROR);
-    assert_eq!(
-        error.data.expect("the error must be structured")["code"],
-        "runtime_not_available"
-    );
+    assert_eq!(result["agents"][0]["slug"], "worker");
+
+    write_lifecycle_agent(&project, "replacement");
+    client
+        .send_json(json!({
+            "jsonrpc": "2.0",
+            "id": "reload",
+            "method": "project.reload",
+            "params": {}
+        }))
+        .await;
+    let Message::Success(SuccessResponse { id: _, result }) = client.receive().await else {
+        panic!("the lifecycle application seam must reload agents")
+    };
+    assert_eq!(result["agents"].as_array().expect("agents array").len(), 2);
 
     client
         .send_json(json!({
@@ -1621,7 +1647,7 @@ impl ForegroundRuntime {
             .expect("foreground up must become ready")
             .expect("foreground readiness must be readable");
         assert!(
-            readiness.starts_with("running "),
+            readiness == "Runtime is running.\n",
             "unexpected readiness: {readiness:?}"
         );
         Self { child }
@@ -1654,12 +1680,34 @@ impl Drop for ForegroundRuntime {
     }
 }
 
+fn activate_lifecycle_project(project: &Path, state: &Path) {
+    write_lifecycle_agent(project, "worker");
+    let generation = ProjectGeneration::load(project).expect("project generation must load");
+    let paths = RuntimePaths::new(state);
+    let lease = RuntimeLease::acquire(paths.clone()).expect("project state lease");
+    generation
+        .write(paths.active_project())
+        .expect("active project must write");
+    drop(lease);
+}
+
+fn write_lifecycle_agent(project: &Path, slug: &str) {
+    let agents = project.join("agents");
+    fs::create_dir_all(&agents).expect("agent directory must exist");
+    fs::write(
+        agents.join(format!("{slug}.md")),
+        format!("---\nname: {slug}\ndescription: Lifecycle fixture.\n---\nReport.\n"),
+    )
+    .expect("agent source must write");
+}
+
 #[test]
 fn lifecycle_cli_foreground_is_ready_and_down_releases_ownership() {
     let directory = TempDir::new().expect("the lifecycle directory must exist");
     let project = directory.path().join("project");
     let state = directory.path().join("state");
     fs::create_dir(&project).expect("the lifecycle project must exist");
+    activate_lifecycle_project(&project, &state);
     let mut runtime = ForegroundRuntime::start(&project, &state);
     let metadata_before = fs::read(state.join("runtime.json")).expect("metadata must exist");
     let socket_before =
@@ -1675,7 +1723,9 @@ fn lifecycle_cli_foreground_is_ready_and_down_releases_ownership() {
         .output()
         .expect("second foreground up must execute");
     assert!(already.status.success());
-    assert!(String::from_utf8_lossy(&already.stdout).starts_with("already running "));
+    assert!(
+        String::from_utf8_lossy(&already.stdout).starts_with("Runtime is already running.\nPID: ")
+    );
     assert_eq!(
         fs::read(state.join("runtime.json")).expect("metadata must remain"),
         metadata_before
@@ -1703,7 +1753,10 @@ fn lifecycle_cli_foreground_is_ready_and_down_releases_ownership() {
         "{}",
         String::from_utf8_lossy(&down.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&down.stdout), "stopped\n");
+    assert_eq!(
+        String::from_utf8_lossy(&down.stdout),
+        "Runtime is stopped.\n"
+    );
     runtime.wait_for_clean_exit();
     assert!(!state.join("runtime.json").exists());
     assert!(!state.join("runtime.sock").exists());
@@ -1722,6 +1775,7 @@ fn lifecycle_cli_handles_operator_signals_as_clean_shutdown() {
         let project = directory.path().join("project");
         let state = directory.path().join("state");
         fs::create_dir(&project).expect("the lifecycle project must exist");
+        activate_lifecycle_project(&project, &state);
         let mut runtime = ForegroundRuntime::start(&project, &state);
         rustix::process::kill_process(rustix::process::Pid::from_child(&runtime.child), signal)
             .expect("the operator signal must be delivered");
@@ -1762,7 +1816,12 @@ fn lifecycle_cli_reports_stopping_degraded_and_stale_without_repairing_status() 
         .output()
         .expect("stopping status must execute");
     assert!(!stopping.status.success());
-    assert_eq!(String::from_utf8_lossy(&stopping.stdout), "stopping\n");
+    assert_eq!(
+        String::from_utf8_lossy(&stopping.stdout),
+        "Runtime: stopping\nPID: 4242\nProject: ".to_owned()
+            + &project.display().to_string()
+            + "\n"
+    );
     assert_eq!(
         fs::read_to_string(stopping_paths.metadata()).expect("metadata must remain"),
         serde_json::to_string(&stopping_metadata).expect("metadata must serialize") + "\n"
@@ -1802,7 +1861,7 @@ fn lifecycle_cli_reports_stopping_degraded_and_stale_without_repairing_status() 
         .output()
         .expect("stale status must execute");
     assert!(!stale.status.success());
-    assert_eq!(String::from_utf8_lossy(&stale.stdout), "stale\n");
+    assert_eq!(String::from_utf8_lossy(&stale.stdout), "Runtime: stale\n");
     assert_eq!(
         fs::read_to_string(stale_state.join("runtime.json"))
             .expect("status must preserve stale metadata"),

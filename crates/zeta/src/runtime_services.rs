@@ -40,6 +40,7 @@ const RUNTIME_METADATA_TEMP_NAME: &str = "runtime.json.tmp";
 const RUNTIME_SOCKET_NAME: &str = "runtime.sock";
 const RUNTIME_CONTROL_SOCKET_NAME: &str = "runtime-control.sock";
 const RUNTIME_LOG_NAME: &str = "runtime.log";
+const ACTIVE_PROJECT_NAME: &str = "active-project.json";
 
 /// Names the process mode recorded by one runtime owner.
 ///
@@ -93,6 +94,7 @@ pub struct RuntimePaths {
     socket: PathBuf,
     control_socket: PathBuf,
     log: PathBuf,
+    active_project: PathBuf,
 }
 
 impl RuntimePaths {
@@ -105,6 +107,7 @@ impl RuntimePaths {
             socket: state_dir.join(RUNTIME_SOCKET_NAME),
             control_socket: state_dir.join(RUNTIME_CONTROL_SOCKET_NAME),
             log: state_dir.join(RUNTIME_LOG_NAME),
+            active_project: state_dir.join(ACTIVE_PROJECT_NAME),
             state_dir,
         }
     }
@@ -137,6 +140,11 @@ impl RuntimePaths {
     /// Returns the detached-runtime diagnostics path.
     pub fn log(&self) -> &Path {
         &self.log
+    }
+
+    /// Returns the atomically replaced active project generation document.
+    pub fn active_project(&self) -> &Path {
+        &self.active_project
     }
 }
 

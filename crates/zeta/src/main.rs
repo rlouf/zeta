@@ -6,9 +6,11 @@ use std::io::{self, BufRead, BufReader as StdBufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command as ProcessCommand, ExitCode, Stdio};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+#[cfg(test)]
+use clap::CommandFactory;
 use clap::{Args, Parser, Subcommand};
 use rustix::fs::{flock, open, FlockOperation, Mode, OFlags};
 use serde::{Deserialize, Serialize};
@@ -20,10 +22,11 @@ use zeta::runtime_services::{
     RuntimeLease, RuntimeLifecycleErrorKind, RuntimeMetadata, RuntimeOwnerMode, RuntimePaths,
     RuntimePhase,
 };
-use zeta::{LocalSocketConfig, LocalSocketServer};
+use zeta::{ActiveProjectStatus, LocalSocketConfig, LocalSocketServer, ProjectGeneration};
 use zeta_ipc::{
-    Action, ErrorObject, InitializeParams, Message, PeerIdentity, RequestId, Retryability, Role,
-    Session, ShutdownDirection, MAX_FRAME_BYTES, PROTOCOL_VERSION, SERVER_ERROR,
+    Action, ErrorObject, InitializeParams, Message, PeerIdentity, Request, RequestId, Retryability,
+    Role, Session, ShutdownDirection, INVALID_PARAMS, MAX_FRAME_BYTES, METHOD_NOT_FOUND,
+    PROTOCOL_VERSION, SERVER_ERROR,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41,8 +44,12 @@ enum StatusOutput {
 #[derive(Debug, Parser)]
 #[command(
     name = "zeta",
-    about = "Native application host for Zeta.",
-    disable_help_subcommand = true
+    about = "Run one explicit Zeta agent project.",
+    long_about = "Run one explicit Zeta agent project.\n\nReload validates source and activates one immutable project generation. The runtime uses that generation until the next successful reload.",
+    version,
+    arg_required_else_help = true,
+    disable_help_subcommand = true,
+    after_help = "GET STARTED:\n  1. zeta check --project-root ~/my-project\n  2. zeta reload --project-root ~/my-project\n  3. zeta up --detach --project-root ~/my-project\n  4. zeta status\n\nRun 'zeta <command> --help' for command examples."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -51,55 +58,111 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum CliCommand {
-    /// Start the native runtime.
+    /// Validate project source without runtime changes.
+    #[command(
+        long_about = "Validate Markdown agent files in agents/. This command does not change the active generation or start the runtime.",
+        after_help = "EXAMPLE:\n  zeta check --project-root ~/my-project"
+    )]
+    Check(ProjectArgs),
+    /// Validate source and activate a new project generation.
+    #[command(
+        long_about = "Validate Markdown agent files in agents/ and atomically activate one project generation. A running runtime adopts it immediately. A failed reload keeps the prior generation active.",
+        after_help = "EXAMPLES:\n  zeta reload --project-root ~/my-project\n  zeta reload --project-root ~/my-project --state-dir /var/lib/zeta"
+    )]
+    Reload(ReloadArgs),
+    /// Start the runtime with the active project generation.
+    #[command(
+        long_about = "Start the runtime with the active project generation. Run 'zeta reload' first. This command does not read draft agent files.",
+        after_help = "EXAMPLES:\n  zeta up --project-root ~/my-project\n  zeta up --detach --project-root ~/my-project"
+    )]
     Up(UpArgs),
-    /// Stop the native runtime.
+    /// Stop the runtime and preserve its active generation.
+    #[command(
+        long_about = "Stop the runtime. This command keeps the active project generation. Use 'zeta up' to start that generation again.",
+        after_help = "EXAMPLE:\n  zeta down"
+    )]
     Down(StateArgs),
-    /// Show native runtime status.
+    /// Show runtime, generation, and agent status.
+    #[command(
+        long_about = "Show the runtime state. A running runtime also reports its active project generation and agents. Use --json for script input.",
+        after_help = "EXAMPLES:\n  zeta status\n  zeta status --json | jq '.active_project.agents[].slug'"
+    )]
     Status(StatusArgs),
 }
 
 #[derive(Debug, Args)]
 struct UpArgs {
-    /// Run independently from the invoking terminal.
+    /// Start in the background and return after readiness.
     #[arg(short = 'd', long)]
     detach: bool,
-    /// Resolve authored project files from this directory.
+    /// Find the active project generation from this directory.
     #[arg(long, value_name = "DIR", default_value = ".")]
     project_root: PathBuf,
-    /// Store runtime lifecycle state in this directory.
+    /// Read runtime state from this directory.
+    #[arg(long, value_name = "DIR")]
+    state_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+struct ProjectArgs {
+    /// Read authored project files from this directory.
+    #[arg(long, value_name = "DIR", default_value = ".")]
+    project_root: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct ReloadArgs {
+    /// Read authored project files from this directory.
+    #[arg(long, value_name = "DIR", default_value = ".")]
+    project_root: PathBuf,
+    /// Store the active project generation in this directory.
     #[arg(long, value_name = "DIR")]
     state_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
 struct StateArgs {
-    /// Read runtime lifecycle state from this directory.
+    /// Find runtime state from this project directory.
+    #[arg(long, value_name = "DIR")]
+    project_root: Option<PathBuf>,
+    /// Read runtime state from this directory.
     #[arg(long, value_name = "DIR")]
     state_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
 struct StatusArgs {
-    /// Read runtime lifecycle state from this directory.
+    /// Find runtime state from this project directory.
+    #[arg(long, value_name = "DIR")]
+    project_root: Option<PathBuf>,
+    /// Read runtime state from this directory.
     #[arg(long, value_name = "DIR")]
     state_dir: Option<PathBuf>,
-    /// Emit one compact JSON status document.
+    /// Write one stable JSON status document.
     #[arg(long)]
     json: bool,
 }
 
 #[derive(Debug, Eq, PartialEq)]
 enum Command {
+    Check {
+        project_root: PathBuf,
+    },
+    Reload {
+        project_root: PathBuf,
+        state_dir: Option<PathBuf>,
+    },
     Up {
         mode: UpMode,
         project_root: PathBuf,
         state_dir: Option<PathBuf>,
     },
     Down {
+        project_root: Option<PathBuf>,
         state_dir: Option<PathBuf>,
     },
     Status {
+        project_root: Option<PathBuf>,
         state_dir: Option<PathBuf>,
         output: StatusOutput,
     },
@@ -108,6 +171,13 @@ enum Command {
 impl From<CliCommand> for Command {
     fn from(command: CliCommand) -> Self {
         match command {
+            CliCommand::Check(arguments) => Self::Check {
+                project_root: arguments.project_root,
+            },
+            CliCommand::Reload(arguments) => Self::Reload {
+                project_root: arguments.project_root,
+                state_dir: arguments.state_dir,
+            },
             CliCommand::Up(arguments) => Self::Up {
                 mode: if arguments.detach {
                     UpMode::Detached
@@ -118,9 +188,11 @@ impl From<CliCommand> for Command {
                 state_dir: arguments.state_dir,
             },
             CliCommand::Down(arguments) => Self::Down {
+                project_root: arguments.project_root,
                 state_dir: arguments.state_dir,
             },
             CliCommand::Status(arguments) => Self::Status {
+                project_root: arguments.project_root,
                 state_dir: arguments.state_dir,
                 output: if arguments.json {
                     StatusOutput::Json
@@ -143,6 +215,13 @@ impl fmt::Display for PathError {
 
 #[derive(Debug, Eq, PartialEq)]
 enum ResolvedCommand {
+    Check {
+        project_root: PathBuf,
+    },
+    Reload {
+        project_root: PathBuf,
+        state_dir: PathBuf,
+    },
     Up {
         mode: UpMode,
         project_root: PathBuf,
@@ -161,6 +240,13 @@ enum ResolvedCommand {
 impl ResolvedCommand {
     fn state_dir(&self) -> &Path {
         match self {
+            Self::Check { project_root: _ } => {
+                panic!("check does not resolve a runtime state directory")
+            }
+            Self::Reload {
+                project_root: _,
+                state_dir,
+            } => state_dir,
             Self::Up {
                 mode: _,
                 project_root: _,
@@ -218,9 +304,27 @@ async fn main() -> ExitCode {
     match execute_command(resolved).await {
         Ok(code) => code,
         Err(error) => {
-            eprintln!("error: {error}");
+            print_command_error(&error);
             ExitCode::from(1)
         }
+    }
+}
+
+fn print_command_error(error: &str) {
+    eprintln!("error: {error}");
+    let hint = if error.contains("no active project generation") {
+        Some("Run 'zeta reload --project-root <PROJECT_ROOT>' first.")
+    } else if error.contains("different project root") {
+        Some("Use the same --project-root and --state-dir for each command.")
+    } else if error.contains("agents directory") {
+        Some("Create <PROJECT_ROOT>/agents/ and add one Markdown agent file.")
+    } else if error.contains("runtime is degraded") {
+        Some("Run 'zeta status --json' to inspect the runtime state.")
+    } else {
+        None
+    };
+    if let Some(hint) = hint {
+        eprintln!("help: {hint}");
     }
 }
 
@@ -233,14 +337,33 @@ fn resolve_command_paths(
     let invocation_dir = canonical_directory(invocation_dir, "invocation directory")?;
     let home = resolve_allow_missing(home, &invocation_dir)?;
     match command {
+        Command::Check { project_root } => {
+            let project_root = resolve_project_root(project_root, &home, &invocation_dir)?;
+            Ok(ResolvedCommand::Check { project_root })
+        }
+        Command::Reload {
+            project_root,
+            state_dir,
+        } => {
+            let project_root = resolve_project_root(project_root, &home, &invocation_dir)?;
+            let state_dir = resolve_state_dir(
+                state_dir.as_deref(),
+                environment_state_dir,
+                &project_root,
+                &invocation_dir,
+                &home,
+            )?;
+            Ok(ResolvedCommand::Reload {
+                project_root,
+                state_dir,
+            })
+        }
         Command::Up {
             mode,
             project_root,
             state_dir,
         } => {
-            let project_root = expand_user(&project_root, &home);
-            let project_root = resolve_allow_missing(&project_root, &invocation_dir)?;
-            let project_root = canonical_directory(&project_root, "project root")?;
+            let project_root = resolve_project_root(project_root, &home, &invocation_dir)?;
             let state_dir = resolve_state_dir(
                 state_dir.as_deref(),
                 environment_state_dir,
@@ -254,26 +377,56 @@ fn resolve_command_paths(
                 state_dir,
             })
         }
-        Command::Down { state_dir } => {
+        Command::Down {
+            project_root,
+            state_dir,
+        } => {
+            let state_start = resolve_state_start(project_root, &home, &invocation_dir)?;
             let state_dir = resolve_state_dir(
                 state_dir.as_deref(),
                 environment_state_dir,
-                &invocation_dir,
+                &state_start,
                 &invocation_dir,
                 &home,
             )?;
             Ok(ResolvedCommand::Down { state_dir })
         }
-        Command::Status { state_dir, output } => {
+        Command::Status {
+            project_root,
+            state_dir,
+            output,
+        } => {
+            let state_start = resolve_state_start(project_root, &home, &invocation_dir)?;
             let state_dir = resolve_state_dir(
                 state_dir.as_deref(),
                 environment_state_dir,
-                &invocation_dir,
+                &state_start,
                 &invocation_dir,
                 &home,
             )?;
             Ok(ResolvedCommand::Status { state_dir, output })
         }
+    }
+}
+
+fn resolve_project_root(
+    project_root: PathBuf,
+    home: &Path,
+    invocation_dir: &Path,
+) -> Result<PathBuf, PathError> {
+    let project_root = expand_user(&project_root, home);
+    let project_root = resolve_allow_missing(&project_root, invocation_dir)?;
+    canonical_directory(&project_root, "project root")
+}
+
+fn resolve_state_start(
+    project_root: Option<PathBuf>,
+    home: &Path,
+    invocation_dir: &Path,
+) -> Result<PathBuf, PathError> {
+    match project_root {
+        Some(project_root) => resolve_project_root(project_root, home, invocation_dir),
+        None => Ok(invocation_dir.to_path_buf()),
     }
 }
 
@@ -453,6 +606,8 @@ enum RuntimeStatus {
 
 #[derive(Debug, Serialize)]
 struct StatusReport {
+    schema: &'static str,
+    version: u64,
     status: RuntimeStatus,
     pid: Option<u32>,
     instance_id: Option<String>,
@@ -461,6 +616,8 @@ struct StatusReport {
     socket: PathBuf,
     control_socket: PathBuf,
     detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_project: Option<ActiveProjectStatus>,
 }
 
 impl StatusReport {
@@ -471,6 +628,8 @@ impl StatusReport {
         detail: Option<String>,
     ) -> Self {
         Self {
+            schema: "zeta.status",
+            version: 1,
             status,
             pid: Some(metadata.pid),
             instance_id: Some(metadata.instance_id),
@@ -479,6 +638,7 @@ impl StatusReport {
             socket: paths.socket().to_path_buf(),
             control_socket: paths.control_socket().to_path_buf(),
             detail,
+            active_project: None,
         }
     }
 
@@ -488,6 +648,8 @@ impl StatusReport {
         detail: Option<String>,
     ) -> Self {
         Self {
+            schema: "zeta.status",
+            version: 1,
             status,
             pid: None,
             instance_id: None,
@@ -496,6 +658,7 @@ impl StatusReport {
             socket: paths.socket().to_path_buf(),
             control_socket: paths.control_socket().to_path_buf(),
             detail,
+            active_project: None,
         }
     }
 }
@@ -530,6 +693,11 @@ enum Readiness {
 
 async fn execute_command(command: ResolvedCommand) -> Result<ExitCode, String> {
     match command {
+        ResolvedCommand::Check { project_root } => run_check(project_root),
+        ResolvedCommand::Reload {
+            project_root,
+            state_dir,
+        } => run_reload(project_root, state_dir).await,
         ResolvedCommand::Up {
             mode,
             project_root,
@@ -545,8 +713,87 @@ async fn execute_command(command: ResolvedCommand) -> Result<ExitCode, String> {
     }
 }
 
+fn run_check(project_root: PathBuf) -> Result<ExitCode, String> {
+    let generation = ProjectGeneration::load(&project_root).map_err(|error| error.to_string())?;
+    println!("Project check passed.");
+    println!("Project: {}", project_root.display());
+    print_agents(&generation.status());
+    Ok(ExitCode::SUCCESS)
+}
+
+async fn run_reload(project_root: PathBuf, state_dir: PathBuf) -> Result<ExitCode, String> {
+    let paths = RuntimePaths::new(state_dir);
+    let report = probe_runtime(&paths).await;
+    match report.status {
+        RuntimeStatus::Running => {
+            if report.project_root.as_deref() != Some(project_root.as_path()) {
+                return Err("the running runtime belongs to a different project root".to_owned());
+            }
+            let instance_id = report
+                .instance_id
+                .as_deref()
+                .ok_or_else(|| "running metadata has no instance id".to_owned())?;
+            let mut client = ControlClient::connect(paths.socket()).await?;
+            client.verify_instance(instance_id)?;
+            let project = client.reload_project().await?;
+            println!("Project reloaded. The runtime now uses this generation.");
+            print_project_summary(&project_root, &project);
+            Ok(ExitCode::SUCCESS)
+        }
+        RuntimeStatus::Stopped | RuntimeStatus::Stale => {
+            let generation =
+                ProjectGeneration::load(&project_root).map_err(|error| error.to_string())?;
+            let lease = RuntimeLease::acquire(paths.clone()).map_err(|error| error.to_string())?;
+            generation
+                .write(paths.active_project())
+                .map_err(|error| error.to_string())?;
+            drop(lease);
+            println!("Project reloaded. Start the runtime to use this generation.");
+            print_project_summary(&project_root, &generation.status());
+            println!("Next: zeta up --project-root {}", project_root.display());
+            Ok(ExitCode::SUCCESS)
+        }
+        RuntimeStatus::Stopping => Err("the runtime is stopping".to_owned()),
+        RuntimeStatus::Degraded => Err(report
+            .detail
+            .unwrap_or_else(|| "the runtime is degraded".to_owned())),
+    }
+}
+
 async fn run_status(state_dir: PathBuf, output: StatusOutput) -> Result<ExitCode, String> {
-    let report = probe_runtime(&RuntimePaths::new(state_dir)).await;
+    let paths = RuntimePaths::new(state_dir);
+    let mut report = probe_runtime(&paths).await;
+    if report.status == RuntimeStatus::Running {
+        let query = async {
+            let instance_id = report
+                .instance_id
+                .as_deref()
+                .ok_or_else(|| "running metadata has no instance id".to_owned())?;
+            let mut client = ControlClient::connect(paths.socket()).await?;
+            client.verify_instance(instance_id)?;
+            client.active_project().await
+        }
+        .await;
+        match query {
+            Ok(project) => report.active_project = Some(project),
+            Err(error) => {
+                report.status = RuntimeStatus::Degraded;
+                report.detail = Some(error);
+            }
+        }
+    } else {
+        match ProjectGeneration::read(paths.active_project()) {
+            Ok(Some(project)) => {
+                report.project_root = Some(project.project_root().to_path_buf());
+                report.active_project = Some(project.status());
+            }
+            Ok(None) => {}
+            Err(error) => {
+                report.status = RuntimeStatus::Degraded;
+                report.detail = Some(error.to_string());
+            }
+        }
+    }
     match output {
         StatusOutput::Human => print_human_status(&report),
         StatusOutput::Json => {
@@ -562,7 +809,39 @@ async fn run_status(state_dir: PathBuf, output: StatusOutput) -> Result<ExitCode
 }
 
 fn print_human_status(report: &StatusReport) {
-    println!("{}", status_name(report.status));
+    println!("Runtime: {}", status_name(report.status));
+    if let Some(pid) = report.pid {
+        println!("PID: {pid}");
+    }
+    if let Some(project_root) = &report.project_root {
+        println!("Project: {}", project_root.display());
+    }
+    if let Some(project) = &report.active_project {
+        print_active_project_summary(project);
+    }
+    if let Some(detail) = &report.detail {
+        println!("Detail: {detail}");
+    }
+    if report.status == RuntimeStatus::Stopped {
+        println!("Next: zeta up --project-root <PROJECT_ROOT>");
+    }
+}
+
+fn print_project_summary(project_root: &Path, project: &ActiveProjectStatus) {
+    println!("Project: {}", project_root.display());
+    print_active_project_summary(project);
+}
+
+fn print_active_project_summary(project: &ActiveProjectStatus) {
+    println!("Generation: {}", project.generation_id);
+    print_agents(project);
+}
+
+fn print_agents(project: &ActiveProjectStatus) {
+    println!("Agents: {}", project.agents.len());
+    for agent in &project.agents {
+        println!("  - {}: {}", agent.slug, agent.name);
+    }
 }
 
 fn status_name(status: RuntimeStatus) -> &'static str {
@@ -710,12 +989,12 @@ async fn run_down(state_dir: PathBuf) -> Result<ExitCode, String> {
     let report = probe_runtime(&paths).await;
     match report.status {
         RuntimeStatus::Stopped => {
-            println!("stopped");
+            println!("Runtime is stopped.");
             Ok(ExitCode::SUCCESS)
         }
         RuntimeStatus::Stale => {
             clean_stale_runtime(paths)?;
-            println!("stopped");
+            println!("Runtime is stopped.");
             Ok(ExitCode::SUCCESS)
         }
         RuntimeStatus::Running => {
@@ -727,12 +1006,12 @@ async fn run_down(state_dir: PathBuf) -> Result<ExitCode, String> {
             client.verify_instance(instance_id)?;
             client.shutdown().await?;
             wait_until_stopped(&paths).await?;
-            println!("stopped");
+            println!("Runtime is stopped.");
             Ok(ExitCode::SUCCESS)
         }
         RuntimeStatus::Stopping => {
             wait_until_stopped(&paths).await?;
-            println!("stopped");
+            println!("Runtime is stopped.");
             Ok(ExitCode::SUCCESS)
         }
         RuntimeStatus::Degraded => Err(report
@@ -782,6 +1061,98 @@ async fn wait_until_stopped(paths: &RuntimePaths) -> Result<(), String> {
     }
 }
 
+struct ApplicationState {
+    project_root: PathBuf,
+    active_project_path: PathBuf,
+    generation: Mutex<ProjectGeneration>,
+}
+
+impl ApplicationState {
+    fn new(
+        project_root: PathBuf,
+        active_project_path: PathBuf,
+        generation: ProjectGeneration,
+    ) -> Self {
+        Self {
+            project_root,
+            active_project_path,
+            generation: Mutex::new(generation),
+        }
+    }
+
+    fn handle(&self, request: Request) -> Result<Value, ErrorObject> {
+        if !request.params.is_empty() {
+            return Err(ErrorObject::protocol(
+                INVALID_PARAMS,
+                "unexpected_parameters",
+                format!("method {:?} does not accept parameters", request.method),
+            ));
+        }
+        match request.method.as_str() {
+            "agents.list" => self.active_project(),
+            "project.reload" => self.reload(),
+            _ => Err(ErrorObject::new(METHOD_NOT_FOUND, "Method not found", None)),
+        }
+    }
+
+    fn active_project(&self) -> Result<Value, ErrorObject> {
+        let generation = self.generation.lock().map_err(|_error| {
+            ErrorObject::application(
+                SERVER_ERROR,
+                "project_state_poisoned",
+                "The active project state is unavailable",
+                Retryability::Final,
+            )
+        })?;
+        serde_json::to_value(generation.status()).map_err(|error| {
+            ErrorObject::application(
+                SERVER_ERROR,
+                "project_status_encoding_failed",
+                error.to_string(),
+                Retryability::Final,
+            )
+        })
+    }
+
+    fn reload(&self) -> Result<Value, ErrorObject> {
+        let replacement = ProjectGeneration::load(&self.project_root).map_err(|error| {
+            ErrorObject::application(
+                SERVER_ERROR,
+                "project_reload_rejected",
+                error.to_string(),
+                Retryability::Final,
+            )
+        })?;
+        let mut generation = self.generation.lock().map_err(|_error| {
+            ErrorObject::application(
+                SERVER_ERROR,
+                "project_state_poisoned",
+                "The active project state is unavailable",
+                Retryability::Final,
+            )
+        })?;
+        replacement
+            .write(&self.active_project_path)
+            .map_err(|error| {
+                ErrorObject::application(
+                    SERVER_ERROR,
+                    "project_activation_failed",
+                    error.to_string(),
+                    Retryability::Final,
+                )
+            })?;
+        *generation = replacement;
+        serde_json::to_value(generation.status()).map_err(|error| {
+            ErrorObject::application(
+                SERVER_ERROR,
+                "project_status_encoding_failed",
+                error.to_string(),
+                Retryability::Final,
+            )
+        })
+    }
+}
+
 async fn run_owner(
     project_root: PathBuf,
     state_dir: PathBuf,
@@ -809,6 +1180,17 @@ async fn run_owner(
     lease
         .reconcile_stale_sockets()
         .map_err(|error| error.to_string())?;
+    let generation = ProjectGeneration::read(paths.active_project())
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "no active project generation; run zeta reload first".to_owned())?;
+    if generation.project_root() != project_root.as_path() {
+        return Err("the active project generation belongs to a different project root".to_owned());
+    }
+    let application_state = Arc::new(ApplicationState::new(
+        project_root.clone(),
+        paths.active_project().to_path_buf(),
+        generation,
+    ));
     if matches!(readiness, Readiness::Daemon { .. }) {
         redirect_daemon_stderr(&paths)?;
     }
@@ -823,14 +1205,7 @@ async fn run_owner(
     let application = LocalSocketServer::bind(
         paths.socket(),
         LocalSocketConfig::application(&instance_id),
-        |_request| {
-            Err(ErrorObject::application(
-                SERVER_ERROR,
-                "runtime_not_available",
-                "The native runtime request surface is not available yet",
-                Retryability::Final,
-            ))
-        },
+        move |request| application_state.handle(request),
     )
     .await
     .map_err(|error| error.to_string())?;
@@ -992,7 +1367,9 @@ impl ShutdownSignals {
 fn announce_ready(readiness: &Readiness, pid: u32, instance_id: &str) -> Result<(), String> {
     match readiness {
         Readiness::Foreground => {
-            println!("running {pid}");
+            println!("Runtime is running.");
+            println!("PID: {pid}");
+            println!("Press Ctrl-C to stop.");
             io::stdout().flush().map_err(|error| error.to_string())?;
         }
         Readiness::Daemon { nonce } => write_handshake(DaemonHandshake {
@@ -1013,7 +1390,8 @@ fn announce_already_running(
 ) -> Result<(), String> {
     match readiness {
         Readiness::Foreground => {
-            println!("already running {pid}");
+            println!("Runtime is already running.");
+            println!("PID: {pid}");
             io::stdout().flush().map_err(|error| error.to_string())?;
         }
         Readiness::Daemon { nonce } => write_handshake(DaemonHandshake {
@@ -1103,7 +1481,9 @@ async fn start_detached(project_root: PathBuf, state_dir: PathBuf) -> Result<Exi
             let pid = handshake
                 .pid
                 .ok_or_else(|| "the detached readiness handshake has no process id".to_owned())?;
-            println!("started {pid}");
+            println!("Runtime started.");
+            println!("PID: {pid}");
+            println!("Use 'zeta status' to inspect the runtime.");
             Ok(ExitCode::SUCCESS)
         }
         DaemonHandshakeStatus::AlreadyRunning => {
@@ -1111,7 +1491,8 @@ async fn start_detached(project_root: PathBuf, state_dir: PathBuf) -> Result<Exi
             let pid = handshake
                 .pid
                 .ok_or_else(|| "the detached readiness handshake has no process id".to_owned())?;
-            println!("already running {pid}");
+            println!("Runtime is already running.");
+            println!("PID: {pid}");
             Ok(ExitCode::SUCCESS)
         }
         DaemonHandshakeStatus::Error => {
@@ -1251,6 +1632,20 @@ impl ControlClient {
         self.resolve(actions).await.map(|_result| ())
     }
 
+    async fn active_project(&mut self) -> Result<ActiveProjectStatus, String> {
+        let actions = self.request("agents.list", Map::new())?;
+        let response = self.resolve(actions).await?;
+        serde_json::from_value(response)
+            .map_err(|error| format!("the runtime returned an invalid agent list: {error}"))
+    }
+
+    async fn reload_project(&mut self) -> Result<ActiveProjectStatus, String> {
+        let actions = self.request("project.reload", Map::new())?;
+        let response = self.resolve(actions).await?;
+        serde_json::from_value(response)
+            .map_err(|error| format!("the runtime returned an invalid reload result: {error}"))
+    }
+
     async fn shutdown(&mut self) -> Result<(), String> {
         let mut parameters = Map::new();
         parameters.insert("reason".to_owned(), Value::String("zeta down".to_owned()));
@@ -1386,6 +1781,32 @@ mod tests {
 
     #[test]
     fn clap_maps_the_public_command_contract() {
+        let check = Cli::try_parse_from(["zeta", "check", "--project-root", "project"])
+            .expect("check must parse");
+        assert_eq!(
+            Command::from(check.command),
+            Command::Check {
+                project_root: PathBuf::from("project"),
+            }
+        );
+
+        let reload = Cli::try_parse_from([
+            "zeta",
+            "reload",
+            "--project-root",
+            "project",
+            "--state-dir",
+            "state",
+        ])
+        .expect("reload must parse");
+        assert_eq!(
+            Command::from(reload.command),
+            Command::Reload {
+                project_root: PathBuf::from("project"),
+                state_dir: Some(PathBuf::from("state")),
+            }
+        );
+
         let up = Cli::try_parse_from([
             "zeta",
             "up",
@@ -1410,6 +1831,7 @@ mod tests {
         assert_eq!(
             Command::from(down.command),
             Command::Down {
+                project_root: None,
                 state_dir: Some(PathBuf::from("state")),
             }
         );
@@ -1418,6 +1840,7 @@ mod tests {
         assert_eq!(
             Command::from(status.command),
             Command::Status {
+                project_root: None,
                 state_dir: None,
                 output: StatusOutput::Json,
             }
@@ -1449,6 +1872,23 @@ mod tests {
     }
 
     #[test]
+    fn clap_help_explains_the_project_lifecycle() {
+        let help = Cli::command().render_long_help().to_string();
+        assert!(help.contains("GET STARTED:"));
+        assert!(help.contains("zeta reload --project-root ~/my-project"));
+        assert!(help.contains("zeta <command> --help"));
+
+        let reload = Cli::command()
+            .find_subcommand("reload")
+            .expect("reload command must exist")
+            .clone()
+            .render_long_help()
+            .to_string();
+        assert!(reload.contains("A failed reload keeps the prior generation active."));
+        assert!(reload.contains("zeta reload --project-root ~/my-project"));
+    }
+
+    #[test]
     fn paths_use_explicit_then_environment_precedence() {
         let temp = TempDir::new().expect("temporary directory");
         let invocation_dir = temp.path().join("invocation");
@@ -1474,6 +1914,7 @@ mod tests {
 
         let environment = resolve(
             Command::Status {
+                project_root: None,
                 state_dir: None,
                 output: StatusOutput::Human,
             },
@@ -1485,6 +1926,75 @@ mod tests {
         assert_eq!(
             environment.state_dir(),
             canonical(&invocation_dir).join("environment")
+        );
+
+        let reload = resolve(
+            Command::Reload {
+                project_root: project,
+                state_dir: None,
+            },
+            &invocation_dir,
+            Some(Path::new("environment")),
+            temp.path(),
+        )
+        .expect("reload state path");
+        assert_eq!(
+            reload.state_dir(),
+            canonical(&invocation_dir).join("environment")
+        );
+    }
+
+    fn write_agent(root: &Path, slug: &str, description: &str) {
+        let agents = root.join("agents");
+        fs::create_dir_all(&agents).expect("agents directory");
+        fs::write(
+            agents.join(format!("{slug}.md")),
+            format!("---\nname: {slug}\ndescription: {description}\n---\nReport.\n"),
+        )
+        .expect("agent source");
+    }
+
+    #[test]
+    fn application_state_lists_the_deployed_generation_until_reload() {
+        let temporary = TempDir::new().expect("temporary directory");
+        write_agent(temporary.path(), "alpha", "Reports alpha.");
+        let active = ProjectGeneration::load(temporary.path()).expect("active generation");
+        let state_directory = temporary.path().join("state");
+        fs::create_dir(&state_directory).expect("state directory");
+        let active_path = state_directory.join("active-project.json");
+        active.write(&active_path).expect("active project write");
+        let application = ApplicationState::new(
+            fs::canonicalize(temporary.path()).expect("project root"),
+            active_path,
+            active,
+        );
+
+        write_agent(temporary.path(), "bravo", "Reports bravo.");
+        let listed = application
+            .handle(Request::new(1_u64.into(), "agents.list", Map::new()))
+            .expect("agent list");
+        let listed: ActiveProjectStatus = serde_json::from_value(listed).expect("agent status");
+        assert_eq!(
+            listed
+                .agents
+                .iter()
+                .map(|agent| agent.slug.as_str())
+                .collect::<Vec<_>>(),
+            vec!["alpha"]
+        );
+
+        let reloaded = application
+            .handle(Request::new(2_u64.into(), "project.reload", Map::new()))
+            .expect("reload");
+        let reloaded: ActiveProjectStatus =
+            serde_json::from_value(reloaded).expect("reload status");
+        assert_eq!(
+            reloaded
+                .agents
+                .iter()
+                .map(|agent| agent.slug.as_str())
+                .collect::<Vec<_>>(),
+            vec!["alpha", "bravo"]
         );
     }
 
@@ -1527,14 +2037,44 @@ mod tests {
         fs::create_dir(&marker).expect("state marker");
 
         for command in [
-            Command::Down { state_dir: None },
+            Command::Down {
+                project_root: None,
+                state_dir: None,
+            },
             Command::Status {
+                project_root: None,
                 state_dir: None,
                 output: StatusOutput::Json,
             },
         ] {
             let resolved =
                 resolve(command, &nested, None, temp.path()).expect("discovered state path");
+            assert_eq!(resolved.state_dir(), canonical(&project).join(".zeta"));
+        }
+    }
+
+    #[test]
+    fn down_and_status_accept_an_explicit_project_root() {
+        let temp = TempDir::new().expect("temporary directory");
+        let invocation = temp.path().join("invocation");
+        let project = temp.path().join("project");
+        fs::create_dir(&invocation).expect("invocation directory");
+        fs::create_dir(&project).expect("project directory");
+        fs::create_dir(project.join(".zeta")).expect("state marker");
+
+        for command in [
+            Command::Down {
+                project_root: Some(project.clone()),
+                state_dir: None,
+            },
+            Command::Status {
+                project_root: Some(project.clone()),
+                state_dir: None,
+                output: StatusOutput::Human,
+            },
+        ] {
+            let resolved =
+                resolve(command, &invocation, None, temp.path()).expect("project state path");
             assert_eq!(resolved.state_dir(), canonical(&project).join(".zeta"));
         }
     }
@@ -1549,6 +2089,7 @@ mod tests {
 
         let resolved = resolve(
             Command::Status {
+                project_root: None,
                 state_dir: None,
                 output: StatusOutput::Human,
             },
@@ -1572,6 +2113,7 @@ mod tests {
 
         let resolved = resolve(
             Command::Status {
+                project_root: None,
                 state_dir: None,
                 output: StatusOutput::Human,
             },
@@ -1597,6 +2139,7 @@ mod tests {
         for project in [regular, broken] {
             let error = resolve(
                 Command::Status {
+                    project_root: None,
                     state_dir: None,
                     output: StatusOutput::Human,
                 },
@@ -1618,8 +2161,12 @@ mod tests {
         fs::create_dir(&project).expect("project directory");
 
         for command in [
-            Command::Down { state_dir: None },
+            Command::Down {
+                project_root: None,
+                state_dir: None,
+            },
             Command::Status {
+                project_root: None,
                 state_dir: None,
                 output: StatusOutput::Human,
             },

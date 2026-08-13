@@ -195,6 +195,8 @@ pub(crate) fn method_is_reserved(method: &str) -> bool {
         || method == "event"
         || method == "ping"
         || method == "shutdown"
+        || method == "agents.list"
+        || method == "project.reload"
         || method.starts_with("events.")
         || method.starts_with("session.")
         || method.starts_with("rpc.")
@@ -207,6 +209,7 @@ pub(crate) fn validate_fixed_request(
     match method {
         "events.publish" => validate_publish(params),
         "events.list" => validate_events_list(params),
+        "agents.list" | "project.reload" => validate_empty(params),
         "session.start" => validate_session_start(params),
         "session.send" => validate_session_send(params),
         "session.status" => validate_session_status(params),

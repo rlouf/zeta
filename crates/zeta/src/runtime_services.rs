@@ -41,6 +41,7 @@ const RUNTIME_SOCKET_NAME: &str = "runtime.sock";
 const RUNTIME_CONTROL_SOCKET_NAME: &str = "runtime-control.sock";
 const RUNTIME_LOG_NAME: &str = "runtime.log";
 const ACTIVE_PROJECT_NAME: &str = "active-project.json";
+const DISPATCH_DATABASE_NAME: &str = "zeta.sqlite3";
 
 /// Names the process mode recorded by one runtime owner.
 ///
@@ -95,6 +96,7 @@ pub struct RuntimePaths {
     control_socket: PathBuf,
     log: PathBuf,
     active_project: PathBuf,
+    dispatch: PathBuf,
 }
 
 impl RuntimePaths {
@@ -108,6 +110,7 @@ impl RuntimePaths {
             control_socket: state_dir.join(RUNTIME_CONTROL_SOCKET_NAME),
             log: state_dir.join(RUNTIME_LOG_NAME),
             active_project: state_dir.join(ACTIVE_PROJECT_NAME),
+            dispatch: state_dir.join(DISPATCH_DATABASE_NAME),
             state_dir,
         }
     }
@@ -145,6 +148,11 @@ impl RuntimePaths {
     /// Returns the atomically replaced active project generation document.
     pub fn active_project(&self) -> &Path {
         &self.active_project
+    }
+
+    /// Returns the durable native Dispatch database path.
+    pub fn dispatch(&self) -> &Path {
+        &self.dispatch
     }
 }
 

@@ -1492,7 +1492,7 @@ fn lifecycle_cli_detaches_reports_status_and_stops_idempotently() {
             .as_object()
             .expect("status report must be an object")
             .len(),
-        11
+        12
     );
     assert_eq!(report["schema"], "zeta.status");
     assert_eq!(report["version"], 1);
@@ -1513,6 +1513,7 @@ fn lifecycle_cli_detaches_reports_status_and_stops_idempotently() {
             .to_string()
     );
     assert_eq!(report["active_project"]["agents"][0]["slug"], "worker");
+    assert_eq!(report["dispatch"]["queue"], serde_json::json!({}));
 
     let stopped = StdCommand::new(binary)
         .args(["down", "--state-dir"])
@@ -1577,6 +1578,40 @@ async fn lifecycle_application_socket_is_ready_without_shutdown_authority() {
         panic!("the lifecycle application seam must list active agents")
     };
     assert_eq!(result["agents"][0]["slug"], "worker");
+
+    client
+        .send_json(json!({
+            "jsonrpc": "2.0",
+            "id": "publish",
+            "method": "events.publish",
+            "params": {
+                "type": "example.created",
+                "payload": {},
+                "idempotency_key": "native-reactive-ingress"
+            }
+        }))
+        .await;
+    let Message::Success(SuccessResponse { id: _, result }) = client.receive().await else {
+        panic!("the lifecycle application seam must accept native ingress")
+    };
+    assert!(result["inserted"]
+        .as_bool()
+        .expect("ingress inserted state"));
+    assert_eq!(result["route_count"], 0);
+
+    client
+        .send_json(json!({
+            "jsonrpc": "2.0",
+            "id": "runtime-status",
+            "method": "runtime.status",
+            "params": {}
+        }))
+        .await;
+    let Message::Success(SuccessResponse { id: _, result }) = client.receive().await else {
+        panic!("the lifecycle application seam must report reactive state")
+    };
+    assert!(result["wake_epoch"].as_u64().expect("wake epoch") > 0);
+    assert_eq!(result["queue"]["unhandled"], 1);
 
     write_lifecycle_agent(&project, "replacement");
     client

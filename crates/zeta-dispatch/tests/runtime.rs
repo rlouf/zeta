@@ -3824,6 +3824,107 @@ fn due_publication_consumes_pending_deferred_publication_once() {
 }
 
 #[test]
+fn next_deadline_and_advance_due_are_durable_timer_primitives() {
+    let mut dispatch = Dispatch::open_in_memory().unwrap();
+    let wait = Event {
+        id: "deadline-wait".to_owned(),
+        event_type: "runtime.wait.created".to_owned(),
+        source: "zeta".to_owned(),
+        payload: json!({
+            "handle": "wait_deadline",
+            "agent_id": "worker",
+            "session_id": "agent/worker",
+            "event_type": "example.done",
+            "fields": {},
+            "deadline": "1970-01-01T00:00:02Z",
+            "source_queue_item_id": "qi_deadline_source",
+            "project_generation": "project:test"
+        })
+        .as_object()
+        .unwrap()
+        .clone(),
+        idempotency_key: Some("wait.created:wait_deadline".to_owned()),
+        caused_by: Some("deadline-source".to_owned()),
+        session_id: Some("agent/worker".to_owned()),
+        run_id: None,
+        turn_id: None,
+        timestamp_ms: 1,
+        cursor: None,
+    };
+    dispatch.append_trusted_event(wait).unwrap();
+    assert_eq!(dispatch.next_deadline_ms(1_000).unwrap(), Some(2_000));
+    assert!(dispatch.has_due_maintenance(2_000).unwrap());
+
+    let mut sequence = 0_u64;
+    let events = dispatch
+        .advance_due(2_000, 8, || {
+            sequence += 1;
+            RuntimeEventIdentity::new(format!("deadline-runtime-{sequence}"), 2_000).map_err(
+                |error| DispatchError::InvalidCoordinationInput {
+                    field: error.resource(),
+                },
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.event_type.as_str())
+            .collect::<Vec<_>>(),
+        vec!["runtime.wait.timed_out", "runtime.queue_item.available"]
+    );
+    assert_eq!(dispatch.next_deadline_ms(2_000).unwrap(), None);
+    assert!(!dispatch.has_due_maintenance(2_000).unwrap());
+}
+
+#[test]
+fn next_deadline_includes_future_queue_availability() {
+    let mut dispatch = Dispatch::open_in_memory().unwrap();
+    let input = Event {
+        id: "queue-deadline-input".to_owned(),
+        event_type: "example.created".to_owned(),
+        source: "test".to_owned(),
+        payload: Map::new(),
+        idempotency_key: Some("queue-deadline-input".to_owned()),
+        caused_by: None,
+        session_id: None,
+        run_id: None,
+        turn_id: None,
+        timestamp_ms: 1_000,
+        cursor: None,
+    };
+    dispatch.ingest_event(input.clone()).unwrap();
+    let queue_item_id = queue_item_id(&input.id, "worker");
+    dispatch
+        .append_trusted_event(Event {
+            id: "queue-deadline-available".to_owned(),
+            event_type: "runtime.queue_item.available".to_owned(),
+            source: "zeta".to_owned(),
+            payload: json!({
+                "queue_item_id": queue_item_id,
+                "event_id": input.id,
+                "target_agent": "worker",
+                "status": "available",
+                "not_before": 2_000,
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            idempotency_key: Some("queue_item:queue-deadline-input:worker:available".to_owned()),
+            caused_by: Some("queue-deadline-input".to_owned()),
+            session_id: None,
+            run_id: None,
+            turn_id: None,
+            timestamp_ms: 1_000,
+            cursor: None,
+        })
+        .unwrap();
+
+    assert_eq!(dispatch.next_deadline_ms(1_000).unwrap(), Some(2_000));
+    assert_eq!(dispatch.next_deadline_ms(2_000).unwrap(), None);
+}
+
+#[test]
 fn due_publication_and_matching_waits_commit_or_roll_back_together() {
     let mut dispatch = Dispatch::open_in_memory().unwrap();
     dispatch

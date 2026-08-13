@@ -22,12 +22,16 @@ use zeta::runtime_services::{
     RuntimeLease, RuntimeLifecycleErrorKind, RuntimeMetadata, RuntimeOwnerMode, RuntimePaths,
     RuntimePhase,
 };
-use zeta::{ActiveProjectStatus, LocalSocketConfig, LocalSocketServer, ProjectGeneration};
+use zeta::{
+    ActiveProjectStatus, LocalSocketConfig, LocalSocketServer, ProjectGeneration, ReactiveRuntime,
+    ReactiveRuntimeStatus,
+};
 use zeta_ipc::{
     Action, ErrorObject, InitializeParams, Message, PeerIdentity, Request, RequestId, Retryability,
     Role, Session, ShutdownDirection, INVALID_PARAMS, MAX_FRAME_BYTES, METHOD_NOT_FOUND,
     PROTOCOL_VERSION, SERVER_ERROR,
 };
+use zeta_journal::DraftEvent;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum UpMode {
@@ -618,6 +622,8 @@ struct StatusReport {
     detail: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     active_project: Option<ActiveProjectStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dispatch: Option<ReactiveRuntimeStatus>,
 }
 
 impl StatusReport {
@@ -639,6 +645,7 @@ impl StatusReport {
             control_socket: paths.control_socket().to_path_buf(),
             detail,
             active_project: None,
+            dispatch: None,
         }
     }
 
@@ -659,6 +666,7 @@ impl StatusReport {
             control_socket: paths.control_socket().to_path_buf(),
             detail,
             active_project: None,
+            dispatch: None,
         }
     }
 }
@@ -771,11 +779,16 @@ async fn run_status(state_dir: PathBuf, output: StatusOutput) -> Result<ExitCode
                 .ok_or_else(|| "running metadata has no instance id".to_owned())?;
             let mut client = ControlClient::connect(paths.socket()).await?;
             client.verify_instance(instance_id)?;
-            client.active_project().await
+            let project = client.active_project().await?;
+            let dispatch = client.runtime_status().await?;
+            Ok((project, dispatch))
         }
         .await;
         match query {
-            Ok(project) => report.active_project = Some(project),
+            Ok((project, dispatch)) => {
+                report.active_project = Some(project);
+                report.dispatch = Some(dispatch);
+            }
             Err(error) => {
                 report.status = RuntimeStatus::Degraded;
                 report.detail = Some(error);
@@ -822,9 +835,30 @@ fn print_human_status(report: &StatusReport) {
     if let Some(detail) = &report.detail {
         println!("Detail: {detail}");
     }
+    if let Some(dispatch) = &report.dispatch {
+        let queue = dispatch
+            .queue
+            .iter()
+            .map(|(status, count)| format!("{status}={count}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let queue = if queue.is_empty() { "no work" } else { &queue };
+        println!("Queue: {queue}");
+        if let Some(deadline) = dispatch.next_deadline_ms {
+            println!("Next deadline: {}", format_timestamp(deadline));
+        }
+    }
     if report.status == RuntimeStatus::Stopped {
         println!("Next: zeta up --project-root <PROJECT_ROOT>");
     }
+}
+
+fn format_timestamp(timestamp_ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(timestamp_ms)
+        .map(|timestamp: chrono::DateTime<chrono::Utc>| {
+            timestamp.format("%Y-%m-%d %H:%M:%S UTC").to_string()
+        })
+        .unwrap_or_else(|| timestamp_ms.to_string())
 }
 
 fn print_project_summary(project_root: &Path, project: &ActiveProjectStatus) {
@@ -1065,6 +1099,7 @@ struct ApplicationState {
     project_root: PathBuf,
     active_project_path: PathBuf,
     generation: Mutex<ProjectGeneration>,
+    reactive: ReactiveRuntime,
 }
 
 impl ApplicationState {
@@ -1072,15 +1107,31 @@ impl ApplicationState {
         project_root: PathBuf,
         active_project_path: PathBuf,
         generation: ProjectGeneration,
+        reactive: ReactiveRuntime,
     ) -> Self {
         Self {
             project_root,
             active_project_path,
             generation: Mutex::new(generation),
+            reactive,
         }
     }
 
     fn handle(&self, request: Request) -> Result<Value, ErrorObject> {
+        match request.method.as_str() {
+            "agents.list" => self.empty_request(request, Self::active_project),
+            "project.reload" => self.empty_request(request, Self::reload),
+            "events.publish" => self.publish(request.params),
+            "runtime.status" => self.runtime_status(),
+            _ => Err(ErrorObject::new(METHOD_NOT_FOUND, "Method not found", None)),
+        }
+    }
+
+    fn empty_request(
+        &self,
+        request: Request,
+        handler: fn(&Self) -> Result<Value, ErrorObject>,
+    ) -> Result<Value, ErrorObject> {
         if !request.params.is_empty() {
             return Err(ErrorObject::protocol(
                 INVALID_PARAMS,
@@ -1088,11 +1139,7 @@ impl ApplicationState {
                 format!("method {:?} does not accept parameters", request.method),
             ));
         }
-        match request.method.as_str() {
-            "agents.list" => self.active_project(),
-            "project.reload" => self.reload(),
-            _ => Err(ErrorObject::new(METHOD_NOT_FOUND, "Method not found", None)),
-        }
+        handler(self)
     }
 
     fn active_project(&self) -> Result<Value, ErrorObject> {
@@ -1123,6 +1170,14 @@ impl ApplicationState {
                 Retryability::Final,
             )
         })?;
+        replacement.routes().map_err(|error| {
+            ErrorObject::application(
+                SERVER_ERROR,
+                "project_runtime_reload_failed",
+                error.to_string(),
+                Retryability::Final,
+            )
+        })?;
         let mut generation = self.generation.lock().map_err(|_error| {
             ErrorObject::application(
                 SERVER_ERROR,
@@ -1141,6 +1196,14 @@ impl ApplicationState {
                     Retryability::Final,
                 )
             })?;
+        self.reactive.reload(replacement.clone()).map_err(|error| {
+            ErrorObject::application(
+                SERVER_ERROR,
+                "project_runtime_reload_failed",
+                error.to_string(),
+                Retryability::Final,
+            )
+        })?;
         *generation = replacement;
         serde_json::to_value(generation.status()).map_err(|error| {
             ErrorObject::application(
@@ -1151,6 +1214,95 @@ impl ApplicationState {
             )
         })
     }
+
+    fn publish(&self, params: Map<String, Value>) -> Result<Value, ErrorObject> {
+        // Serialize ingress with reload. The actor then observes either the
+        // previous generation or the complete replacement generation.
+        let _generation = self.generation.lock().map_err(|_error| {
+            ErrorObject::application(
+                SERVER_ERROR,
+                "project_runtime_unavailable",
+                "the active project generation is unavailable",
+                Retryability::Final,
+            )
+        })?;
+        let event_type = params
+            .get("type")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| invalid_application_params("type"))?;
+        let payload = params
+            .get("payload")
+            .and_then(Value::as_object)
+            .ok_or_else(|| invalid_application_params("payload"))?
+            .clone();
+        let optional_string = |field: &str| -> Result<Option<String>, ErrorObject> {
+            match params.get(field) {
+                None | Some(Value::Null) => Ok(None),
+                Some(Value::String(value)) if !value.is_empty() => Ok(Some(value.clone())),
+                Some(_) => Err(invalid_application_params(field)),
+            }
+        };
+        let result = self
+            .reactive
+            .ingest(DraftEvent {
+                event_type: event_type.to_owned(),
+                source: "zeta:ipc".to_owned(),
+                payload,
+                idempotency_key: optional_string("idempotency_key")?,
+                caused_by: optional_string("caused_by")?,
+                session_id: optional_string("session_id")?,
+                run_id: optional_string("run_id")?,
+                turn_id: optional_string("turn_id")?,
+            })
+            .map_err(|error| {
+                ErrorObject::application(
+                    SERVER_ERROR,
+                    "ingress_rejected",
+                    error.to_string(),
+                    Retryability::Final,
+                )
+            })?;
+        serde_json::to_value(result).map_err(|error| {
+            ErrorObject::application(
+                SERVER_ERROR,
+                "ingress_encoding_failed",
+                error.to_string(),
+                Retryability::Final,
+            )
+        })
+    }
+
+    fn runtime_status(&self) -> Result<Value, ErrorObject> {
+        let status = self.reactive.status().map_err(|error| {
+            ErrorObject::application(
+                SERVER_ERROR,
+                "dispatch_status_unavailable",
+                error.to_string(),
+                Retryability::Final,
+            )
+        })?;
+        serde_json::to_value(status).map_err(|error| {
+            ErrorObject::application(
+                SERVER_ERROR,
+                "dispatch_status_encoding_failed",
+                error.to_string(),
+                Retryability::Final,
+            )
+        })
+    }
+
+    fn shutdown(&self) -> Result<(), String> {
+        self.reactive.shutdown().map_err(|error| error.to_string())
+    }
+}
+
+fn invalid_application_params(field: &str) -> ErrorObject {
+    ErrorObject::protocol(
+        INVALID_PARAMS,
+        "invalid_parameters",
+        format!("parameter {field:?} is invalid"),
+    )
 }
 
 async fn run_owner(
@@ -1186,10 +1338,13 @@ async fn run_owner(
     if generation.project_root() != project_root.as_path() {
         return Err("the active project generation belongs to a different project root".to_owned());
     }
+    let reactive = ReactiveRuntime::start(paths.dispatch(), generation.clone())
+        .map_err(|error| error.to_string())?;
     let application_state = Arc::new(ApplicationState::new(
         project_root.clone(),
         paths.active_project().to_path_buf(),
         generation,
+        reactive,
     ));
     if matches!(readiness, Readiness::Daemon { .. }) {
         redirect_daemon_stderr(&paths)?;
@@ -1202,10 +1357,11 @@ async fn run_owner(
         .as_millis()
         .try_into()
         .map_err(|_error| "the current time does not fit runtime metadata".to_owned())?;
+    let request_state = Arc::clone(&application_state);
     let application = LocalSocketServer::bind(
         paths.socket(),
         LocalSocketConfig::application(&instance_id),
-        move |request| application_state.handle(request),
+        move |request| request_state.handle(request),
     )
     .await
     .map_err(|error| error.to_string())?;
@@ -1287,6 +1443,7 @@ async fn run_owner(
     let metadata_result = lease.write_metadata(&metadata);
     let control_result = control.shutdown().await;
     let application_result = application.shutdown().await;
+    let reactive_result = application_state.shutdown();
     let remove_result = lease.remove_metadata(&instance_id);
     drop(lease);
 
@@ -1294,6 +1451,7 @@ async fn run_owner(
         .and_then(|()| metadata_result.map_err(|error| error.to_string()))
         .and_then(|()| control_result.map_err(|error| error.to_string()))
         .and_then(|()| application_result.map_err(|error| error.to_string()))
+        .and_then(|()| reactive_result)
         .and_then(|()| {
             remove_result
                 .map(|_removed| ())
@@ -1646,6 +1804,13 @@ impl ControlClient {
             .map_err(|error| format!("the runtime returned an invalid reload result: {error}"))
     }
 
+    async fn runtime_status(&mut self) -> Result<ReactiveRuntimeStatus, String> {
+        let actions = self.request("runtime.status", Map::new())?;
+        let response = self.resolve(actions).await?;
+        serde_json::from_value(response)
+            .map_err(|error| format!("the runtime returned invalid dispatch status: {error}"))
+    }
+
     async fn shutdown(&mut self) -> Result<(), String> {
         let mut parameters = Map::new();
         parameters.insert("reason".to_owned(), Value::String("zeta down".to_owned()));
@@ -1963,10 +2128,13 @@ mod tests {
         fs::create_dir(&state_directory).expect("state directory");
         let active_path = state_directory.join("active-project.json");
         active.write(&active_path).expect("active project write");
+        let reactive = ReactiveRuntime::start(state_directory.join("zeta.sqlite3"), active.clone())
+            .expect("reactive runtime");
         let application = ApplicationState::new(
             fs::canonicalize(temporary.path()).expect("project root"),
             active_path,
             active,
+            reactive,
         );
 
         write_agent(temporary.path(), "bravo", "Reports bravo.");

@@ -703,11 +703,14 @@ impl Session {
         params: &Map<String, Value>,
     ) -> Result<(), IpcError> {
         if method == "events.publish" {
-            if !self.has_peer_role(Role::Source) {
+            if self.has_peer_role(Role::Source) {
+                validate_fixed_request(method, params)?;
+                return self.validate_published_type(params);
+            }
+            if !self.has_peer_role(Role::Client) {
                 return method_not_found(method);
             }
-            validate_fixed_request(method, params)?;
-            return self.validate_published_type(params);
+            return validate_fixed_request(method, params);
         }
         if is_client_method(method) {
             if !self.has_peer_role(Role::Client) {
@@ -746,11 +749,14 @@ impl Session {
         params: &Map<String, Value>,
     ) -> Result<(), IpcError> {
         if method == "events.publish" {
-            if !self.has_peer_role(Role::Source) {
+            if self.has_peer_role(Role::Source) {
+                validate_fixed_request(method, params)?;
+                return self.validate_published_type(params);
+            }
+            if !self.has_peer_role(Role::Client) {
                 return method_not_found(method);
             }
-            validate_fixed_request(method, params)?;
-            return self.validate_published_type(params);
+            return validate_fixed_request(method, params);
         }
         if is_client_method(method) {
             if !self.has_peer_role(Role::Client) {
@@ -856,8 +862,10 @@ impl Session {
 
 fn is_client_method(method: &str) -> bool {
     method == "events.list"
+        || method == "events.publish"
         || method == "agents.list"
         || method == "project.reload"
+        || method == "runtime.status"
         || method == "session.start"
         || method == "session.send"
         || method == "session.status"

@@ -39,6 +39,95 @@ impl Dispatch {
         load_deferred_publications(&self.connection)
     }
 
+    /// Returns the earliest future durable maintenance deadline.
+    ///
+    /// The result includes active wait deadlines, pending deferred
+    /// publications, future queue availability, and live queue-claim deadlines.
+    /// A caller must still scan durable state after it wakes because this value
+    /// is only a timer hint.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DispatchError`] when a projection row cannot be read.
+    pub fn next_deadline_ms(&self, now_ms: i64) -> Result<Option<i64>, DispatchError> {
+        let wait = next_future_wait_deadline(&self.connection, now_ms)?;
+        let publication = next_future_publication_deadline(&self.connection, now_ms)?;
+        let queue = next_future_queue_deadline(&self.connection, now_ms)?;
+        let claim = next_future_claim_deadline(&self.connection, now_ms)?;
+        Ok([wait, publication, queue, claim]
+            .into_iter()
+            .flatten()
+            .min())
+    }
+
+    /// Reports whether a wait or deferred publication needs immediate advance.
+    ///
+    /// A runtime uses this after a bounded [`Dispatch::advance_due`] call. It
+    /// prevents a large due set from waiting for a later external command.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DispatchError`] when durable due state cannot be read.
+    pub fn has_due_maintenance(&self, now_ms: i64) -> Result<bool, DispatchError> {
+        Ok(next_due_wait(&self.connection, now_ms)?.is_some()
+            || next_due_deferred_publication(&self.connection, now_ms)?.is_some())
+    }
+
+    /// Advances bounded due work with caller-supplied durable identities.
+    ///
+    /// The command consumes due waits and deferred publications in deadline
+    /// order. It makes no wall-clock assumptions beyond `now_ms`. The caller
+    /// must invoke it again when the return value reaches `limit`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DispatchError`] when identities, projected state, or a
+    /// durable transition cannot be created.
+    pub fn advance_due<F>(
+        &mut self,
+        now_ms: i64,
+        limit: usize,
+        mut next_identity: F,
+    ) -> Result<Vec<Event>, DispatchError>
+    where
+        F: FnMut() -> Result<RuntimeEventIdentity, DispatchError>,
+    {
+        let mut events = Vec::new();
+        for _ in 0..limit {
+            let wait = next_due_wait(&self.connection, now_ms)?;
+            let publication = next_due_deferred_publication(&self.connection, now_ms)?;
+            let Some(kind) = DueKind::next(wait.as_ref(), publication.as_ref()) else {
+                break;
+            };
+            let advanced = match kind {
+                DueKind::Wait => self
+                    .timeout_next_due_wait(now_ms, [next_identity()?, next_identity()?])?
+                    .expect("a due wait remained available to the dispatch owner"),
+                DueKind::Publication => {
+                    let publication = publication
+                        .as_ref()
+                        .expect("a due publication remained available to the dispatch owner");
+                    let probe = RuntimeEventIdentity::new("runtime_due_probe", now_ms).map_err(
+                        |error| DispatchError::InvalidCoordinationInput {
+                            field: error.resource(),
+                        },
+                    )?;
+                    let published = deferred_publication_event(&probe, publication);
+                    let wait_count = matching_waits(&self.connection, &published)?.len();
+                    let identity_count = 2 + wait_count * 2;
+                    let mut identities = Vec::with_capacity(identity_count);
+                    for _ in 0..identity_count {
+                        identities.push(next_identity()?);
+                    }
+                    self.publish_next_due_deferred_publication(now_ms, &identities)?
+                        .expect("a due publication remained available to the dispatch owner")
+                }
+            };
+            events.extend(advanced);
+        }
+        Ok(events)
+    }
+
     /// Resumes every active wait matched by one retained external event.
     ///
     /// Matching compares the exact event type and every authored top-level
@@ -238,6 +327,84 @@ impl Dispatch {
             .map_err(|database| database_error("commit deferred publication", database))?;
         Ok(Some(events))
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DueKind {
+    Wait,
+    Publication,
+}
+
+impl DueKind {
+    fn next(wait: Option<&Wait>, publication: Option<&DeferredPublication>) -> Option<Self> {
+        match (wait, publication) {
+            (None, None) => None,
+            (Some(_wait), None) => Some(Self::Wait),
+            (None, Some(_publication)) => Some(Self::Publication),
+            (Some(wait), Some(publication)) => {
+                if wait.deadline_ms().unwrap_or(i64::MAX) <= publication.publish_at_ms() {
+                    Some(Self::Wait)
+                } else {
+                    Some(Self::Publication)
+                }
+            }
+        }
+    }
+}
+
+fn next_future_wait_deadline(
+    connection: &Connection,
+    now_ms: i64,
+) -> Result<Option<i64>, DispatchError> {
+    connection
+        .query_row(
+            "SELECT MIN(deadline_ms) FROM waits
+             WHERE status = 'active' AND deadline_ms > ?1",
+            params![now_ms],
+            |row| row.get(0),
+        )
+        .map_err(|database| database_error("read next wait deadline", database))
+}
+
+fn next_future_publication_deadline(
+    connection: &Connection,
+    now_ms: i64,
+) -> Result<Option<i64>, DispatchError> {
+    connection
+        .query_row(
+            "SELECT MIN(publish_at_ms) FROM deferred_publications
+             WHERE status = 'pending' AND publish_at_ms > ?1",
+            params![now_ms],
+            |row| row.get(0),
+        )
+        .map_err(|database| database_error("read next publication deadline", database))
+}
+
+fn next_future_claim_deadline(
+    connection: &Connection,
+    now_ms: i64,
+) -> Result<Option<i64>, DispatchError> {
+    connection
+        .query_row(
+            "SELECT MIN(claimed_until) FROM queue_claims WHERE claimed_until > ?1",
+            params![now_ms],
+            |row| row.get(0),
+        )
+        .map_err(|database| database_error("read next claim deadline", database))
+}
+
+fn next_future_queue_deadline(
+    connection: &Connection,
+    now_ms: i64,
+) -> Result<Option<i64>, DispatchError> {
+    connection
+        .query_row(
+            "SELECT MIN(available_at) FROM queue_items
+             WHERE status = 'available' AND available_at > ?1",
+            params![now_ms],
+            |row| row.get(0),
+        )
+        .map_err(|database| database_error("read next queue deadline", database))
 }
 
 fn matching_waits(connection: &Connection, event: &Event) -> Result<Vec<Wait>, DispatchError> {

@@ -6,9 +6,11 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
+use zeta_dispatch::{EventPattern, Route, SessionRule};
 use zeta_manifest::{load_agent, parse_agent, AgentSpec};
 use zeta_substrate::{canonical_json, hash_bytes};
 
@@ -215,6 +217,35 @@ impl ProjectGeneration {
             generation_id: self.generation_id.clone(),
             agents: self.active_agents(),
         }
+    }
+
+    /// Compiles enabled agent declarations into durable ingress routes.
+    pub fn routes(&self) -> Result<Vec<Route>, ProjectRuntimeError> {
+        let mut routes = Vec::new();
+        for agent in self.agents.values() {
+            if !agent.enabled {
+                continue;
+            }
+            let session = SessionRule::from_str(&agent.session).map_err(|error| {
+                ProjectRuntimeError::new(format!(
+                    "agent {:?} has an invalid session rule: {error}",
+                    agent.slug
+                ))
+            })?;
+            routes.push(Route::new(
+                agent.slug.clone(),
+                agent
+                    .accepts
+                    .iter()
+                    .cloned()
+                    .map(EventPattern::new)
+                    .collect(),
+                session,
+                agent.locks.clone(),
+                Some(self.generation_id.clone()),
+            ));
+        }
+        Ok(routes)
     }
 
     fn from_agents(
@@ -463,5 +494,42 @@ mod tests {
 
         let error = ProjectGeneration::load(temporary.path()).expect_err("link must fail");
         assert!(error.to_string().contains("symbolic link"));
+    }
+
+    #[test]
+    fn routes_preserve_agent_session_locks_and_generation() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let agents = temporary.path().join("agents");
+        fs::create_dir(&agents).expect("agents directory");
+        fs::write(
+            agents.join("worker.md"),
+            "---\nname: Worker\ndescription: Routes work.\nsession: shared\naccepts: [example.created]\nlocks: [account]\n---\nRoute work.\n",
+        )
+        .expect("agent source");
+        let generation = ProjectGeneration::load(temporary.path()).expect("project loads");
+        let routes = generation.routes().expect("routes compile");
+        let event = zeta_journal::Event {
+            id: "event-1".to_owned(),
+            event_type: "example.created".to_owned(),
+            source: "test".to_owned(),
+            payload: serde_json::Map::new(),
+            idempotency_key: None,
+            caused_by: None,
+            session_id: None,
+            run_id: None,
+            turn_id: None,
+            timestamp_ms: 1,
+            cursor: None,
+        };
+
+        let decisions = zeta_dispatch::route_event(&event, &routes).expect("event routes");
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].agent_id(), "worker");
+        assert_eq!(decisions[0].session_id().as_str(), "agent/worker");
+        assert_eq!(decisions[0].lock_keys(), ["account"]);
+        assert_eq!(
+            decisions[0].project_generation(),
+            Some(generation.generation_id())
+        );
     }
 }

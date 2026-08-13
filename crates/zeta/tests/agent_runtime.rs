@@ -19,13 +19,13 @@ use zeta_agent::{
     ModelTransportTimeouts, NativeToolExecutor, Observation, PromptEnvironment, PromptTransform,
     RunStopReason, ToolProfile,
 };
-use zeta_authoring::{
+use zeta_dispatch::{route_event, Dispatch, QueueItemStatus, RuntimeEventIdentity};
+use zeta_journal::{DraftEvent, Event, EventFilter};
+use zeta_manifest::{
     compile_project, execution_manifest, parse_agent, project_manifest, verify_execution_manifest,
     AgentProjectInput, CapabilitySpec, EventRegistry, ExecutorProviderSpec,
     ImplementationFingerprint, ModelSelectionSpec,
 };
-use zeta_dispatch::{route_event, Dispatch, QueueItemStatus, RuntimeEventIdentity};
-use zeta_journal::{DraftEvent, Event, EventFilter};
 
 async fn scripted_chat_server(responses: Vec<String>) -> (String, JoinHandle<Vec<Value>>) {
     let listener = TcpListener::bind("127.0.0.1:0")

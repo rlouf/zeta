@@ -27,7 +27,7 @@ checks the declared methods, sends direct calls, and reaps the whole process
 group on cancellation, timeout, exit, shutdown, or drop.
 
 `routes_from_project` is owned by this host because it is the composition point
-between `zeta-authoring` and `zeta-dispatch`; those domain crates remain
+between `zeta-manifest` and `zeta-dispatch`; those domain crates remain
 independent.
 
 `Scheduler` compiles cron expressions and IANA timezones from a verified project
@@ -48,7 +48,7 @@ wait timeouts, and queue claims, matching the existing Python worker order.
 use zeta::Scheduler;
 
 fn fire_due(
-    project: &zeta_authoring::ProjectManifest,
+    project: &zeta_manifest::ProjectManifest,
     dispatch: &mut zeta_dispatch::Dispatch,
     now_ms: i64,
     ids: &mut dyn zeta_agent::IdSource,
@@ -73,8 +73,8 @@ retains the immutable model, capability, event, and executor projection:
 use zeta::{prepare_agent, InvocationInputs};
 
 fn prepare(
-    project: &zeta_authoring::ProjectManifest,
-    execution: &zeta_authoring::ExecutionManifest,
+    project: &zeta_manifest::ProjectManifest,
+    execution: &zeta_manifest::ExecutionManifest,
     inputs: InvocationInputs,
 ) -> Result<zeta_agent::AgentInvocation, zeta::PrepareAgentError> {
     let agent = prepare_agent(project, execution)?;

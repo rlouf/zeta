@@ -9,7 +9,7 @@ use serde_json::Value;
 use zeta_substrate::{canonical_json, hash_bytes, Hash};
 
 use crate::connector::ConnectorSpec;
-use crate::error::{AuthoringError, AuthoringErrorKind};
+use crate::error::{ManifestError, ManifestErrorKind};
 use crate::event::EventRegistry;
 use crate::parse::{SkillResource, SkillSpec};
 use crate::project::{compile_project, AgentProject, AgentProjectInput};
@@ -236,9 +236,9 @@ impl ExecutionManifest {
 ///
 /// # Errors
 ///
-/// Returns [`AuthoringError`] if a declaration cannot be represented by the
+/// Returns [`ManifestError`] if a declaration cannot be represented by the
 /// substrate canonical JSON profile.
-pub fn project_manifest(project: &AgentProject) -> Result<ProjectManifest, AuthoringError> {
+pub fn project_manifest(project: &AgentProject) -> Result<ProjectManifest, ManifestError> {
     let body = ProjectManifestBody {
         schema: PROJECT_MANIFEST_SCHEMA.to_owned(),
         version: PROJECT_MANIFEST_VERSION,
@@ -273,25 +273,25 @@ pub fn project_manifest(project: &AgentProject) -> Result<ProjectManifest, Autho
 ///
 /// # Errors
 ///
-/// Returns [`AuthoringError`] when the project generation does not match,
+/// Returns [`ManifestError`] when the project generation does not match,
 /// the agent is unknown, or a normalized reference cannot be projected.
 pub fn execution_manifest(
     project: &AgentProject,
     generation: &ProjectGenerationId,
     agent_slug: &str,
-) -> Result<ExecutionManifest, AuthoringError> {
+) -> Result<ExecutionManifest, ManifestError> {
     let current = project_manifest(project)?;
     if &current.id != generation {
-        return Err(AuthoringError::new(
-            AuthoringErrorKind::InvalidIdentity,
+        return Err(ManifestError::new(
+            ManifestErrorKind::InvalidIdentity,
             Some(agent_slug),
             Some("project_generation"),
             "project generation does not identify the supplied project",
         ));
     }
     let Some(agent) = project.agents.get(agent_slug) else {
-        return Err(AuthoringError::new(
-            AuthoringErrorKind::UnknownAgent,
+        return Err(ManifestError::new(
+            ManifestErrorKind::UnknownAgent,
             Some(agent_slug),
             None,
             "cannot build an execution manifest for an unknown agent",
@@ -311,8 +311,8 @@ pub fn execution_manifest(
     let mut events = EventRegistry::new();
     for event_type in &relevant_event_types {
         let Some(schema) = project.events.schema(event_type) else {
-            return Err(AuthoringError::new(
-                AuthoringErrorKind::UnknownEvent,
+            return Err(ManifestError::new(
+                ManifestErrorKind::UnknownEvent,
                 Some(event_type),
                 None,
                 "normalized agent references an absent event",
@@ -332,8 +332,8 @@ pub fn execution_manifest(
             skill_specs.insert(name.clone(), skill.clone());
             continue;
         }
-        return Err(AuthoringError::new(
-            AuthoringErrorKind::UnknownSkill,
+        return Err(ManifestError::new(
+            ManifestErrorKind::UnknownSkill,
             Some(agent_slug),
             Some("skills"),
             format!("normalized agent references absent skill {name:?}"),
@@ -343,8 +343,8 @@ pub fn execution_manifest(
     let mut capabilities = BTreeMap::new();
     for id in &agent.tools {
         let Some(capability) = project.capabilities.get(id) else {
-            return Err(AuthoringError::new(
-                AuthoringErrorKind::UnknownTool,
+            return Err(ManifestError::new(
+                ManifestErrorKind::UnknownTool,
                 Some(agent_slug),
                 Some("tools"),
                 format!("normalized agent references absent capability {id:?}"),
@@ -372,8 +372,8 @@ pub fn execution_manifest(
         .get(&agent.executor.provider)
         .cloned()
     else {
-        return Err(AuthoringError::new(
-            AuthoringErrorKind::UnknownExecutorProvider,
+        return Err(ManifestError::new(
+            ManifestErrorKind::UnknownExecutorProvider,
             Some(agent_slug),
             Some("executor"),
             "normalized agent references an absent executor provider",
@@ -416,8 +416,8 @@ pub fn execution_manifest(
 ///
 /// # Errors
 ///
-/// Returns [`AuthoringError`] when verification fails.
-pub fn verify_project_manifest(manifest: &ProjectManifest) -> Result<(), AuthoringError> {
+/// Returns [`ManifestError`] when verification fails.
+pub fn verify_project_manifest(manifest: &ProjectManifest) -> Result<(), ManifestError> {
     compile_project_manifest(manifest)?;
     Ok(())
 }
@@ -426,14 +426,14 @@ pub fn verify_project_manifest(manifest: &ProjectManifest) -> Result<(), Authori
 ///
 /// # Errors
 ///
-/// Returns [`AuthoringError`] for unknown fields, invalid nested declarations,
+/// Returns [`ManifestError`] for unknown fields, invalid nested declarations,
 /// non-normalized values, or an identity mismatch.
 pub fn restore_project_manifest(
     value: &Value,
-) -> Result<(ProjectManifest, AgentProject), AuthoringError> {
+) -> Result<(ProjectManifest, AgentProject), ManifestError> {
     let manifest: ProjectManifest = serde_json::from_value(value.clone()).map_err(|error| {
-        AuthoringError::new(
-            AuthoringErrorKind::InvalidManifest,
+        ManifestError::new(
+            ManifestErrorKind::InvalidManifest,
             None,
             None,
             error.to_string(),
@@ -443,7 +443,7 @@ pub fn restore_project_manifest(
     Ok((manifest, project))
 }
 
-fn compile_project_manifest(manifest: &ProjectManifest) -> Result<AgentProject, AuthoringError> {
+fn compile_project_manifest(manifest: &ProjectManifest) -> Result<AgentProject, ManifestError> {
     validate_manifest_header(
         &manifest.schema,
         manifest.version,
@@ -454,8 +454,8 @@ fn compile_project_manifest(manifest: &ProjectManifest) -> Result<AgentProject, 
     let mut agents = Vec::new();
     for spec in manifest.agents.values() {
         if hash_bytes(spec.source.as_bytes()) != spec.content_address {
-            return Err(AuthoringError::new(
-                AuthoringErrorKind::InvalidIdentity,
+            return Err(ManifestError::new(
+                ManifestErrorKind::InvalidIdentity,
                 Some(&spec.slug),
                 Some("content_address"),
                 "agent source content address does not match its exact source",
@@ -463,8 +463,8 @@ fn compile_project_manifest(manifest: &ProjectManifest) -> Result<AgentProject, 
         }
         let agent =
             crate::parse::parse_agent(&spec.slug, spec.source.as_bytes()).map_err(|error| {
-                AuthoringError::new(
-                    AuthoringErrorKind::InvalidAgent,
+                ManifestError::new(
+                    ManifestErrorKind::InvalidAgent,
                     Some(&spec.slug),
                     Some("source"),
                     error.to_string(),
@@ -486,16 +486,16 @@ fn compile_project_manifest(manifest: &ProjectManifest) -> Result<AgentProject, 
     let project = compile_project(input)?;
     let rebuilt = project_manifest(&project)?;
     if rebuilt.body() != manifest.body() {
-        return Err(AuthoringError::new(
-            AuthoringErrorKind::InvalidManifest,
+        return Err(ManifestError::new(
+            ManifestErrorKind::InvalidManifest,
             Some(&manifest.id.to_string()),
             None,
             "project manifest is valid but not normalized",
         ));
     }
     if rebuilt.id != manifest.id {
-        return Err(AuthoringError::new(
-            AuthoringErrorKind::InvalidIdentity,
+        return Err(ManifestError::new(
+            ManifestErrorKind::InvalidIdentity,
             Some(&manifest.id.to_string()),
             Some("id"),
             format!("project manifest identity must be {}", rebuilt.id),
@@ -508,12 +508,12 @@ fn compile_project_manifest(manifest: &ProjectManifest) -> Result<AgentProject, 
 ///
 /// # Errors
 ///
-/// Returns [`AuthoringError`] when either manifest is invalid or the execution
+/// Returns [`ManifestError`] when either manifest is invalid or the execution
 /// projection differs from the canonical per-agent projection.
 pub fn verify_execution_manifest(
     manifest: &ExecutionManifest,
     project_manifest_value: &ProjectManifest,
-) -> Result<(), AuthoringError> {
+) -> Result<(), ManifestError> {
     verify_project_manifest(project_manifest_value)?;
     validate_manifest_header(
         &manifest.schema,
@@ -524,24 +524,24 @@ pub fn verify_execution_manifest(
     )?;
     let expected_id = ExecutionManifestId(manifest_hash(&manifest.body(), "execution manifest")?);
     if manifest.id != expected_id {
-        return Err(AuthoringError::new(
-            AuthoringErrorKind::InvalidIdentity,
+        return Err(ManifestError::new(
+            ManifestErrorKind::InvalidIdentity,
             Some(&manifest.id.to_string()),
             Some("id"),
             format!("execution manifest identity must be {expected_id}"),
         ));
     }
     if manifest.project_generation != project_manifest_value.id {
-        return Err(AuthoringError::new(
-            AuthoringErrorKind::InvalidIdentity,
+        return Err(ManifestError::new(
+            ManifestErrorKind::InvalidIdentity,
             Some(&manifest.id.to_string()),
             Some("project_generation"),
             "execution manifest names a different project generation",
         ));
     }
     let value = serde_json::to_value(project_manifest_value).map_err(|error| {
-        AuthoringError::new(
-            AuthoringErrorKind::InvalidManifest,
+        ManifestError::new(
+            ManifestErrorKind::InvalidManifest,
             None,
             None,
             error.to_string(),
@@ -550,8 +550,8 @@ pub fn verify_execution_manifest(
     let (_manifest, project) = restore_project_manifest(&value)?;
     let expected = execution_manifest(&project, &project_manifest_value.id, &manifest.agent.slug)?;
     if &expected != manifest {
-        return Err(AuthoringError::new(
-            AuthoringErrorKind::InvalidManifest,
+        return Err(ManifestError::new(
+            ManifestErrorKind::InvalidManifest,
             Some(&manifest.id.to_string()),
             None,
             "execution manifest is not the canonical project projection",
@@ -564,15 +564,15 @@ pub fn verify_execution_manifest(
 ///
 /// # Errors
 ///
-/// Returns [`AuthoringError`] for unknown fields, malformed values, identity
+/// Returns [`ManifestError`] for unknown fields, malformed values, identity
 /// mismatches, or a non-canonical project projection.
 pub fn restore_execution_manifest(
     value: &Value,
     project: &ProjectManifest,
-) -> Result<ExecutionManifest, AuthoringError> {
+) -> Result<ExecutionManifest, ManifestError> {
     let manifest: ExecutionManifest = serde_json::from_value(value.clone()).map_err(|error| {
-        AuthoringError::new(
-            AuthoringErrorKind::InvalidManifest,
+        ManifestError::new(
+            ManifestErrorKind::InvalidManifest,
             None,
             None,
             error.to_string(),
@@ -582,18 +582,18 @@ pub fn restore_execution_manifest(
     Ok(manifest)
 }
 
-fn manifest_hash(value: &impl Serialize, subject: &str) -> Result<Hash, AuthoringError> {
+fn manifest_hash(value: &impl Serialize, subject: &str) -> Result<Hash, ManifestError> {
     let value = serde_json::to_value(value).map_err(|error| {
-        AuthoringError::new(
-            AuthoringErrorKind::InvalidIdentity,
+        ManifestError::new(
+            ManifestErrorKind::InvalidIdentity,
             Some(subject),
             None,
             error.to_string(),
         )
     })?;
     let bytes = canonical_json(&value).map_err(|error| {
-        AuthoringError::new(
-            AuthoringErrorKind::InvalidIdentity,
+        ManifestError::new(
+            ManifestErrorKind::InvalidIdentity,
             Some(subject),
             None,
             error.to_string(),
@@ -608,10 +608,10 @@ fn validate_manifest_header(
     expected_schema: &str,
     expected_version: u64,
     subject: &str,
-) -> Result<(), AuthoringError> {
+) -> Result<(), ManifestError> {
     if schema != expected_schema || version != expected_version {
-        return Err(AuthoringError::new(
-            AuthoringErrorKind::InvalidManifest,
+        return Err(ManifestError::new(
+            ManifestErrorKind::InvalidManifest,
             Some(subject),
             None,
             format!(

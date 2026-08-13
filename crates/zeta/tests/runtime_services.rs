@@ -17,17 +17,17 @@ use zeta_agent::{
     DeliverySemantics as AgentDeliverySemantics, DraftRecorder, IdSource, Observation,
     PromptEnvironment, PromptTransform, ResolvedCapability, RunStopReason, ToolProfile,
 };
-use zeta_authoring::{
-    compile_project, execution_manifest, parse_agent, project_manifest, verify_execution_manifest,
-    AgentProjectInput, CapabilitySpec, DeliverySemantics as AuthoredDeliverySemantics,
-    EventRegistry, ExecutionManifest, ExecutorProviderSpec, ImplementationFingerprint,
-    ModelSelectionSpec, ProjectManifest,
-};
 use zeta_dispatch::{
     AttemptCompletionDisposition, AttemptControl, ClaimToken, Dispatch, EventPattern,
     QueueItemStatus, Route, RuntimeEventIdentity, SessionRule, WaitStatus,
 };
 use zeta_journal::{DraftEvent, Event, EventFilter};
+use zeta_manifest::{
+    compile_project, execution_manifest, parse_agent, project_manifest, verify_execution_manifest,
+    AgentProjectInput, CapabilitySpec, DeliverySemantics as AuthoredDeliverySemantics,
+    EventRegistry, ExecutionManifest, ExecutorProviderSpec, ImplementationFingerprint,
+    ModelSelectionSpec, ProjectManifest,
+};
 
 fn draft() -> DraftEvent {
     DraftEvent {

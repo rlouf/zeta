@@ -1,6 +1,6 @@
 [package]
-name = "zeta-authoring"
-description = "Authored declarations and validation for Zeta agent systems."
+name = "zeta-manifest"
+description = "Agent declarations and manifest compilation for Zeta agent systems."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

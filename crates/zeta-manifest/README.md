@@ -1,7 +1,7 @@
-# zeta-authoring
+# zeta-manifest
 
-`zeta-authoring` turns supplied authored bytes and host declarations into
-validated, language-neutral values. Its pure APIs keep authored projects
+`zeta-manifest` turns supplied agent bytes and host declarations into
+validated, language-neutral manifests. Its pure APIs keep compiled projects
 deterministic for every runtime host.
 
 ## Contents
@@ -44,11 +44,11 @@ Parse exact bytes without filesystem access:
 
 ```rust
 let source = b"---\nname: Worker\ndescription: Does work.\n---\nDo the work.\n";
-let spec = zeta_authoring::parse_agent("worker", source)?;
+let spec = zeta_manifest::parse_agent("worker", source)?;
 
 assert_eq!(spec.slug, "worker");
 assert_eq!(spec.instructions, "Do the work.\n");
-# Ok::<(), zeta_authoring::AgentSpecError>(())
+# Ok::<(), zeta_manifest::AgentSpecError>(())
 ```
 
 Load an authored file and derive its slug from the filename:
@@ -56,10 +56,10 @@ Load an authored file and derive its slug from the filename:
 ```rust,no_run
 use std::path::Path;
 
-let spec = zeta_authoring::load_agent(Path::new("agents/worker.md"))?;
+let spec = zeta_manifest::load_agent(Path::new("agents/worker.md"))?;
 
 assert_eq!(spec.slug, "worker");
-# Ok::<(), zeta_authoring::AgentSpecError>(())
+# Ok::<(), zeta_manifest::AgentSpecError>(())
 ```
 
 Direct parse errors have no path. Loading attaches the supplied filesystem
@@ -78,14 +78,14 @@ Rendering performs no autoescaping and follows Jinja's lenient missing-member
 behavior:
 
 ```rust
-let spec = zeta_authoring::parse_agent(
+let spec = zeta_manifest::parse_agent(
     "worker",
     b"---\nname: Worker\ndescription: Works.\n---\n{{ event.payload.text }}",
 )?;
-zeta_authoring::validate_prompt(&spec).unwrap();
+zeta_manifest::validate_prompt(&spec).unwrap();
 
 let event = serde_json::json!({"payload": {"text": "<ready>"}});
-assert_eq!(zeta_authoring::render_prompt(&spec, &event).unwrap(), "<ready>");
+assert_eq!(zeta_manifest::render_prompt(&spec, &event).unwrap(), "<ready>");
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
@@ -109,21 +109,21 @@ executor provider, extension, and connector binding. Disabled agents remain in
 the normalized project.
 
 ```rust
-let agent = zeta_authoring::parse_agent(
+let agent = zeta_manifest::parse_agent(
     "worker",
     b"---\nname: Worker\ndescription: Works.\n---\nWork.\n",
 )?;
-let implementation = zeta_authoring::ImplementationFingerprint::new(
+let implementation = zeta_manifest::ImplementationFingerprint::new(
     zeta_substrate::hash_bytes(b"native runtime"),
 );
-let project = zeta_authoring::compile_project(zeta_authoring::AgentProjectInput {
+let project = zeta_manifest::compile_project(zeta_manifest::AgentProjectInput {
     agents: vec![agent],
-    events: zeta_authoring::EventRegistry::new(),
+    events: zeta_manifest::EventRegistry::new(),
     skill_resources: vec![],
     skill_specs: vec![],
     connectors: vec![],
     capabilities: vec![],
-    executor_providers: vec![zeta_authoring::ExecutorProviderSpec {
+    executor_providers: vec![zeta_manifest::ExecutorProviderSpec {
         id: "local".to_owned(),
         implementation: implementation.clone(),
     }],
@@ -131,8 +131,8 @@ let project = zeta_authoring::compile_project(zeta_authoring::AgentProjectInput 
     runtime_fingerprint: implementation,
 })?;
 
-let project_manifest = zeta_authoring::project_manifest(&project)?;
-let execution = zeta_authoring::execution_manifest(
+let project_manifest = zeta_manifest::project_manifest(&project)?;
+let execution = zeta_manifest::execution_manifest(
     &project,
     &project_manifest.id,
     "worker",
@@ -156,5 +156,5 @@ services.
 ## Test
 
 ```sh
-cargo test -p zeta-authoring
+cargo test -p zeta-manifest
 ```

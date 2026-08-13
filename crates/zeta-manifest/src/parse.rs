@@ -12,7 +12,7 @@ use serde_json::{Map, Number, Value};
 use yaml_serde::Value as YamlValue;
 use zeta_substrate::{hash_bytes, Hash, Object};
 
-use crate::error::{AgentSpecError, AuthoringError, AuthoringErrorKind, SpecErrorKind};
+use crate::error::{AgentSpecError, ManifestError, ManifestErrorKind, SpecErrorKind};
 use crate::spec::{
     scheduled_event_type, AgentSpec, EgressBinding, ExecutorSpec, IngressBinding, ModelSpec,
     RetrySpec, ScheduleEntry,
@@ -35,9 +35,9 @@ use crate::spec::{
 /// ```no_run
 /// use std::path::Path;
 ///
-/// let spec = zeta_authoring::load_agent(Path::new("agents/worker.md"))?;
+/// let spec = zeta_manifest::load_agent(Path::new("agents/worker.md"))?;
 /// assert_eq!(spec.slug, "worker");
-/// # Ok::<(), zeta_authoring::AgentSpecError>(())
+/// # Ok::<(), zeta_manifest::AgentSpecError>(())
 /// ```
 pub fn load_agent(path: &Path) -> Result<AgentSpec, AgentSpecError> {
     let source = fs::read(path).map_err(|error| {
@@ -62,12 +62,12 @@ pub fn load_agent(path: &Path) -> Result<AgentSpec, AgentSpecError> {
 /// # Examples
 ///
 /// ```
-/// let spec = zeta_authoring::parse_agent(
+/// let spec = zeta_manifest::parse_agent(
 ///     "worker",
 ///     b"---\nname: Worker\ndescription: Does work.\n---\nWork.\n",
 /// )?;
 /// assert_eq!(spec.instructions, "Work.\n");
-/// # Ok::<(), zeta_authoring::AgentSpecError>(())
+/// # Ok::<(), zeta_manifest::AgentSpecError>(())
 /// ```
 pub fn parse_agent(slug: &str, source: &[u8]) -> Result<AgentSpec, AgentSpecError> {
     let slug = validate_slug(slug)?;
@@ -138,13 +138,13 @@ pub fn parse_agent(slug: &str, source: &[u8]) -> Result<AgentSpec, AgentSpecErro
 /// # Examples
 ///
 /// ```
-/// let skill = zeta_authoring::SkillResource::new(
+/// let skill = zeta_manifest::SkillResource::new(
 ///     "code-review",
 ///     b"Review for correctness.\n",
 /// )?;
 /// assert_eq!(skill.name, "code-review");
 /// assert!(skill.object_id.to_string().starts_with("b3:"));
-/// # Ok::<(), zeta_authoring::AuthoringError>(())
+/// # Ok::<(), zeta_manifest::ManifestError>(())
 /// ```
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -162,21 +162,21 @@ impl SkillResource {
     ///
     /// # Errors
     ///
-    /// Returns [`AuthoringError`] when `source` is not valid UTF-8.
+    /// Returns [`ManifestError`] when `source` is not valid UTF-8.
     ///
-    /// [`AuthoringError`]: crate::AuthoringError
+    /// [`ManifestError`]: crate::ManifestError
     ///
     /// # Examples
     ///
     /// ```
-    /// let skill = zeta_authoring::SkillResource::new("review", b"Review.\n")?;
+    /// let skill = zeta_manifest::SkillResource::new("review", b"Review.\n")?;
     /// assert_eq!(skill.body, "Review.\n");
-    /// # Ok::<(), zeta_authoring::AuthoringError>(())
+    /// # Ok::<(), zeta_manifest::ManifestError>(())
     /// ```
-    pub fn new(name: &str, source: &[u8]) -> Result<Self, AuthoringError> {
+    pub fn new(name: &str, source: &[u8]) -> Result<Self, ManifestError> {
         let body = std::str::from_utf8(source).map_err(|error| {
-            AuthoringError::new(
-                AuthoringErrorKind::InvalidSkill,
+            ManifestError::new(
+                ManifestErrorKind::InvalidSkill,
                 Some(name),
                 Some("body"),
                 format!("skill body is not valid UTF-8: {error}"),
@@ -211,12 +211,12 @@ impl SkillResource {
 /// # Examples
 ///
 /// ```
-/// let skill = zeta_authoring::parse_skill(
+/// let skill = zeta_manifest::parse_skill(
 ///     "review",
 ///     b"---\ndescription: Reviews changes.\n---\nReview.\n",
 /// )?;
 /// assert_eq!(skill.name, "review");
-/// # Ok::<(), zeta_authoring::AuthoringError>(())
+/// # Ok::<(), zeta_manifest::ManifestError>(())
 /// ```
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -239,26 +239,26 @@ pub struct SkillSpec {
 ///
 /// # Errors
 ///
-/// Returns [`AuthoringError`] when the template has invalid syntax or refers
+/// Returns [`ManifestError`] when the template has invalid syntax or refers
 /// to an undeclared root other than `event`.
 ///
-/// [`AuthoringError`]: crate::AuthoringError
+/// [`ManifestError`]: crate::ManifestError
 ///
 /// # Examples
 ///
 /// ```
-/// let spec = zeta_authoring::parse_agent(
+/// let spec = zeta_manifest::parse_agent(
 ///     "worker",
 ///     b"---\nname: Worker\ndescription: Works.\n---\n{{ event.payload.text }}\n",
 /// )?;
-/// zeta_authoring::validate_prompt(&spec).unwrap();
-/// # Ok::<(), zeta_authoring::AgentSpecError>(())
+/// zeta_manifest::validate_prompt(&spec).unwrap();
+/// # Ok::<(), zeta_manifest::AgentSpecError>(())
 /// ```
-pub fn validate_prompt(spec: &AgentSpec) -> Result<(), AuthoringError> {
+pub fn validate_prompt(spec: &AgentSpec) -> Result<(), ManifestError> {
     let environment = prompt_environment();
     let template = environment
         .template_from_str(&spec.instructions)
-        .map_err(|error| prompt_error(spec, AuthoringErrorKind::InvalidPromptSyntax, error))?;
+        .map_err(|error| prompt_error(spec, ManifestErrorKind::InvalidPromptSyntax, error))?;
     let globals = BTreeSet::from(["dict", "namespace", "range"]);
     let mut roots = Vec::new();
     for root in template.undeclared_variables(false) {
@@ -270,8 +270,8 @@ pub fn validate_prompt(spec: &AgentSpec) -> Result<(), AuthoringError> {
     let Some(root) = roots.first() else {
         return Ok(());
     };
-    Err(AuthoringError::new(
-        AuthoringErrorKind::UnknownPromptRoot,
+    Err(ManifestError::new(
+        ManifestErrorKind::UnknownPromptRoot,
         Some(&spec.slug),
         Some("instructions"),
         format!("template references unknown variable {root:?}"),
@@ -285,30 +285,30 @@ pub fn validate_prompt(spec: &AgentSpec) -> Result<(), AuthoringError> {
 ///
 /// # Errors
 ///
-/// Returns [`AuthoringError`] when the template has invalid syntax or fails at
+/// Returns [`ManifestError`] when the template has invalid syntax or fails at
 /// runtime, such as when it traverses through an undefined intermediate value.
 ///
-/// [`AuthoringError`]: crate::AuthoringError
+/// [`ManifestError`]: crate::ManifestError
 ///
 /// # Examples
 ///
 /// ```
-/// let spec = zeta_authoring::parse_agent(
+/// let spec = zeta_manifest::parse_agent(
 ///     "worker",
 ///     b"---\nname: Worker\ndescription: Works.\n---\n{{ event.payload.text }}",
 /// )?;
 /// let event = serde_json::json!({"payload": {"text": "hello"}});
-/// assert_eq!(zeta_authoring::render_prompt(&spec, &event).unwrap(), "hello");
-/// # Ok::<(), zeta_authoring::AgentSpecError>(())
+/// assert_eq!(zeta_manifest::render_prompt(&spec, &event).unwrap(), "hello");
+/// # Ok::<(), zeta_manifest::AgentSpecError>(())
 /// ```
-pub fn render_prompt(spec: &AgentSpec, event: &Value) -> Result<String, AuthoringError> {
+pub fn render_prompt(spec: &AgentSpec, event: &Value) -> Result<String, ManifestError> {
     let environment = prompt_environment();
     let template = environment
         .template_from_str(&spec.instructions)
-        .map_err(|error| prompt_error(spec, AuthoringErrorKind::InvalidPromptSyntax, error))?;
+        .map_err(|error| prompt_error(spec, ManifestErrorKind::InvalidPromptSyntax, error))?;
     template
         .render(minijinja::context! { event => event })
-        .map_err(|error| prompt_error(spec, AuthoringErrorKind::PromptRender, error))
+        .map_err(|error| prompt_error(spec, ManifestErrorKind::PromptRender, error))
 }
 
 /// Parses one `SKILL.md` declaration from supplied exact bytes.
@@ -318,25 +318,25 @@ pub fn render_prompt(spec: &AgentSpec, event: &Value) -> Result<String, Authorin
 ///
 /// # Errors
 ///
-/// Returns [`AuthoringError`] when the bytes are not UTF-8, the resolved name
+/// Returns [`ManifestError`] when the bytes are not UTF-8, the resolved name
 /// is invalid, or the description is absent or empty.
 ///
-/// [`AuthoringError`]: crate::AuthoringError
+/// [`ManifestError`]: crate::ManifestError
 ///
 /// # Examples
 ///
 /// ```
-/// let skill = zeta_authoring::parse_skill(
+/// let skill = zeta_manifest::parse_skill(
 ///     "review",
 ///     b"---\ndescription: Reviews changes.\n---\nReview.\n",
 /// )?;
 /// assert_eq!(skill.body, "Review.\n");
-/// # Ok::<(), zeta_authoring::AuthoringError>(())
+/// # Ok::<(), zeta_manifest::ManifestError>(())
 /// ```
-pub fn parse_skill(fallback_name: &str, source: &[u8]) -> Result<SkillSpec, AuthoringError> {
+pub fn parse_skill(fallback_name: &str, source: &[u8]) -> Result<SkillSpec, ManifestError> {
     let source = std::str::from_utf8(source).map_err(|error| {
-        AuthoringError::new(
-            AuthoringErrorKind::InvalidSkill,
+        ManifestError::new(
+            ManifestErrorKind::InvalidSkill,
             Some(fallback_name),
             Some("body"),
             format!("SKILL.md is not valid UTF-8: {error}"),
@@ -347,8 +347,8 @@ pub fn parse_skill(fallback_name: &str, source: &[u8]) -> Result<SkillSpec, Auth
     let name = skill_metadata_text(metadata.get("name"), fallback_name);
     let name = name.trim();
     if !valid_skill_name(name) {
-        return Err(AuthoringError::new(
-            AuthoringErrorKind::InvalidSkill,
+        return Err(ManifestError::new(
+            ManifestErrorKind::InvalidSkill,
             Some(name),
             Some("name"),
             format!("invalid skill name {name:?}: use lowercase letters, digits, and hyphens"),
@@ -357,8 +357,8 @@ pub fn parse_skill(fallback_name: &str, source: &[u8]) -> Result<SkillSpec, Auth
     let description = skill_metadata_text(metadata.get("description"), "");
     let description = description.trim();
     if description.is_empty() {
-        return Err(AuthoringError::new(
-            AuthoringErrorKind::InvalidSkill,
+        return Err(ManifestError::new(
+            ManifestErrorKind::InvalidSkill,
             Some(name),
             Some("description"),
             "missing non-empty description",
@@ -381,10 +381,10 @@ fn prompt_environment<'source>() -> Environment<'source> {
 
 fn prompt_error(
     spec: &AgentSpec,
-    kind: AuthoringErrorKind,
+    kind: ManifestErrorKind,
     error: minijinja::Error,
-) -> AuthoringError {
-    AuthoringError::new(
+) -> ManifestError {
+    ManifestError::new(
         kind,
         Some(&spec.slug),
         Some("instructions"),

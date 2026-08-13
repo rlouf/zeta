@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::error::{AuthoringError, AuthoringErrorKind};
+use crate::error::{ManifestError, ManifestErrorKind};
 use crate::event::{validate_schema, EventRegistry};
 use crate::spec::{DeliverySemantics, ImplementationFingerprint};
 
@@ -14,9 +14,9 @@ use crate::spec::{DeliverySemantics, ImplementationFingerprint};
 /// # Examples
 ///
 /// ```
-/// let operation = zeta_authoring::ConnectorOperation {
+/// let operation = zeta_manifest::ConnectorOperation {
 ///     name: "message.post".to_owned(),
-///     semantics: zeta_authoring::DeliverySemantics::IdempotentWithKey,
+///     semantics: zeta_manifest::DeliverySemantics::IdempotentWithKey,
 ///     options_schema: None,
 /// };
 /// assert_eq!(operation.name, "message.post");
@@ -45,14 +45,14 @@ pub struct ConnectorOperation {
 ///     "protocol_versions": [0],
 ///     "events": {"mail.received": null}
 /// });
-/// let connector = zeta_authoring::parse_connector(
+/// let connector = zeta_manifest::parse_connector(
 ///     &value,
-///     zeta_authoring::ImplementationFingerprint::new(
+///     zeta_manifest::ImplementationFingerprint::new(
 ///         zeta_substrate::hash_bytes(b"mail connector"),
 ///     ),
 /// )?;
 /// assert!(connector.ingress_event("mail.received"));
-/// # Ok::<(), zeta_authoring::AuthoringError>(())
+/// # Ok::<(), zeta_manifest::ManifestError>(())
 /// ```
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -84,14 +84,14 @@ impl ConnectorSpec {
     ///     "protocol_versions": [0],
     ///     "events": {"mail.received": null}
     /// });
-    /// let connector = zeta_authoring::parse_connector(
+    /// let connector = zeta_manifest::parse_connector(
     ///     &value,
-    ///     zeta_authoring::ImplementationFingerprint::new(
+    ///     zeta_manifest::ImplementationFingerprint::new(
     ///         zeta_substrate::hash_bytes(b"mail connector"),
     ///     ),
     /// )?;
     /// assert!(connector.ingress_event("mail.received"));
-    /// # Ok::<(), zeta_authoring::AuthoringError>(())
+    /// # Ok::<(), zeta_manifest::ManifestError>(())
     /// ```
     pub fn ingress_event(&self, event_type: &str) -> bool {
         self.events.knows(event_type) && !self.operations.contains_key(event_type)
@@ -102,10 +102,10 @@ impl ConnectorSpec {
 ///
 /// # Errors
 ///
-/// Returns [`AuthoringError`] when the document has an invalid protocol,
+/// Returns [`ManifestError`] when the document has an invalid protocol,
 /// schema, operation, setting, or identity.
 ///
-/// [`AuthoringError`]: crate::AuthoringError
+/// [`ManifestError`]: crate::ManifestError
 ///
 /// # Examples
 ///
@@ -115,19 +115,19 @@ impl ConnectorSpec {
 ///     "protocol_versions": [0],
 ///     "events": {}
 /// });
-/// let connector = zeta_authoring::parse_connector(
+/// let connector = zeta_manifest::parse_connector(
 ///     &value,
-///     zeta_authoring::ImplementationFingerprint::new(
+///     zeta_manifest::ImplementationFingerprint::new(
 ///         zeta_substrate::hash_bytes(b"mail connector"),
 ///     ),
 /// )?;
 /// assert_eq!(connector.id, "mail");
-/// # Ok::<(), zeta_authoring::AuthoringError>(())
+/// # Ok::<(), zeta_manifest::ManifestError>(())
 /// ```
 pub fn parse_connector(
     value: &Value,
     implementation: ImplementationFingerprint,
-) -> Result<ConnectorSpec, AuthoringError> {
+) -> Result<ConnectorSpec, ManifestError> {
     let Some(value) = value.as_object() else {
         return Err(connector_error(None, "describe output must be an object"));
     };
@@ -322,7 +322,7 @@ fn required_connector_string(
     values: &Map<String, Value>,
     field: &str,
     connector_id: Option<&str>,
-) -> Result<String, AuthoringError> {
+) -> Result<String, ManifestError> {
     let Some(value) = values.get(field).and_then(Value::as_str) else {
         return Err(connector_error(
             connector_id,
@@ -343,7 +343,7 @@ fn connector_schema(
     connector_id: &str,
     kind: &str,
     name: &str,
-) -> Result<Option<Map<String, Value>>, AuthoringError> {
+) -> Result<Option<Map<String, Value>>, ManifestError> {
     if value.is_null() {
         return Ok(None);
     }
@@ -375,16 +375,16 @@ fn delivery_semantics(value: &str) -> Option<DeliverySemantics> {
     None
 }
 
-fn connector_error(connector_id: Option<&str>, detail: impl Into<String>) -> AuthoringError {
-    AuthoringError::new(
-        AuthoringErrorKind::InvalidConnector,
+fn connector_error(connector_id: Option<&str>, detail: impl Into<String>) -> ManifestError {
+    ManifestError::new(
+        ManifestErrorKind::InvalidConnector,
         connector_id,
         None,
         detail,
     )
 }
 
-pub(crate) fn validate_connector_spec(connector: &ConnectorSpec) -> Result<(), AuthoringError> {
+pub(crate) fn validate_connector_spec(connector: &ConnectorSpec) -> Result<(), ManifestError> {
     if connector.id.is_empty() {
         return Err(connector_error(None, "connector id must be non-empty"));
     }

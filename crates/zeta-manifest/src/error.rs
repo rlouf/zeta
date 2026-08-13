@@ -8,10 +8,10 @@ use std::path::{Path, PathBuf};
 /// # Examples
 ///
 /// ```
-/// let error = zeta_authoring::parse_agent("worker", b"no frontmatter").unwrap_err();
+/// let error = zeta_manifest::parse_agent("worker", b"no frontmatter").unwrap_err();
 /// assert_eq!(
 ///     error.kind(),
-///     zeta_authoring::SpecErrorKind::MissingFrontmatterDelimiter
+///     zeta_manifest::SpecErrorKind::MissingFrontmatterDelimiter
 /// );
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,7 +43,7 @@ impl SpecErrorKind {
     ///
     /// ```
     /// assert_eq!(
-    ///     zeta_authoring::SpecErrorKind::InvalidSlug.reason(),
+    ///     zeta_manifest::SpecErrorKind::InvalidSlug.reason(),
     ///     "invalid_slug"
     /// );
     /// ```
@@ -72,7 +72,7 @@ impl SpecErrorKind {
 /// # Examples
 ///
 /// ```
-/// let error = zeta_authoring::parse_agent(
+/// let error = zeta_manifest::parse_agent(
 ///     "worker",
 ///     b"---\ndescription: Missing a name.\n---\n",
 /// )
@@ -108,10 +108,10 @@ impl AgentSpecError {
     /// # Examples
     ///
     /// ```
-    /// let error = zeta_authoring::parse_agent("worker", b"bad").unwrap_err();
+    /// let error = zeta_manifest::parse_agent("worker", b"bad").unwrap_err();
     /// assert_eq!(
     ///     error.kind(),
-    ///     zeta_authoring::SpecErrorKind::MissingFrontmatterDelimiter
+    ///     zeta_manifest::SpecErrorKind::MissingFrontmatterDelimiter
     /// );
     /// ```
     pub fn kind(&self) -> SpecErrorKind {
@@ -123,7 +123,7 @@ impl AgentSpecError {
     /// # Examples
     ///
     /// ```
-    /// let error = zeta_authoring::parse_agent(
+    /// let error = zeta_manifest::parse_agent(
     ///     "worker",
     ///     b"---\nname: Worker\ndescription: Works.\nenabled: maybe\n---\n",
     /// )
@@ -139,7 +139,7 @@ impl AgentSpecError {
     /// # Examples
     ///
     /// ```
-    /// let error = zeta_authoring::parse_agent("worker", b"bad").unwrap_err();
+    /// let error = zeta_manifest::parse_agent("worker", b"bad").unwrap_err();
     /// assert_eq!(error.path(), None);
     /// ```
     ///
@@ -172,12 +172,12 @@ impl std::error::Error for AgentSpecError {}
 ///
 /// ```
 /// assert_eq!(
-///     zeta_authoring::AuthoringErrorKind::InvalidSchema.reason(),
+///     zeta_manifest::ManifestErrorKind::InvalidSchema.reason(),
 ///     "invalid_schema"
 /// );
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AuthoringErrorKind {
+pub enum ManifestErrorKind {
     /// A declaration carries a malformed Draft 2020-12 JSON Schema.
     InvalidSchema,
     /// Two declarations assign different values to the same identity.
@@ -224,46 +224,46 @@ pub enum AuthoringErrorKind {
     UnknownAgent,
 }
 
-impl AuthoringErrorKind {
+impl ManifestErrorKind {
     /// Returns a stable machine-readable reason.
     ///
     /// # Examples
     ///
     /// ```
     /// assert_eq!(
-    ///     zeta_authoring::AuthoringErrorKind::UnknownEvent.reason(),
+    ///     zeta_manifest::ManifestErrorKind::UnknownEvent.reason(),
     ///     "unknown_event"
     /// );
     /// ```
     pub fn reason(self) -> &'static str {
         match self {
-            AuthoringErrorKind::InvalidSchema => "invalid_schema",
-            AuthoringErrorKind::ConflictingDeclaration => "conflicting_declaration",
-            AuthoringErrorKind::DuplicateDeclaration => "duplicate_declaration",
-            AuthoringErrorKind::UnknownEvent => "unknown_event",
-            AuthoringErrorKind::InvalidPromptSyntax => "invalid_prompt_syntax",
-            AuthoringErrorKind::UnknownPromptRoot => "unknown_prompt_root",
-            AuthoringErrorKind::PromptRender => "prompt_render",
-            AuthoringErrorKind::InvalidSkill => "invalid_skill",
-            AuthoringErrorKind::InvalidConnector => "invalid_connector",
-            AuthoringErrorKind::InvalidCapability => "invalid_capability",
-            AuthoringErrorKind::InvalidExecutorProvider => "invalid_executor_provider",
-            AuthoringErrorKind::InvalidModel => "invalid_model",
-            AuthoringErrorKind::InvalidAgent => "invalid_agent",
-            AuthoringErrorKind::UnknownTool => "unknown_tool",
-            AuthoringErrorKind::ReservedTool => "reserved_tool",
-            AuthoringErrorKind::UnknownSkill => "unknown_skill",
-            AuthoringErrorKind::UnknownExecutorProvider => "unknown_executor_provider",
-            AuthoringErrorKind::UnknownExtension => "unknown_extension",
-            AuthoringErrorKind::InvalidBinding => "invalid_binding",
-            AuthoringErrorKind::InvalidManifest => "invalid_manifest",
-            AuthoringErrorKind::InvalidIdentity => "invalid_identity",
-            AuthoringErrorKind::UnknownAgent => "unknown_agent",
+            ManifestErrorKind::InvalidSchema => "invalid_schema",
+            ManifestErrorKind::ConflictingDeclaration => "conflicting_declaration",
+            ManifestErrorKind::DuplicateDeclaration => "duplicate_declaration",
+            ManifestErrorKind::UnknownEvent => "unknown_event",
+            ManifestErrorKind::InvalidPromptSyntax => "invalid_prompt_syntax",
+            ManifestErrorKind::UnknownPromptRoot => "unknown_prompt_root",
+            ManifestErrorKind::PromptRender => "prompt_render",
+            ManifestErrorKind::InvalidSkill => "invalid_skill",
+            ManifestErrorKind::InvalidConnector => "invalid_connector",
+            ManifestErrorKind::InvalidCapability => "invalid_capability",
+            ManifestErrorKind::InvalidExecutorProvider => "invalid_executor_provider",
+            ManifestErrorKind::InvalidModel => "invalid_model",
+            ManifestErrorKind::InvalidAgent => "invalid_agent",
+            ManifestErrorKind::UnknownTool => "unknown_tool",
+            ManifestErrorKind::ReservedTool => "reserved_tool",
+            ManifestErrorKind::UnknownSkill => "unknown_skill",
+            ManifestErrorKind::UnknownExecutorProvider => "unknown_executor_provider",
+            ManifestErrorKind::UnknownExtension => "unknown_extension",
+            ManifestErrorKind::InvalidBinding => "invalid_binding",
+            ManifestErrorKind::InvalidManifest => "invalid_manifest",
+            ManifestErrorKind::InvalidIdentity => "invalid_identity",
+            ManifestErrorKind::UnknownAgent => "unknown_agent",
         }
     }
 }
 
-/// Reports one pure authoring validation or compilation failure.
+/// Reports one declaration validation or manifest compilation failure.
 ///
 /// The kind is stable for machine handling. Subject and field context identify
 /// the declaration without introducing filesystem provenance.
@@ -271,33 +271,33 @@ impl AuthoringErrorKind {
 /// # Examples
 ///
 /// ```
-/// let error = zeta_authoring::derive_returns_schema(
-///     &zeta_authoring::parse_agent(
+/// let error = zeta_manifest::derive_returns_schema(
+///     &zeta_manifest::parse_agent(
 ///         "worker",
 ///         b"---\nname: Worker\ndescription: Works.\nreturns: [missing]\n---\n",
 ///     )?,
-///     &zeta_authoring::EventRegistry::new(),
+///     &zeta_manifest::EventRegistry::new(),
 /// )
 /// .unwrap_err();
 /// assert_eq!(error.subject(), Some("missing"));
-/// # Ok::<(), zeta_authoring::AgentSpecError>(())
+/// # Ok::<(), zeta_manifest::AgentSpecError>(())
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AuthoringError {
-    kind: AuthoringErrorKind,
+pub struct ManifestError {
+    kind: ManifestErrorKind,
     subject: Option<String>,
     field: Option<String>,
     detail: String,
 }
 
-impl AuthoringError {
+impl ManifestError {
     pub(crate) fn new(
-        kind: AuthoringErrorKind,
+        kind: ManifestErrorKind,
         subject: Option<&str>,
         field: Option<&str>,
         detail: impl Into<String>,
     ) -> Self {
-        AuthoringError {
+        ManifestError {
             kind,
             subject: subject.map(str::to_owned),
             field: field.map(str::to_owned),
@@ -310,16 +310,16 @@ impl AuthoringError {
     /// # Examples
     ///
     /// ```
-    /// let mut events = zeta_authoring::EventRegistry::new();
+    /// let mut events = zeta_manifest::EventRegistry::new();
     /// let error = events
     ///     .register(
     ///         "bad",
     ///         Some(serde_json::from_value(serde_json::json!({"type": "bad"})).unwrap()),
     ///     )
     ///     .unwrap_err();
-    /// assert_eq!(error.kind(), zeta_authoring::AuthoringErrorKind::InvalidSchema);
+    /// assert_eq!(error.kind(), zeta_manifest::ManifestErrorKind::InvalidSchema);
     /// ```
-    pub fn kind(&self) -> AuthoringErrorKind {
+    pub fn kind(&self) -> ManifestErrorKind {
         self.kind
     }
 
@@ -328,17 +328,17 @@ impl AuthoringError {
     /// # Examples
     ///
     /// ```
-    /// let spec = zeta_authoring::parse_agent(
+    /// let spec = zeta_manifest::parse_agent(
     ///     "worker",
     ///     b"---\nname: Worker\ndescription: Works.\nreturns: [missing]\n---\n",
     /// )?;
-    /// let error = zeta_authoring::derive_returns_schema(
+    /// let error = zeta_manifest::derive_returns_schema(
     ///     &spec,
-    ///     &zeta_authoring::EventRegistry::new(),
+    ///     &zeta_manifest::EventRegistry::new(),
     /// )
     /// .unwrap_err();
     /// assert_eq!(error.subject(), Some("missing"));
-    /// # Ok::<(), zeta_authoring::AgentSpecError>(())
+    /// # Ok::<(), zeta_manifest::AgentSpecError>(())
     /// ```
     pub fn subject(&self) -> Option<&str> {
         self.subject.as_deref()
@@ -349,17 +349,17 @@ impl AuthoringError {
     /// # Examples
     ///
     /// ```
-    /// let spec = zeta_authoring::parse_agent(
+    /// let spec = zeta_manifest::parse_agent(
     ///     "worker",
     ///     b"---\nname: Worker\ndescription: Works.\nreturns: [missing]\n---\n",
     /// )?;
-    /// let error = zeta_authoring::derive_returns_schema(
+    /// let error = zeta_manifest::derive_returns_schema(
     ///     &spec,
-    ///     &zeta_authoring::EventRegistry::new(),
+    ///     &zeta_manifest::EventRegistry::new(),
     /// )
     /// .unwrap_err();
     /// assert_eq!(error.field(), Some("returns"));
-    /// # Ok::<(), zeta_authoring::AgentSpecError>(())
+    /// # Ok::<(), zeta_manifest::AgentSpecError>(())
     /// ```
     pub fn field(&self) -> Option<&str> {
         self.field.as_deref()
@@ -370,24 +370,24 @@ impl AuthoringError {
     /// # Examples
     ///
     /// ```
-    /// let spec = zeta_authoring::parse_agent(
+    /// let spec = zeta_manifest::parse_agent(
     ///     "worker",
     ///     b"---\nname: Worker\ndescription: Works.\nreturns: [missing]\n---\n",
     /// )?;
-    /// let error = zeta_authoring::derive_returns_schema(
+    /// let error = zeta_manifest::derive_returns_schema(
     ///     &spec,
-    ///     &zeta_authoring::EventRegistry::new(),
+    ///     &zeta_manifest::EventRegistry::new(),
     /// )
     /// .unwrap_err();
     /// assert!(error.detail().contains("unknown event"));
-    /// # Ok::<(), zeta_authoring::AgentSpecError>(())
+    /// # Ok::<(), zeta_manifest::AgentSpecError>(())
     /// ```
     pub fn detail(&self) -> &str {
         &self.detail
     }
 }
 
-impl fmt::Display for AuthoringError {
+impl fmt::Display for ManifestError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match (&self.subject, &self.field) {
             (Some(subject), Some(field)) => write!(
@@ -413,4 +413,4 @@ impl fmt::Display for AuthoringError {
     }
 }
 
-impl std::error::Error for AuthoringError {}
+impl std::error::Error for ManifestError {}

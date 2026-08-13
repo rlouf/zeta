@@ -286,8 +286,8 @@ fn optional_string_value(value: Option<&String>) -> Value {
 ///
 /// ```
 /// # fn convert(
-/// #     manifest: &zeta_authoring::ProjectManifest,
-/// # ) -> Result<(), zeta_authoring::AuthoringError> {
+/// #     manifest: &zeta_manifest::ProjectManifest,
+/// # ) -> Result<(), zeta_manifest::ManifestError> {
 /// let routes = zeta::routes_from_project(manifest)?;
 /// assert!(routes.iter().all(|route| !route.agent_id().is_empty()));
 /// # Ok(())
@@ -296,12 +296,12 @@ fn optional_string_value(value: Option<&String>) -> Value {
 ///
 /// # Errors
 ///
-/// Returns [`zeta_authoring::AuthoringError`] when the manifest body does not
+/// Returns [`zeta_manifest::ManifestError`] when the manifest body does not
 /// match its canonical project generation or violates its schema contract.
 pub fn routes_from_project(
-    manifest: &zeta_authoring::ProjectManifest,
-) -> Result<Vec<zeta_dispatch::Route>, zeta_authoring::AuthoringError> {
-    zeta_authoring::verify_project_manifest(manifest)?;
+    manifest: &zeta_manifest::ProjectManifest,
+) -> Result<Vec<zeta_dispatch::Route>, zeta_manifest::ManifestError> {
+    zeta_manifest::verify_project_manifest(manifest)?;
     let mut routes = Vec::new();
     for spec in manifest.agents.values() {
         if !spec.enabled {

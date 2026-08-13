@@ -18,13 +18,13 @@ use zeta_agent::{
     DeliverySemantics as AgentDeliverySemantics, DraftRecorder, IdSource, Observation,
     PromptEnvironment, PromptTransform, ResolvedCapability, ToolProfile,
 };
-use zeta_authoring::{
+use zeta_dispatch::{Dispatch, DispatchError};
+use zeta_journal::{DraftEvent, Event, EventFilter};
+use zeta_manifest::{
     scheduled_event_type, verify_execution_manifest, verify_project_manifest,
     DeliverySemantics as AuthoredDeliverySemantics, ExecutionManifest, ExecutionManifestId,
     ImplementationFingerprint, ProjectGenerationId, ProjectManifest, ScheduleEntry,
 };
-use zeta_dispatch::{Dispatch, DispatchError};
-use zeta_journal::{DraftEvent, Event, EventFilter};
 
 const SCHEDULER_SOURCE: &str = "zeta:scheduler";
 const SCHEDULER_TICK_PREFIX: &str = "zeta.scheduler.tick.";
@@ -195,7 +195,7 @@ struct CompiledSchedule {
 ///
 /// ```
 /// # fn compile(
-/// #     manifest: &zeta_authoring::ProjectManifest,
+/// #     manifest: &zeta_manifest::ProjectManifest,
 /// # ) -> Result<(), zeta::SchedulerError> {
 /// let scheduler = zeta::Scheduler::from_project(manifest)?;
 /// let _ = scheduler;
@@ -214,7 +214,7 @@ impl Scheduler {
     ///
     /// ```
     /// # fn compile(
-    /// #     project: &zeta_authoring::ProjectManifest,
+    /// #     project: &zeta_manifest::ProjectManifest,
     /// # ) -> Result<(), zeta::SchedulerError> {
     /// let scheduler = zeta::Scheduler::from_project(project)?;
     /// let _ = scheduler;
@@ -270,7 +270,7 @@ impl Scheduler {
     ///
     /// ```
     /// # fn tick(
-    /// #     project: &zeta_authoring::ProjectManifest,
+    /// #     project: &zeta_manifest::ProjectManifest,
     /// #     dispatch: &mut zeta_dispatch::Dispatch,
     /// #     ids: &mut dyn zeta_agent::IdSource,
     /// # ) -> Result<(), zeta::SchedulerError> {
@@ -364,7 +364,7 @@ impl Scheduler {
     ///
     /// ```
     /// # fn status(
-    /// #     project: &zeta_authoring::ProjectManifest,
+    /// #     project: &zeta_manifest::ProjectManifest,
     /// #     dispatch: &zeta_dispatch::Dispatch,
     /// # ) -> Result<(), zeta::SchedulerError> {
     /// let scheduler = zeta::Scheduler::from_project(project)?;
@@ -1084,7 +1084,7 @@ impl PreparedAgent {
     ///
     /// ```
     /// # fn inspect(agent: &zeta::PreparedAgent) {
-    /// let _id: zeta_authoring::ExecutionManifestId = agent.execution_manifest_id();
+    /// let _id: zeta_manifest::ExecutionManifestId = agent.execution_manifest_id();
     /// # }
     /// ```
     pub fn execution_manifest_id(&self) -> ExecutionManifestId {
@@ -1097,7 +1097,7 @@ impl PreparedAgent {
     ///
     /// ```
     /// # fn inspect(agent: &zeta::PreparedAgent) {
-    /// let _id: zeta_authoring::ProjectGenerationId = agent.project_generation_id();
+    /// let _id: zeta_manifest::ProjectGenerationId = agent.project_generation_id();
     /// # }
     /// ```
     pub fn project_generation_id(&self) -> ProjectGenerationId {
@@ -1261,8 +1261,8 @@ impl PreparedAgent {
 ///
 /// ```
 /// # fn prepare(
-/// #     project: &zeta_authoring::ProjectManifest,
-/// #     execution: &zeta_authoring::ExecutionManifest,
+/// #     project: &zeta_manifest::ProjectManifest,
+/// #     execution: &zeta_manifest::ExecutionManifest,
 /// # ) -> Result<(), zeta::PrepareAgentError> {
 /// let agent = zeta::prepare_agent(project, execution)?;
 /// assert_eq!(agent.execution_manifest_id(), execution.id);

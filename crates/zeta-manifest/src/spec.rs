@@ -10,7 +10,7 @@ use serde_json::{Map, Value};
 use zeta_substrate::Hash;
 
 pub use crate::connector::{parse_connector, ConnectorOperation, ConnectorSpec};
-use crate::error::{AuthoringError, AuthoringErrorKind};
+use crate::error::{ManifestError, ManifestErrorKind};
 pub use crate::event::{derive_returns_schema, scheduled_event_type, EventRegistry};
 pub use crate::manifest::{
     execution_manifest, project_manifest, restore_execution_manifest, restore_project_manifest,
@@ -31,7 +31,7 @@ pub use crate::project::{
 /// # Examples
 ///
 /// ```
-/// let fingerprint = zeta_authoring::ImplementationFingerprint::new(
+/// let fingerprint = zeta_manifest::ImplementationFingerprint::new(
 ///     zeta_substrate::hash_bytes(b"implementation"),
 /// );
 /// assert_eq!(fingerprint.as_hash(), zeta_substrate::hash_bytes(b"implementation"));
@@ -47,7 +47,7 @@ impl ImplementationFingerprint {
     ///
     /// ```
     /// let hash = zeta_substrate::hash_bytes(b"implementation");
-    /// let fingerprint = zeta_authoring::ImplementationFingerprint::new(hash);
+    /// let fingerprint = zeta_manifest::ImplementationFingerprint::new(hash);
     /// assert_eq!(fingerprint.as_hash(), hash);
     /// ```
     pub fn new(hash: Hash) -> Self {
@@ -60,7 +60,7 @@ impl ImplementationFingerprint {
     ///
     /// ```
     /// let hash = zeta_substrate::hash_bytes(b"implementation");
-    /// let fingerprint = zeta_authoring::ImplementationFingerprint::new(hash);
+    /// let fingerprint = zeta_manifest::ImplementationFingerprint::new(hash);
     /// assert_eq!(fingerprint.as_hash(), hash);
     /// ```
     pub fn as_hash(&self) -> Hash {
@@ -73,7 +73,7 @@ impl ImplementationFingerprint {
 /// # Examples
 ///
 /// ```
-/// let semantics = zeta_authoring::DeliverySemantics::IdempotentWithKey;
+/// let semantics = zeta_manifest::DeliverySemantics::IdempotentWithKey;
 /// assert_eq!(
 ///     serde_json::to_value(semantics).unwrap(),
 ///     serde_json::json!("idempotent_with_key")
@@ -97,7 +97,7 @@ pub enum DeliverySemantics {
 /// # Examples
 ///
 /// ```
-/// let schedule = zeta_authoring::ScheduleEntry {
+/// let schedule = zeta_manifest::ScheduleEntry {
 ///     cron: "0 18 * * 0".to_owned(),
 ///     timezone: Some("Europe/Paris".to_owned()),
 ///     catchup: Some("latest".to_owned()),
@@ -120,7 +120,7 @@ pub struct ScheduleEntry {
 /// # Examples
 ///
 /// ```
-/// let model = zeta_authoring::ModelSpec {
+/// let model = zeta_manifest::ModelSpec {
 ///     name: "qwen3.6".to_owned(),
 ///     url: "http://127.0.0.1:8080/v1/chat/completions".to_owned(),
 /// };
@@ -140,7 +140,7 @@ pub struct ModelSpec {
 /// # Examples
 ///
 /// ```
-/// let retry = zeta_authoring::RetrySpec {
+/// let retry = zeta_manifest::RetrySpec {
 ///     max_attempts: Some(3),
 ///     backoff_seconds: Some(1.5),
 /// };
@@ -160,7 +160,7 @@ pub struct RetrySpec {
 /// # Examples
 ///
 /// ```
-/// let executor = zeta_authoring::ExecutorSpec::default();
+/// let executor = zeta_manifest::ExecutorSpec::default();
 /// assert_eq!(executor.provider, "local");
 /// assert!(executor.config.is_empty());
 /// ```
@@ -187,7 +187,7 @@ impl Default for ExecutorSpec {
 /// # Examples
 ///
 /// ```
-/// let binding = zeta_authoring::IngressBinding {
+/// let binding = zeta_manifest::IngressBinding {
 ///     event: "message.received".to_owned(),
 ///     filter: serde_json::Map::new(),
 ///     idempotency_key: Some("message:{id}".to_owned()),
@@ -210,7 +210,7 @@ pub struct IngressBinding {
 /// # Examples
 ///
 /// ```
-/// let binding = zeta_authoring::EgressBinding {
+/// let binding = zeta_manifest::EgressBinding {
 ///     event: "message.send".to_owned(),
 ///     options: serde_json::Map::new(),
 ///     idempotency_key: None,
@@ -236,12 +236,12 @@ pub struct EgressBinding {
 /// # Examples
 ///
 /// ```
-/// let spec = zeta_authoring::parse_agent(
+/// let spec = zeta_manifest::parse_agent(
 ///     "worker",
 ///     b"---\nname: Worker\ndescription: Does work.\n---\nWork.\n",
 /// )?;
 /// assert_eq!(spec.slug, "worker");
-/// # Ok::<(), zeta_authoring::AgentSpecError>(())
+/// # Ok::<(), zeta_manifest::AgentSpecError>(())
 /// ```
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -319,7 +319,7 @@ impl fmt::Display for CapabilityId {
 }
 
 impl FromStr for CapabilityId {
-    type Err = AuthoringError;
+    type Err = ManifestError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let mut segments = value.split('.');
@@ -338,8 +338,8 @@ impl FromStr for CapabilityId {
             }
         }
         if provider.is_none() || operation.is_none() || invalid_segment || contains_whitespace {
-            return Err(AuthoringError::new(
-                AuthoringErrorKind::InvalidCapability,
+            return Err(ManifestError::new(
+                ManifestErrorKind::InvalidCapability,
                 Some(value),
                 Some("id"),
                 "capability id must contain non-empty provider and operation segments",
@@ -413,12 +413,12 @@ pub struct ModelSelectionSpec {
 /// # Examples
 ///
 /// ```
-/// let spec = zeta_authoring::parse_agent(
+/// let spec = zeta_manifest::parse_agent(
 ///     "worker",
 ///     b"---\nname: Worker\ndescription: Does work.\naccepts: [work.requested]\n---\n",
 /// )?;
-/// assert!(zeta_authoring::agent_accepts_event(&spec, "work.requested"));
-/// # Ok::<(), zeta_authoring::AgentSpecError>(())
+/// assert!(zeta_manifest::agent_accepts_event(&spec, "work.requested"));
+/// # Ok::<(), zeta_manifest::AgentSpecError>(())
 /// ```
 pub fn agent_accepts_event(spec: &AgentSpec, event_type: &str) -> bool {
     if !spec.enabled {

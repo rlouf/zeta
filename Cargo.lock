@@ -2834,10 +2834,10 @@ dependencies = [
  "tokio",
  "uuid",
  "zeta-agent",
- "zeta-authoring",
  "zeta-dispatch",
  "zeta-ipc",
  "zeta-journal",
+ "zeta-manifest",
 ]
 
 [[package]]
@@ -2852,19 +2852,6 @@ dependencies = [
  "time",
  "tokio",
  "zeta-journal",
- "zeta-substrate",
-]
-
-[[package]]
-name = "zeta-authoring"
-version = "0.1.0"
-dependencies = [
- "jsonschema",
- "minijinja",
- "serde",
- "serde_json",
- "tempfile",
- "yaml_serde",
  "zeta-substrate",
 ]
 
@@ -2899,6 +2886,19 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "zeta-substrate",
+]
+
+[[package]]
+name = "zeta-manifest"
+version = "0.1.0"
+dependencies = [
+ "jsonschema",
+ "minijinja",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "yaml_serde",
  "zeta-substrate",
 ]
 

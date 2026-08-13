@@ -1,4 +1,4 @@
-//! Defines authored declarations for Zeta agent systems.
+//! Compiles agent declarations into verified manifests for Zeta agent systems.
 //!
 //! Callers supply exact agent and skill bytes plus immutable connector,
 //! capability, executor-provider, model, and implementation declarations. The
@@ -15,7 +15,7 @@ mod parse;
 mod project;
 mod spec;
 
-pub use error::{AgentSpecError, AuthoringError, AuthoringErrorKind, SpecErrorKind};
+pub use error::{AgentSpecError, ManifestError, ManifestErrorKind, SpecErrorKind};
 pub use parse::{
     load_agent, parse_agent, parse_skill, render_prompt, validate_prompt, SkillResource, SkillSpec,
 };

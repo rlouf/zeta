@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 use zeta_substrate::hash_bytes;
 
 use crate::connector::{validate_connector_spec, ConnectorSpec};
-use crate::error::{AuthoringError, AuthoringErrorKind};
+use crate::error::{ManifestError, ManifestErrorKind};
 use crate::event::{validate_schema, EventRegistry};
 use crate::parse::{validate_prompt, SkillResource, SkillSpec};
 use crate::spec::{
@@ -96,9 +96,9 @@ pub struct AgentValidationContext<'a> {
 ///
 /// # Errors
 ///
-/// Returns [`AuthoringError`] for conflicting declarations, invalid schemas,
+/// Returns [`ManifestError`] for conflicting declarations, invalid schemas,
 /// unknown references, invalid bindings, or unsupported extensions.
-pub fn compile_project(input: AgentProjectInput) -> Result<AgentProject, AuthoringError> {
+pub fn compile_project(input: AgentProjectInput) -> Result<AgentProject, ManifestError> {
     let AgentProjectInput {
         agents,
         events: local_events,
@@ -121,8 +121,8 @@ pub fn compile_project(input: AgentProjectInput) -> Result<AgentProject, Authori
         }
         for (event_type, schema) in connector.events.iter() {
             if let Some(owner) = event_owners.insert(event_type.clone(), connector.id.clone()) {
-                return Err(AuthoringError::new(
-                    AuthoringErrorKind::DuplicateDeclaration,
+                return Err(ManifestError::new(
+                    ManifestErrorKind::DuplicateDeclaration,
                     Some(event_type),
                     Some("connectors"),
                     format!(
@@ -233,16 +233,16 @@ pub fn compile_project(input: AgentProjectInput) -> Result<AgentProject, Authori
 ///
 /// # Errors
 ///
-/// Returns [`AuthoringError`] when the prompt, references, extensions, or
+/// Returns [`ManifestError`] when the prompt, references, extensions, or
 /// connector bindings are invalid.
 pub fn validate_agent(
     spec: &AgentSpec,
     context: &AgentValidationContext<'_>,
-) -> Result<(), AuthoringError> {
+) -> Result<(), ManifestError> {
     validate_prompt(spec)?;
     if let Some((extension, _value)) = spec.extensions.iter().next() {
-        return Err(AuthoringError::new(
-            AuthoringErrorKind::UnknownExtension,
+        return Err(ManifestError::new(
+            ManifestErrorKind::UnknownExtension,
             Some(&spec.slug),
             Some(extension),
             format!("unknown authored extension {extension:?}"),
@@ -256,8 +256,8 @@ pub fn validate_agent(
     } else {
         for name in &spec.tools {
             if reserved_tool(name) {
-                return Err(AuthoringError::new(
-                    AuthoringErrorKind::ReservedTool,
+                return Err(ManifestError::new(
+                    ManifestErrorKind::ReservedTool,
                     Some(&spec.slug),
                     Some("tools"),
                     format!("lists reserved tool {name:?}"),
@@ -269,8 +269,8 @@ pub fn validate_agent(
     if let Some(skill_names) = context.skill_names {
         for name in &spec.skills {
             if !skill_names.contains(name) {
-                return Err(AuthoringError::new(
-                    AuthoringErrorKind::UnknownSkill,
+                return Err(ManifestError::new(
+                    ManifestErrorKind::UnknownSkill,
                     Some(&spec.slug),
                     Some("skills"),
                     format!("lists unknown skill {name:?}"),
@@ -280,8 +280,8 @@ pub fn validate_agent(
     }
     if let Some(providers) = context.executor_providers {
         if !providers.contains_key(&spec.executor.provider) {
-            return Err(AuthoringError::new(
-                AuthoringErrorKind::UnknownExecutorProvider,
+            return Err(ManifestError::new(
+                ManifestErrorKind::UnknownExecutorProvider,
                 Some(&spec.slug),
                 Some("executor"),
                 format!(
@@ -300,19 +300,19 @@ pub fn validate_agent(
     Ok(())
 }
 
-fn duplicate_declaration(kind: &str, id: &str) -> AuthoringError {
-    AuthoringError::new(
-        AuthoringErrorKind::DuplicateDeclaration,
+fn duplicate_declaration(kind: &str, id: &str) -> ManifestError {
+    ManifestError::new(
+        ManifestErrorKind::DuplicateDeclaration,
         Some(id),
         None,
         format!("duplicate {kind} declaration"),
     )
 }
 
-fn validate_skill_resource(skill: &SkillResource) -> Result<(), AuthoringError> {
+fn validate_skill_resource(skill: &SkillResource) -> Result<(), ManifestError> {
     if skill.name.is_empty() {
-        return Err(AuthoringError::new(
-            AuthoringErrorKind::InvalidSkill,
+        return Err(ManifestError::new(
+            ManifestErrorKind::InvalidSkill,
             Some(&skill.name),
             Some("name"),
             "skill name must be non-empty",
@@ -320,8 +320,8 @@ fn validate_skill_resource(skill: &SkillResource) -> Result<(), AuthoringError> 
     }
     let expected = SkillResource::new(&skill.name, skill.body.as_bytes())?;
     if expected.object_id != skill.object_id {
-        return Err(AuthoringError::new(
-            AuthoringErrorKind::InvalidIdentity,
+        return Err(ManifestError::new(
+            ManifestErrorKind::InvalidIdentity,
             Some(&skill.name),
             Some("object_id"),
             "flat skill content address does not match its body",
@@ -330,10 +330,10 @@ fn validate_skill_resource(skill: &SkillResource) -> Result<(), AuthoringError> 
     Ok(())
 }
 
-fn validate_skill_spec(skill: &SkillSpec) -> Result<(), AuthoringError> {
+fn validate_skill_spec(skill: &SkillSpec) -> Result<(), ManifestError> {
     if !valid_skill_declaration_name(&skill.name) || skill.description.trim().is_empty() {
-        return Err(AuthoringError::new(
-            AuthoringErrorKind::InvalidSkill,
+        return Err(ManifestError::new(
+            ManifestErrorKind::InvalidSkill,
             Some(&skill.name),
             None,
             "parsed skill requires a non-empty name and description",
@@ -345,11 +345,11 @@ fn validate_skill_spec(skill: &SkillSpec) -> Result<(), AuthoringError> {
 fn validate_capability(
     capability: &CapabilitySpec,
     agents: &BTreeMap<String, AgentSpec>,
-) -> Result<(), AuthoringError> {
+) -> Result<(), ManifestError> {
     capability.id.as_str().parse::<CapabilityId>()?;
     if reserved_tool(capability.id.as_str()) || reserved_tool(&capability.name) {
-        return Err(AuthoringError::new(
-            AuthoringErrorKind::ReservedTool,
+        return Err(ManifestError::new(
+            ManifestErrorKind::ReservedTool,
             Some(capability.id.as_str()),
             Some("name"),
             format!(
@@ -359,8 +359,8 @@ fn validate_capability(
         ));
     }
     if capability.name.is_empty() || capability.description.trim().is_empty() {
-        return Err(AuthoringError::new(
-            AuthoringErrorKind::InvalidCapability,
+        return Err(ManifestError::new(
+            ManifestErrorKind::InvalidCapability,
             Some(capability.id.as_str()),
             None,
             "capability name and description must be non-empty",
@@ -371,8 +371,8 @@ fn validate_capability(
         return Ok(());
     };
     if !agents.contains_key(owner) {
-        return Err(AuthoringError::new(
-            AuthoringErrorKind::UnknownAgent,
+        return Err(ManifestError::new(
+            ManifestErrorKind::UnknownAgent,
             Some(owner),
             Some("owner"),
             format!("capability {:?} has an unknown owner", capability.id),
@@ -380,8 +380,8 @@ fn validate_capability(
     }
     let prefix = format!("agent.{owner}.");
     if !capability.id.as_str().starts_with(&prefix) {
-        return Err(AuthoringError::new(
-            AuthoringErrorKind::InvalidCapability,
+        return Err(ManifestError::new(
+            ManifestErrorKind::InvalidCapability,
             Some(capability.id.as_str()),
             Some("owner"),
             format!("agent-owned capability must start with {prefix:?}"),
@@ -390,7 +390,7 @@ fn validate_capability(
     Ok(())
 }
 
-fn validate_agent_declaration(spec: &AgentSpec) -> Result<(), AuthoringError> {
+fn validate_agent_declaration(spec: &AgentSpec) -> Result<(), ManifestError> {
     if !valid_agent_slug(&spec.slug) || spec.name.is_empty() || spec.description.is_empty() {
         return Err(invalid_agent(
             spec,
@@ -513,10 +513,10 @@ fn validate_agent_declaration(spec: &AgentSpec) -> Result<(), AuthoringError> {
     Ok(())
 }
 
-fn verify_authored_agent(spec: &AgentSpec) -> Result<(), AuthoringError> {
+fn verify_authored_agent(spec: &AgentSpec) -> Result<(), ManifestError> {
     if hash_bytes(spec.source.as_bytes()) != spec.content_address {
-        return Err(AuthoringError::new(
-            AuthoringErrorKind::InvalidIdentity,
+        return Err(ManifestError::new(
+            ManifestErrorKind::InvalidIdentity,
             Some(&spec.slug),
             Some("content_address"),
             "agent source content address does not match its exact source",
@@ -524,16 +524,16 @@ fn verify_authored_agent(spec: &AgentSpec) -> Result<(), AuthoringError> {
     }
     let parsed =
         crate::parse::parse_agent(&spec.slug, spec.source.as_bytes()).map_err(|error| {
-            AuthoringError::new(
-                AuthoringErrorKind::InvalidAgent,
+            ManifestError::new(
+                ManifestErrorKind::InvalidAgent,
                 Some(&spec.slug),
                 Some("source"),
                 error.to_string(),
             )
         })?;
     if &parsed != spec {
-        return Err(AuthoringError::new(
-            AuthoringErrorKind::InvalidAgent,
+        return Err(ManifestError::new(
+            ManifestErrorKind::InvalidAgent,
             Some(&spec.slug),
             Some("source"),
             "typed agent declaration does not match its exact source",
@@ -546,9 +546,9 @@ fn invalid_agent(
     spec: &AgentSpec,
     field: Option<&str>,
     detail: impl Into<String>,
-) -> AuthoringError {
-    AuthoringError::new(
-        AuthoringErrorKind::InvalidAgent,
+) -> ManifestError {
+    ManifestError::new(
+        ManifestErrorKind::InvalidAgent,
         Some(&spec.slug),
         field,
         detail,
@@ -579,7 +579,7 @@ fn valid_skill_declaration_name(name: &str) -> bool {
     true
 }
 
-fn validate_executor_provider(provider: &ExecutorProviderSpec) -> Result<(), AuthoringError> {
+fn validate_executor_provider(provider: &ExecutorProviderSpec) -> Result<(), ManifestError> {
     let mut contains_whitespace = false;
     for character in provider.id.chars() {
         if character.is_whitespace() {
@@ -587,8 +587,8 @@ fn validate_executor_provider(provider: &ExecutorProviderSpec) -> Result<(), Aut
         }
     }
     if provider.id.is_empty() || contains_whitespace {
-        return Err(AuthoringError::new(
-            AuthoringErrorKind::InvalidExecutorProvider,
+        return Err(ManifestError::new(
+            ManifestErrorKind::InvalidExecutorProvider,
             Some(&provider.id),
             Some("id"),
             "executor provider id must be non-empty and contain no whitespace",
@@ -597,7 +597,7 @@ fn validate_executor_provider(provider: &ExecutorProviderSpec) -> Result<(), Aut
     Ok(())
 }
 
-fn validate_model_selection(model: &ModelSelectionSpec) -> Result<(), AuthoringError> {
+fn validate_model_selection(model: &ModelSelectionSpec) -> Result<(), ManifestError> {
     let fields = [
         ("profile", model.profile.as_str()),
         ("model", model.model.as_str()),
@@ -607,8 +607,8 @@ fn validate_model_selection(model: &ModelSelectionSpec) -> Result<(), AuthoringE
     ];
     for (field, value) in fields {
         if value.trim().is_empty() {
-            return Err(AuthoringError::new(
-                AuthoringErrorKind::InvalidModel,
+            return Err(ManifestError::new(
+                ManifestErrorKind::InvalidModel,
                 Some(&model.profile),
                 Some(field),
                 format!("model selection {field} must be non-empty"),
@@ -616,16 +616,16 @@ fn validate_model_selection(model: &ModelSelectionSpec) -> Result<(), AuthoringE
         }
     }
     if model.api != "chat-completions" && model.api != "codex-responses" {
-        return Err(AuthoringError::new(
-            AuthoringErrorKind::InvalidModel,
+        return Err(ManifestError::new(
+            ManifestErrorKind::InvalidModel,
             Some(&model.profile),
             Some("api"),
             format!("unsupported model API {:?}", model.api),
         ));
     }
     if model.tool_profile != "native" && model.tool_profile != "codex" {
-        return Err(AuthoringError::new(
-            AuthoringErrorKind::InvalidModel,
+        return Err(ManifestError::new(
+            ManifestErrorKind::InvalidModel,
             Some(&model.profile),
             Some("tool_profile"),
             format!("unsupported model tool profile {:?}", model.tool_profile),
@@ -637,7 +637,7 @@ fn validate_model_selection(model: &ModelSelectionSpec) -> Result<(), AuthoringE
 fn normalize_agent_skills(
     spec: &mut AgentSpec,
     skill_names: &BTreeSet<String>,
-) -> Result<(), AuthoringError> {
+) -> Result<(), ManifestError> {
     if spec.skills_inherit {
         spec.skills = skill_names.iter().cloned().collect();
         spec.skills_inherit = false;
@@ -645,8 +645,8 @@ fn normalize_agent_skills(
     }
     for name in &spec.skills {
         if !skill_names.contains(name) {
-            return Err(AuthoringError::new(
-                AuthoringErrorKind::UnknownSkill,
+            return Err(ManifestError::new(
+                ManifestErrorKind::UnknownSkill,
                 Some(&spec.slug),
                 Some("skills"),
                 format!("lists unknown skill {name:?}"),
@@ -659,7 +659,7 @@ fn normalize_agent_skills(
 fn normalize_agent_tools(
     spec: &mut AgentSpec,
     capabilities: &BTreeMap<String, CapabilitySpec>,
-) -> Result<(), AuthoringError> {
+) -> Result<(), ManifestError> {
     let inherited = spec.tools_inherit;
     let mut selected = Vec::new();
     if spec.tools_inherit {
@@ -672,8 +672,8 @@ fn normalize_agent_tools(
     } else {
         for name in &spec.tools {
             if reserved_tool(name) {
-                return Err(AuthoringError::new(
-                    AuthoringErrorKind::ReservedTool,
+                return Err(ManifestError::new(
+                    ManifestErrorKind::ReservedTool,
                     Some(&spec.slug),
                     Some("tools"),
                     format!("lists reserved tool {name:?}"),
@@ -681,8 +681,8 @@ fn normalize_agent_tools(
             }
             let capability = selected_capability(spec, name, capabilities)?;
             if reserved_tool(capability.id.as_str()) {
-                return Err(AuthoringError::new(
-                    AuthoringErrorKind::ReservedTool,
+                return Err(ManifestError::new(
+                    ManifestErrorKind::ReservedTool,
                     Some(&spec.slug),
                     Some("tools"),
                     format!("lists reserved tool {name:?}"),
@@ -690,8 +690,8 @@ fn normalize_agent_tools(
             }
             if let Some(owner) = &capability.owner {
                 if owner != &spec.slug {
-                    return Err(AuthoringError::new(
-                        AuthoringErrorKind::UnknownTool,
+                    return Err(ManifestError::new(
+                        ManifestErrorKind::UnknownTool,
                         Some(&spec.slug),
                         Some("tools"),
                         format!("cannot select capability owned by agent {owner:?}"),
@@ -728,7 +728,7 @@ fn selected_capability<'a>(
     spec: &AgentSpec,
     name: &str,
     capabilities: &'a BTreeMap<String, CapabilitySpec>,
-) -> Result<&'a CapabilitySpec, AuthoringError> {
+) -> Result<&'a CapabilitySpec, ManifestError> {
     if let Some(capability) = capabilities.get(name) {
         return Ok(capability);
     }
@@ -738,8 +738,8 @@ fn selected_capability<'a>(
             continue;
         }
         if resolved.is_some() {
-            return Err(AuthoringError::new(
-                AuthoringErrorKind::ConflictingDeclaration,
+            return Err(ManifestError::new(
+                ManifestErrorKind::ConflictingDeclaration,
                 Some(&spec.slug),
                 Some("tools"),
                 format!("tool alias {name:?} matches multiple capabilities"),
@@ -748,8 +748,8 @@ fn selected_capability<'a>(
         resolved = Some(capability);
     }
     let Some(resolved) = resolved else {
-        return Err(AuthoringError::new(
-            AuthoringErrorKind::UnknownTool,
+        return Err(ManifestError::new(
+            ManifestErrorKind::UnknownTool,
             Some(&spec.slug),
             Some("tools"),
             format!("lists unknown tool {name:?}"),
@@ -762,10 +762,10 @@ fn validate_selected_tool(
     spec: &AgentSpec,
     name: &str,
     capabilities: &BTreeMap<String, CapabilitySpec>,
-) -> Result<(), AuthoringError> {
+) -> Result<(), ManifestError> {
     if reserved_tool(name) {
-        return Err(AuthoringError::new(
-            AuthoringErrorKind::ReservedTool,
+        return Err(ManifestError::new(
+            ManifestErrorKind::ReservedTool,
             Some(&spec.slug),
             Some("tools"),
             format!("lists reserved tool {name:?}"),
@@ -774,8 +774,8 @@ fn validate_selected_tool(
     let capability = selected_capability(spec, name, capabilities)?;
     if let Some(owner) = &capability.owner {
         if owner != &spec.slug {
-            return Err(AuthoringError::new(
-                AuthoringErrorKind::UnknownTool,
+            return Err(ManifestError::new(
+                ManifestErrorKind::UnknownTool,
                 Some(&spec.slug),
                 Some("tools"),
                 format!("cannot select capability owned by agent {owner:?}"),
@@ -792,7 +792,7 @@ fn reserved_tool(name: &str) -> bool {
 fn validate_event_references(
     spec: &AgentSpec,
     events: &EventRegistry,
-) -> Result<(), AuthoringError> {
+) -> Result<(), ManifestError> {
     let references = [
         ("accepts", spec.accepts.as_slice()),
         ("publishes", spec.publishes.as_slice()),
@@ -801,8 +801,8 @@ fn validate_event_references(
     for (field, event_types) in references {
         for event_type in event_types {
             if !events.knows(event_type) {
-                return Err(AuthoringError::new(
-                    AuthoringErrorKind::UnknownEvent,
+                return Err(ManifestError::new(
+                    ManifestErrorKind::UnknownEvent,
                     Some(&spec.slug),
                     Some(field),
                     format!("references unknown event {event_type:?}"),
@@ -816,7 +816,7 @@ fn validate_event_references(
 fn validate_connector_bindings(
     spec: &AgentSpec,
     connectors: &BTreeMap<String, ConnectorSpec>,
-) -> Result<(), AuthoringError> {
+) -> Result<(), ManifestError> {
     for binding in &spec.ingress {
         let connector = connector_for_event(connectors, &binding.event).ok_or_else(|| {
             binding_error(
@@ -904,7 +904,7 @@ fn validate_binding_value(
     noun: &str,
     value: &Map<String, Value>,
     schema: Option<&Map<String, Value>>,
-) -> Result<(), AuthoringError> {
+) -> Result<(), ManifestError> {
     let Some(schema) = schema else {
         if value.is_empty() {
             return Ok(());
@@ -931,9 +931,9 @@ fn binding_error(
     spec: &AgentSpec,
     field: &'static str,
     detail: impl Into<String>,
-) -> AuthoringError {
-    AuthoringError::new(
-        AuthoringErrorKind::InvalidBinding,
+) -> ManifestError {
+    ManifestError::new(
+        ManifestErrorKind::InvalidBinding,
         Some(&spec.slug),
         Some(field),
         detail,

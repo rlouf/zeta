@@ -1,10 +1,26 @@
 //! Composes operating-system services for the native Zeta application.
 
 use std::fmt;
+use std::fs;
+use std::io;
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde_json::{Map, Value};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::net::{UnixListener, UnixStream};
+use tokio::sync::{broadcast, watch};
+use tokio::task::{JoinHandle, JoinSet};
 use zeta_agent::{AgentProposal, AgentRunResult, RunStopReason};
 use zeta_dispatch::{AttemptCompletion, AttemptCompletionDisposition, AttemptControl};
+use zeta_ipc::{
+    validate_message, Action, ErrorObject, ErrorResponse, Frame, FrameReader, Message,
+    Notification, PeerIdentity, Request, Role, RuntimeConfig, Session, ShutdownDirection,
+    MAX_FRAME_BYTES,
+};
+use zeta_journal::Event;
 
 pub mod process_executor;
 pub mod runtime_services;
@@ -15,6 +31,562 @@ pub use runtime_services::{
     InvocationInputs, PrepareAgentError, PrepareAgentErrorKind, PreparedAgent, ScheduleStatus,
     Scheduler, SchedulerError, SchedulerErrorKind, SystemClock, UuidIdSource,
 };
+
+const LOCAL_NOTIFICATION_CAPACITY: usize = 64;
+
+type LocalRequestHandler = dyn Fn(Request) -> Result<Value, ErrorObject> + Send + Sync + 'static;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SocketIdentity {
+    device: u64,
+    inode: u64,
+}
+
+/// Reports a local client socket setup or lifecycle failure.
+///
+/// # Examples
+///
+/// ```
+/// # async fn example() {
+/// let error = zeta::LocalSocketServer::bind(
+///     "relative.sock",
+///     |_request| Ok::<_, zeta_ipc::ErrorObject>(serde_json::json!({})),
+/// )
+/// .await
+/// .unwrap_err();
+/// assert_eq!(error.reason(), "relative_path");
+/// # }
+/// ```
+#[derive(Debug)]
+pub struct LocalSocketError {
+    reason: &'static str,
+    path: PathBuf,
+    detail: String,
+}
+
+impl LocalSocketError {
+    fn new(reason: &'static str, path: &Path, detail: impl Into<String>) -> Self {
+        Self {
+            reason,
+            path: path.to_path_buf(),
+            detail: detail.into(),
+        }
+    }
+
+    /// Returns the stable machine-readable failure class.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # async fn example() {
+    /// let error = zeta::LocalSocketServer::bind(
+    ///     "relative.sock",
+    ///     |_request| Ok::<_, zeta_ipc::ErrorObject>(serde_json::json!({})),
+    /// )
+    /// .await
+    /// .unwrap_err();
+    /// assert_eq!(error.reason(), "relative_path");
+    /// # }
+    /// ```
+    pub fn reason(&self) -> &'static str {
+        self.reason
+    }
+}
+
+impl fmt::Display for LocalSocketError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            reason,
+            path,
+            detail,
+        } = self;
+        write!(formatter, "{reason} at '{}': {detail}", path.display())
+    }
+}
+
+impl std::error::Error for LocalSocketError {}
+
+/// Owns one project-local Unix socket for native client connections.
+///
+/// The socket accepts the existing `zeta-ipc` client protocol while process
+/// ownership remains with the caller. Client disconnects and `shutdown`
+/// requests cannot stop the server.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let path = std::env::temp_dir().join("zeta-example.sock");
+/// let server = zeta::LocalSocketServer::bind(
+///     path,
+///     |_request| Ok::<_, zeta_ipc::ErrorObject>(serde_json::json!({})),
+/// )
+/// .await?;
+/// server.shutdown().await?;
+/// # Ok(())
+/// # }
+/// ```
+pub struct LocalSocketServer {
+    path: PathBuf,
+    notifications: broadcast::Sender<Map<String, Value>>,
+    shutdown: watch::Sender<bool>,
+    task: Option<JoinHandle<Result<(), LocalSocketError>>>,
+}
+
+impl LocalSocketServer {
+    /// Binds an explicit absolute socket path and starts accepting clients.
+    ///
+    /// Existing files, symlinks, live sockets, and stale sockets are refused.
+    /// The caller must create the parent directory before binding.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let path = std::env::temp_dir().join("zeta-bind-example.sock");
+    /// let server = zeta::LocalSocketServer::bind(
+    ///     path,
+    ///     |_request| Ok::<_, zeta_ipc::ErrorObject>(serde_json::json!({})),
+    /// )
+    /// .await?;
+    /// server.shutdown().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LocalSocketError`] when the path is relative or occupied, the
+    /// listener cannot bind, or owner-only permissions cannot be applied.
+    pub async fn bind<H>(path: impl AsRef<Path>, handler: H) -> Result<Self, LocalSocketError>
+    where
+        H: Fn(Request) -> Result<Value, ErrorObject> + Send + Sync + 'static,
+    {
+        let path = path.as_ref().to_path_buf();
+        if !path.is_absolute() {
+            return Err(LocalSocketError::new(
+                "relative_path",
+                &path,
+                "the local socket path must be absolute",
+            ));
+        }
+        match fs::symlink_metadata(&path) {
+            Ok(_metadata) => {
+                return Err(LocalSocketError::new(
+                    "path_occupied",
+                    &path,
+                    "the local socket path already exists",
+                ));
+            }
+            Err(error) => {
+                if error.kind() != io::ErrorKind::NotFound {
+                    return Err(LocalSocketError::new("inspect", &path, error.to_string()));
+                }
+            }
+        }
+
+        let listener = UnixListener::bind(&path);
+        let Ok(listener) = listener else {
+            let error = listener.expect_err("the let-else observed a bind error");
+            return Err(LocalSocketError::new("bind", &path, error.to_string()));
+        };
+        let identity = socket_identity(&path);
+        let Ok(identity) = identity else {
+            let error = identity.expect_err("the let-else observed an identity error");
+            return Err(LocalSocketError::new("inspect", &path, error.to_string()));
+        };
+        let permissions = fs::Permissions::from_mode(0o600);
+        let permission_result = fs::set_permissions(&path, permissions);
+        let Ok(()) = permission_result else {
+            let error = permission_result.expect_err("the let-else observed a permissions error");
+            drop(listener);
+            let _cleanup = remove_owned_socket(&path, identity);
+            return Err(LocalSocketError::new(
+                "permissions",
+                &path,
+                error.to_string(),
+            ));
+        };
+
+        let handler: Arc<LocalRequestHandler> = Arc::new(handler);
+        let (notifications, _notification_receiver) =
+            broadcast::channel(LOCAL_NOTIFICATION_CAPACITY);
+        let (shutdown, shutdown_receiver) = watch::channel(false);
+        let task_path = path.clone();
+        let task_notifications = notifications.clone();
+        let task = tokio::spawn(async move {
+            let result = run_local_listener(
+                listener,
+                &task_path,
+                handler,
+                task_notifications,
+                shutdown_receiver,
+            )
+            .await;
+            let cleanup = remove_owned_socket(&task_path, identity);
+            match (result, cleanup) {
+                (Ok(()), Ok(())) => Ok(()),
+                (Err(error), Ok(())) => Err(error),
+                (Ok(()), Err(error)) => Err(error),
+                (Err(error), Err(_cleanup_error)) => Err(error),
+            }
+        });
+        Ok(Self {
+            path,
+            notifications,
+            shutdown,
+            task: Some(task),
+        })
+    }
+
+    /// Broadcasts one committed event to every initialized client.
+    ///
+    /// Clients recover missed or lagged notifications through `events.list`.
+    /// Sending while no client is connected succeeds with a receiver count of
+    /// zero.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example(server: &zeta::LocalSocketServer, event: &zeta_journal::Event) -> Result<(), Box<dyn std::error::Error>> {
+    /// let _receivers = server.notify_event(event)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LocalSocketError`] when the event cannot be serialized as a
+    /// valid `zeta-ipc` event notification.
+    pub fn notify_event(&self, event: &Event) -> Result<usize, LocalSocketError> {
+        let event = serde_json::to_value(event);
+        let Ok(event) = event else {
+            let error = event.expect_err("the let-else observed a serialization error");
+            return Err(LocalSocketError::new(
+                "notification",
+                &self.path,
+                error.to_string(),
+            ));
+        };
+        let mut params = Map::new();
+        params.insert("event".to_owned(), event);
+        let message = Message::Notification(Notification::new("event", params.clone()));
+        let validation = validate_message(&message);
+        let Ok(()) = validation else {
+            let error = validation.expect_err("the let-else observed an invalid notification");
+            return Err(LocalSocketError::new(
+                "notification",
+                &self.path,
+                error.to_string(),
+            ));
+        };
+        match self.notifications.send(params) {
+            Ok(receivers) => Ok(receivers),
+            Err(_error) => Ok(0),
+        }
+    }
+
+    /// Stops the listener and removes only the socket entry that it bound.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example(server: zeta::LocalSocketServer) -> Result<(), zeta::LocalSocketError> {
+    /// server.shutdown().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LocalSocketError`] when the accept task fails or the owned
+    /// socket entry cannot be removed.
+    pub async fn shutdown(mut self) -> Result<(), LocalSocketError> {
+        let _result = self.shutdown.send(true);
+        let Some(task) = self.task.take() else {
+            return Ok(());
+        };
+        match task.await {
+            Ok(result) => result,
+            Err(error) => Err(LocalSocketError::new("task", &self.path, error.to_string())),
+        }
+    }
+}
+
+impl fmt::Debug for LocalSocketServer {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LocalSocketServer")
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for LocalSocketServer {
+    fn drop(&mut self) {
+        let _result = self.shutdown.send(true);
+    }
+}
+
+async fn run_local_listener(
+    listener: UnixListener,
+    path: &Path,
+    handler: Arc<LocalRequestHandler>,
+    notifications: broadcast::Sender<Map<String, Value>>,
+    mut shutdown: watch::Receiver<bool>,
+) -> Result<(), LocalSocketError> {
+    let mut connections = JoinSet::new();
+    loop {
+        tokio::select! {
+            changed = shutdown.changed() => {
+                match changed {
+                    Ok(()) => break,
+                    Err(_closed) => break,
+                }
+            }
+            accepted = listener.accept() => {
+                let accepted = match accepted {
+                    Ok(accepted) => accepted,
+                    Err(error) => {
+                        return Err(LocalSocketError::new("accept", path, error.to_string()));
+                    }
+                };
+                let (stream, _address) = accepted;
+                let handler = Arc::clone(&handler);
+                let notifications = notifications.subscribe();
+                let shutdown = shutdown.clone();
+                connections.spawn(async move {
+                    let _result = serve_local_connection(
+                        stream,
+                        handler,
+                        notifications,
+                        shutdown,
+                    )
+                    .await;
+                });
+            }
+            joined = connections.join_next(), if !connections.is_empty() => {
+                match joined {
+                    Some(Ok(())) => {}
+                    Some(Err(_join_error)) => {}
+                    None => {}
+                }
+            }
+        }
+    }
+    connections.abort_all();
+    while let Some(joined) = connections.join_next().await {
+        match joined {
+            Ok(()) => {}
+            Err(_join_error) => {}
+        }
+    }
+    Ok(())
+}
+
+async fn serve_local_connection(
+    stream: UnixStream,
+    handler: Arc<LocalRequestHandler>,
+    mut notifications: broadcast::Receiver<Map<String, Value>>,
+    mut shutdown: watch::Receiver<bool>,
+) -> Result<(), String> {
+    let (reader, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
+    let runtime = PeerIdentity::new("zeta", env!("CARGO_PKG_VERSION"));
+    let mut config = RuntimeConfig::new(runtime);
+    config.supported_roles = vec![Role::Client, Role::Source];
+    let mut session = Session::runtime(config, ShutdownDirection::Disabled);
+    loop {
+        tokio::select! {
+            changed = shutdown.changed() => {
+                match changed {
+                    Ok(()) => return Ok(()),
+                    Err(_closed) => return Ok(()),
+                }
+            }
+            frame = read_local_frame(&mut reader) => {
+                let frame = frame.map_err(|error| error.to_string())?;
+                let Some(frame) = frame else {
+                    return Ok(());
+                };
+                match frame {
+                    Frame::Message(message) => {
+                        let actions = session.receive(message);
+                        if drive_local_actions(&mut session, &mut writer, &handler, actions).await? {
+                            return Ok(());
+                        }
+                    }
+                    Frame::Violation(violation) => {
+                        let error = ErrorObject::protocol(
+                            violation.code,
+                            violation.rule,
+                            violation.detail,
+                        );
+                        let message = Message::Error(ErrorResponse::new(
+                            violation.request_id,
+                            error,
+                        ));
+                        write_local_message(&mut writer, &message).await?;
+                    }
+                }
+            }
+            notification = notifications.recv() => {
+                match notification {
+                    Ok(params) => {
+                        if !session.is_initialized() {
+                            continue;
+                        }
+                        let actions = session.send_notification("event", params);
+                        let Ok(actions) = actions else {
+                            continue;
+                        };
+                        if drive_local_actions(&mut session, &mut writer, &handler, actions).await? {
+                            return Ok(());
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_count)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => return Ok(()),
+                }
+            }
+        }
+    }
+}
+
+async fn drive_local_actions(
+    session: &mut Session,
+    writer: &mut OwnedWriteHalf,
+    handler: &Arc<LocalRequestHandler>,
+    actions: Vec<Action>,
+) -> Result<bool, String> {
+    let mut actions = std::collections::VecDeque::from(actions);
+    while let Some(action) = actions.pop_front() {
+        match action {
+            Action::Send(message) => write_local_message(writer, &message).await?,
+            Action::HandleRequest(request) => {
+                let request_id = request.id.clone();
+                let handler = Arc::clone(handler);
+                let outcome = tokio::task::spawn_blocking(move || handler(request)).await;
+                let outcome = match outcome {
+                    Ok(outcome) => outcome,
+                    Err(error) => return Err(error.to_string()),
+                };
+                let completed = match outcome {
+                    Ok(result) => session.complete_request(&request_id, result),
+                    Err(error) => session.fail_request(&request_id, error),
+                };
+                let completed = match completed {
+                    Ok(completed) => completed,
+                    Err(error) => session
+                        .fail_request(&request_id, ErrorObject::from(error))
+                        .map_err(|error| error.to_string())?,
+                };
+                for action in completed {
+                    actions.push_back(action);
+                }
+            }
+            Action::HandleNotification(notification) => {
+                return Err(format!(
+                    "the local runtime cannot handle notification {:?}",
+                    notification.method
+                ));
+            }
+            Action::RequestResolved(request) => {
+                return Err(format!(
+                    "the local runtime resolved unexpected request {:?}",
+                    request.id
+                ));
+            }
+            Action::Violation(error) => return Err(error.to_string()),
+            Action::Close { reason: _reason } => return Ok(true),
+        }
+    }
+    Ok(false)
+}
+
+async fn write_local_message(writer: &mut OwnedWriteHalf, message: &Message) -> Result<(), String> {
+    let mut line = message.to_json().into_bytes();
+    line.push(b'\n');
+    writer
+        .write_all(&line)
+        .await
+        .map_err(|error| error.to_string())?;
+    writer.flush().await.map_err(|error| error.to_string())
+}
+
+async fn read_local_frame(reader: &mut BufReader<OwnedReadHalf>) -> io::Result<Option<Frame>> {
+    let mut line = Vec::new();
+    let mut overlong = false;
+    loop {
+        let buffer = reader.fill_buf().await?;
+        if buffer.is_empty() {
+            if line.is_empty() && !overlong {
+                return Ok(None);
+            }
+            return decode_local_frame(line, false);
+        }
+        let mut newline = None;
+        for (index, byte) in buffer.iter().enumerate() {
+            if *byte == b'\n' {
+                newline = Some(index);
+                break;
+            }
+        }
+        let (consumed, data_length, ended) = match newline {
+            Some(index) => (index + 1, index, true),
+            None => (buffer.len(), buffer.len(), false),
+        };
+        if !overlong {
+            let maximum = MAX_FRAME_BYTES.saturating_add(1);
+            let remaining = maximum.saturating_sub(line.len());
+            let copy_length = data_length.min(remaining);
+            line.extend_from_slice(&buffer[..copy_length]);
+            if data_length > copy_length || line.len() > MAX_FRAME_BYTES {
+                overlong = true;
+            }
+        }
+        reader.consume(consumed);
+        if ended {
+            return decode_local_frame(line, true);
+        }
+    }
+}
+
+fn decode_local_frame(mut line: Vec<u8>, terminated: bool) -> io::Result<Option<Frame>> {
+    if terminated {
+        line.push(b'\n');
+    }
+    let mut reader = FrameReader::with_max_frame_bytes(line.as_slice(), MAX_FRAME_BYTES);
+    reader.read_frame()
+}
+
+fn socket_identity(path: &Path) -> io::Result<SocketIdentity> {
+    let metadata = fs::symlink_metadata(path)?;
+    Ok(SocketIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    })
+}
+
+fn remove_owned_socket(path: &Path, identity: SocketIdentity) -> Result<(), LocalSocketError> {
+    let metadata = fs::symlink_metadata(path);
+    let metadata = match metadata {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            if error.kind() == io::ErrorKind::NotFound {
+                return Ok(());
+            }
+            return Err(LocalSocketError::new("cleanup", path, error.to_string()));
+        }
+    };
+    let current = SocketIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    };
+    if !metadata.file_type().is_socket() || current != identity {
+        return Ok(());
+    }
+    fs::remove_file(path).map_err(|error| LocalSocketError::new("cleanup", path, error.to_string()))
+}
 
 /// Classifies a failure while handing an agent result to Dispatch.
 ///

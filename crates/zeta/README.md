@@ -13,6 +13,7 @@ embed and test.
 ## What it contains
 
 - A supervised executor for installed capability providers that speak Zeta IPC.
+- A local Unix-socket JSON-RPC endpoint for embedding the application host.
 - A verified bridge from authored manifests to portable agent invocations.
 - A compiled recurring scheduler backed by durable Dispatch journal facts.
 - Conversion from verified project manifests to deterministic Dispatch routes.
@@ -25,6 +26,13 @@ embed and test.
 Provider processes start when first used. The host initializes each connection,
 checks the declared methods, sends direct calls, and reaps the whole process
 group on cancellation, timeout, exit, shutdown, or drop.
+
+`LocalSocketServer` binds an explicitly supplied absolute path, restricts the
+socket to its owner, and serves multiple initialized Zeta IPC clients. Host
+requests are delegated through a caller-provided function, while durable events
+can be broadcast as notifications. Client shutdown requests are disabled, and
+cleanup removes the filesystem entry only while it still identifies the socket
+created by that server. No CLI command starts this endpoint yet.
 
 `routes_from_project` is owned by this host because it is the composition point
 between `zeta-manifest` and `zeta-dispatch`; those domain crates remain
@@ -40,9 +48,9 @@ Dispatch does not parse calendar policy; future agent publications remain its
 separate deferred-publication concern.
 
 The native crate currently exposes this host operation without a native worker
-loop. A future Rust `run` or `serve` lifecycle must construct `Scheduler` for
-the active project generation and call `tick` before deferred publications,
-wait timeouts, and queue claims, matching the existing Python worker order.
+loop. The future `zeta up` lifecycle must construct `Scheduler` for the active
+project generation and call `tick` before deferred publications, wait timeouts,
+and queue claims, matching the existing Python worker order.
 
 ```rust
 use zeta::Scheduler;

@@ -1,17 +1,21 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::os::unix::fs::{symlink, PermissionsExt};
+use std::os::unix::net::UnixListener as StdUnixListener;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Map, Value};
 use tempfile::TempDir;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::net::{TcpListener, TcpStream, UnixStream};
 use tokio::task::JoinHandle;
 use zeta::{
     prepare_agent, CallbackDraftRecorder, CallbackObserver, CancellationToken, ExecutorSelection,
-    InvocationInputs, ProcessExecutor, ProcessLaunch, Scheduler, SystemClock, UuidIdSource,
+    InvocationInputs, LocalSocketServer, ProcessExecutor, ProcessLaunch, Scheduler, SystemClock,
+    UuidIdSource,
 };
 use zeta_agent::{
     native_capabilities, resolve_capabilities, AgentInvocation, AgentRunResult, AgentRunner,
@@ -20,12 +24,141 @@ use zeta_agent::{
     RunStopReason, ToolProfile,
 };
 use zeta_dispatch::{route_event, Dispatch, QueueItemStatus, RuntimeEventIdentity};
+use zeta_ipc::{
+    ErrorObject, ErrorResponse, Message, Notification, Request, SuccessResponse, MAX_FRAME_BYTES,
+    METHOD_NOT_FOUND, PARSE_ERROR, SERVER_ERROR,
+};
 use zeta_journal::{DraftEvent, Event, EventFilter};
 use zeta_manifest::{
     compile_project, execution_manifest, parse_agent, project_manifest, verify_execution_manifest,
     AgentProjectInput, CapabilitySpec, EventRegistry, ExecutorProviderSpec,
     ImplementationFingerprint, ModelSelectionSpec,
 };
+
+struct SocketClient {
+    reader: BufReader<OwnedReadHalf>,
+    writer: OwnedWriteHalf,
+}
+
+impl SocketClient {
+    async fn connect(path: &Path) -> Self {
+        let stream = UnixStream::connect(path)
+            .await
+            .expect("the test client must connect");
+        let (reader, writer) = stream.into_split();
+        Self {
+            reader: BufReader::new(reader),
+            writer,
+        }
+    }
+
+    async fn initialize(&mut self) -> Value {
+        self.send_json(json!({
+            "jsonrpc": "2.0",
+            "id": "initialize",
+            "method": "initialize",
+            "params": {
+                "protocol_versions": [0],
+                "peer": {"name": "socket-test", "version": "0.1.0"},
+                "roles": ["client"],
+                "heartbeat_seconds": 10,
+                "max_in_flight": 16
+            }
+        }))
+        .await;
+        let Message::Success(SuccessResponse { id: _, result }) = self.receive().await else {
+            panic!("socket initialization must succeed")
+        };
+        result
+    }
+
+    async fn ping(&mut self, id: u64) {
+        self.send_json(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "ping",
+            "params": {}
+        }))
+        .await;
+        let Message::Success(SuccessResponse {
+            id: response_id,
+            result,
+        }) = self.receive().await
+        else {
+            panic!("ping must succeed")
+        };
+        assert_eq!(response_id, id.into());
+        assert_eq!(result, json!({}));
+    }
+
+    async fn send_json(&mut self, value: Value) {
+        self.send_line(value.to_string().as_bytes()).await;
+    }
+
+    async fn send_line(&mut self, line: &[u8]) {
+        self.writer
+            .write_all(line)
+            .await
+            .expect("the test client must write a frame");
+        self.writer
+            .write_all(b"\n")
+            .await
+            .expect("the test client must terminate a frame");
+        self.writer
+            .flush()
+            .await
+            .expect("the test client must flush a frame");
+    }
+
+    async fn receive(&mut self) -> Message {
+        let mut line = String::new();
+        let count = tokio::time::timeout(Duration::from_secs(5), self.reader.read_line(&mut line))
+            .await
+            .expect("the socket server must answer in time")
+            .expect("the test client must read a frame");
+        assert!(count > 0, "the socket server closed before answering");
+        Message::parse_str(line.trim_end()).expect("the socket server must emit valid IPC")
+    }
+}
+
+fn socket_request(request: Request) -> Result<Value, ErrorObject> {
+    let Request {
+        id: _,
+        method,
+        params,
+    } = request;
+    match method.as_str() {
+        "events.list" => Ok(json!({"method": method, "params": params})),
+        "session.list" => Err(ErrorObject::application(
+            SERVER_ERROR,
+            "fixture_failure",
+            "The fixture rejected the request",
+            zeta_ipc::Retryability::Final,
+        )),
+        "events.publish" | "session.start" | "session.send" | "session.status"
+        | "session.cancel" => Ok(json!({})),
+        "initialize" | "event" | "ping" | "shutdown" => {
+            panic!("reserved methods must stay inside the IPC session")
+        }
+        unexpected => panic!("unexpected test request {unexpected:?}"),
+    }
+}
+
+fn notification_event(cursor: u64) -> Event {
+    Event {
+        id: format!("evt_{cursor}"),
+        event_type: "test.event".to_owned(),
+        source: "socket-test".to_owned(),
+        payload: object(json!({"cursor": cursor})),
+        idempotency_key: None,
+        caused_by: None,
+        session_id: Some("session-1".to_owned()),
+        run_id: Some("run-1".to_owned()),
+        turn_id: None,
+        timestamp_ms: i64::try_from(cursor).expect("the test cursor must fit i64"),
+        cursor: Some(cursor),
+    }
+}
 
 async fn scripted_chat_server(responses: Vec<String>) -> (String, JoinHandle<Vec<Value>>) {
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -836,6 +969,257 @@ fn authored_schedule_occurrence_uses_ordinary_idempotent_dispatch_ingress() {
     assert_eq!(queue_items.len(), 1);
     assert_eq!(queue_items[0].target_agent(), "digest");
     assert_eq!(queue_items[0].status(), QueueItemStatus::Available);
+}
+
+#[tokio::test]
+async fn local_socket_binds_owner_only_and_reports_invalid_paths() {
+    let directory = TempDir::new().expect("the socket test directory must exist");
+    let path = directory.path().join("runtime.sock");
+    let server = LocalSocketServer::bind(&path, socket_request)
+        .await
+        .expect("the local socket must bind");
+    let mode = fs::symlink_metadata(&path)
+        .expect("the socket entry must exist")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600);
+
+    server
+        .shutdown()
+        .await
+        .expect("the local socket must stop cleanly");
+    assert!(!path.exists());
+
+    let relative = Path::new("relative-runtime.sock");
+    let error = LocalSocketServer::bind(relative, socket_request)
+        .await
+        .expect_err("a relative local socket path must be rejected");
+    assert_eq!(error.reason(), "relative_path");
+    assert!(error.to_string().contains("relative-runtime.sock"));
+
+    let path = directory.path().join("x".repeat(256));
+    let error = LocalSocketServer::bind(&path, socket_request)
+        .await
+        .expect_err("an overlong local socket path must be rejected");
+    assert!(error
+        .to_string()
+        .contains(&path.to_string_lossy().to_string()));
+}
+
+#[tokio::test]
+async fn local_socket_refuses_every_preexisting_entry() {
+    let directory = TempDir::new().expect("the socket test directory must exist");
+
+    let regular = directory.path().join("regular.sock");
+    fs::write(&regular, "occupied").expect("the regular fixture must exist");
+    let error = LocalSocketServer::bind(&regular, socket_request)
+        .await
+        .expect_err("a regular file must not be replaced");
+    assert_eq!(error.reason(), "path_occupied");
+
+    let target = directory.path().join("target");
+    let link = directory.path().join("link.sock");
+    symlink(&target, &link).expect("the symlink fixture must exist");
+    let error = LocalSocketServer::bind(&link, socket_request)
+        .await
+        .expect_err("a symlink must not be replaced");
+    assert_eq!(error.reason(), "path_occupied");
+
+    let socket = directory.path().join("existing.sock");
+    let listener = StdUnixListener::bind(&socket).expect("the live socket fixture must bind");
+    let error = LocalSocketServer::bind(&socket, socket_request)
+        .await
+        .expect_err("a live socket must not be replaced");
+    assert_eq!(error.reason(), "path_occupied");
+    drop(listener);
+
+    let error = LocalSocketServer::bind(&socket, socket_request)
+        .await
+        .expect_err("a stale socket must not be removed without an owner lock");
+    assert_eq!(error.reason(), "path_occupied");
+}
+
+#[tokio::test]
+async fn local_socket_initializes_pings_delegates_and_recovers_frames() {
+    let directory = TempDir::new().expect("the socket test directory must exist");
+    let path = directory.path().join("runtime.sock");
+    let server = LocalSocketServer::bind(&path, socket_request)
+        .await
+        .expect("the local socket must bind");
+    let mut client = SocketClient::connect(&path).await;
+
+    let initialized = client.initialize().await;
+    assert_eq!(initialized["roles"], json!(["client"]));
+    client.ping(1).await;
+
+    client
+        .send_json(json!({
+            "jsonrpc": "2.0",
+            "id": "list-events",
+            "method": "events.list",
+            "params": {"limit": 3}
+        }))
+        .await;
+    let Message::Success(SuccessResponse { id: _, result }) = client.receive().await else {
+        panic!("the delegated request must succeed")
+    };
+    assert_eq!(result["method"], "events.list");
+    assert_eq!(result["params"], json!({"limit": 3}));
+
+    client
+        .send_json(json!({
+            "jsonrpc": "2.0",
+            "id": "list-sessions",
+            "method": "session.list",
+            "params": {}
+        }))
+        .await;
+    let Message::Error(ErrorResponse { id: _, error }) = client.receive().await else {
+        panic!("the delegated fixture failure must be returned")
+    };
+    assert_eq!(
+        error.data.expect("the error must carry details")["code"],
+        "fixture_failure"
+    );
+
+    client.send_line(b"not json").await;
+    let Message::Error(ErrorResponse { id, error }) = client.receive().await else {
+        panic!("a malformed frame must produce an error")
+    };
+    assert_eq!(id, None);
+    assert_eq!(error.code, PARSE_ERROR);
+    client.ping(2).await;
+
+    client
+        .send_line(br#"{"jsonrpc":"2.0","id":"invalid-shape","method":""}"#)
+        .await;
+    let Message::Error(ErrorResponse { id, error: _error }) = client.receive().await else {
+        panic!("an invalid request must produce an error")
+    };
+    assert_eq!(id, Some("invalid-shape".into()));
+
+    let oversized = vec![b'x'; MAX_FRAME_BYTES + 1];
+    client.send_line(&oversized).await;
+    let Message::Error(ErrorResponse { id, error }) = client.receive().await else {
+        panic!("an oversized frame must produce an error")
+    };
+    assert_eq!(id, None);
+    assert_eq!(error.code, PARSE_ERROR);
+    client.ping(3).await;
+
+    let stream = UnixStream::connect(&path)
+        .await
+        .expect("the EOF client must connect");
+    let (reader, mut writer) = stream.into_split();
+    let initialization = json!({
+        "jsonrpc": "2.0",
+        "id": "final-object",
+        "method": "initialize",
+        "params": {
+            "protocol_versions": [0],
+            "peer": {"name": "eof-test", "version": "0.1.0"},
+            "roles": ["client"]
+        }
+    })
+    .to_string();
+    writer
+        .write_all(initialization.as_bytes())
+        .await
+        .expect("the EOF client must write its final object");
+    writer
+        .shutdown()
+        .await
+        .expect("the EOF client must close its writing side");
+    let mut reader = BufReader::new(reader);
+    let mut line = String::new();
+    reader
+        .read_line(&mut line)
+        .await
+        .expect("the EOF client must read initialization");
+    let Message::Success(SuccessResponse {
+        id,
+        result: _result,
+    }) = Message::parse_str(line.trim_end()).expect("the EOF response must be valid IPC")
+    else {
+        panic!("a complete final object at EOF must initialize")
+    };
+    assert_eq!(id, "final-object".into());
+
+    server
+        .shutdown()
+        .await
+        .expect("the local socket must stop cleanly");
+}
+
+#[tokio::test]
+async fn local_socket_isolates_clients_and_fans_out_notifications() {
+    let directory = TempDir::new().expect("the socket test directory must exist");
+    let path = directory.path().join("runtime.sock");
+    let server = LocalSocketServer::bind(&path, socket_request)
+        .await
+        .expect("the local socket must bind");
+    let mut first = SocketClient::connect(&path).await;
+    let mut second = SocketClient::connect(&path).await;
+    first.initialize().await;
+    second.initialize().await;
+
+    let event = notification_event(1);
+    server
+        .notify_event(&event)
+        .expect("a valid durable event must be accepted");
+    for client in [&mut first, &mut second] {
+        let Message::Notification(Notification { method, params }) = client.receive().await else {
+            panic!("every initialized client must receive the event")
+        };
+        assert_eq!(method, "event");
+        assert_eq!(params["event"]["id"], "evt_1");
+    }
+
+    first
+        .send_json(json!({
+            "jsonrpc": "2.0",
+            "id": "unauthorized-shutdown",
+            "method": "shutdown",
+            "params": {"reason": "one client exited"}
+        }))
+        .await;
+    let Message::Error(ErrorResponse { id: _, error }) = first.receive().await else {
+        panic!("a socket client must not have process shutdown authority")
+    };
+    assert_eq!(error.code, METHOD_NOT_FOUND);
+    drop(first);
+
+    second.ping(4).await;
+    let mut third = SocketClient::connect(&path).await;
+    third.initialize().await;
+    third.ping(5).await;
+
+    server
+        .shutdown()
+        .await
+        .expect("the local socket must stop cleanly");
+}
+
+#[tokio::test]
+async fn local_socket_shutdown_preserves_a_replacement_entry() {
+    let directory = TempDir::new().expect("the socket test directory must exist");
+    let path = directory.path().join("runtime.sock");
+    let server = LocalSocketServer::bind(&path, socket_request)
+        .await
+        .expect("the local socket must bind");
+
+    fs::remove_file(&path).expect("the bound name must be replaceable");
+    fs::write(&path, "replacement").expect("the replacement fixture must exist");
+    server
+        .shutdown()
+        .await
+        .expect("the local socket must stop cleanly");
+
+    assert_eq!(
+        fs::read_to_string(&path).expect("the replacement must remain"),
+        "replacement"
+    );
 }
 
 fn object(value: Value) -> Map<String, Value> {

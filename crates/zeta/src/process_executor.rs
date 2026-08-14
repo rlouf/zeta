@@ -144,16 +144,49 @@ impl ProcessExecutor {
         }
     }
 
+    /// Calls one declared direct provider method.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AgentError`] when the provider cannot start, does not declare
+    /// the method, rejects the call, returns a non-object result, or times out.
+    pub fn call(
+        &mut self,
+        method: &str,
+        input: Map<String, Value>,
+        base_directory: Option<String>,
+        effect_key: Option<String>,
+        abort: &dyn AbortSignal,
+    ) -> Result<Map<String, Value>, AgentError> {
+        self.call_now(method, input, base_directory, effect_key, abort)
+    }
+
     fn execute_now(
         &mut self,
         invocation: &CapabilityInvocation,
+        abort: &dyn AbortSignal,
+    ) -> Result<Map<String, Value>, AgentError> {
+        self.call_now(
+            invocation.capability_id.as_str(),
+            invocation.params.clone(),
+            invocation.base_directory.clone(),
+            invocation.effect_key.clone(),
+            abort,
+        )
+    }
+
+    fn call_now(
+        &mut self,
+        method: &str,
+        input: Map<String, Value>,
+        base_directory: Option<String>,
+        effect_key: Option<String>,
         abort: &dyn AbortSignal,
     ) -> Result<Map<String, Value>, AgentError> {
         if let Some(reason) = abort.reason() {
             return Err(AgentError::tool(format!("provider call aborted: {reason}")));
         }
         self.ensure_process(abort)?;
-        let method = invocation.capability_id.as_str();
         let Some(process) = self.process.as_ref() else {
             unreachable!("ensure_process established the provider process")
         };
@@ -165,7 +198,7 @@ impl ProcessExecutor {
         }
 
         let request_id = self.request_id("call");
-        let params = direct_request_params(invocation);
+        let params = direct_request_params(input, base_directory, effect_key);
         let Some(process) = self.process.as_mut() else {
             unreachable!("the provider process remained available")
         };
@@ -460,14 +493,18 @@ fn initialize(
     Ok(())
 }
 
-fn direct_request_params(invocation: &CapabilityInvocation) -> Map<String, Value> {
+fn direct_request_params(
+    input: Map<String, Value>,
+    base_directory: Option<String>,
+    effect_key: Option<String>,
+) -> Map<String, Value> {
     let mut params = Map::new();
-    params.insert("input".to_owned(), Value::Object(invocation.params.clone()));
-    if let Some(base_directory) = &invocation.base_directory {
-        params.insert("base_dir".to_owned(), Value::String(base_directory.clone()));
+    params.insert("input".to_owned(), Value::Object(input));
+    if let Some(base_directory) = base_directory {
+        params.insert("base_dir".to_owned(), Value::String(base_directory));
     }
-    if let Some(effect_key) = &invocation.effect_key {
-        params.insert("effect_key".to_owned(), Value::String(effect_key.clone()));
+    if let Some(effect_key) = effect_key {
+        params.insert("effect_key".to_owned(), Value::String(effect_key));
     }
     params
 }

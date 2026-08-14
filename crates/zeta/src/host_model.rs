@@ -85,6 +85,13 @@ pub(crate) fn resolve(
     })
 }
 
+/// Validates one explicit native model profile without contacting its endpoint.
+pub(crate) fn validate_profile(profile: &ModelSpec, project_root: &Path) -> Result<(), String> {
+    let resolved = named_profile(profile.profile(), project_root)?;
+    let _selection = selection_from_profile(&resolved.profile)?;
+    Ok(())
+}
+
 /// Validates every enabled agent model before the runtime starts.
 pub(crate) async fn check_project(revision: &ProjectRevision) -> Result<Vec<String>, String> {
     let mut warnings = BTreeSet::new();

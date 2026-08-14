@@ -448,6 +448,21 @@ impl ProjectRevision {
     fn validate_provider_references(&self, path: &Path) -> Result<(), ProjectError> {
         let native = zeta_agent::native_capabilities();
         for agent in self.agents.values().filter(|agent| agent.enabled) {
+            if let Some(model) = &agent.model {
+                let selected_python = self.providers.models().contains_key(model.profile());
+                if !selected_python {
+                    crate::host_model::validate_profile(model, &self.project_root).map_err(
+                        |error| {
+                            ProjectError::new(format!(
+                                "active project '{}' has agent {:?} with unavailable model {:?}: {error}",
+                                path.display(),
+                                agent.slug,
+                                model.profile()
+                            ))
+                        },
+                    )?;
+                }
+            }
             for binding in &agent.ingress {
                 let Some(connector) = &binding.connector else {
                     continue;
@@ -752,6 +767,22 @@ mod tests {
         let error = ProjectRevision::load(temporary.path()).expect_err("tool must fail");
 
         assert!(error.to_string().contains("unavailable tool \"missing\""));
+    }
+
+    #[test]
+    fn load_rejects_an_unavailable_explicit_model() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let agents = temporary.path().join("agents");
+        fs::create_dir(&agents).expect("agents directory");
+        fs::write(
+            agents.join("worker.md"),
+            "---\nname: Worker\ndescription: Uses one model.\nmodel: missing\n---\nRun.\n",
+        )
+        .expect("agent source");
+
+        let error = ProjectRevision::load(temporary.path()).expect_err("model must fail");
+
+        assert!(error.to_string().contains("unavailable model \"missing\""));
     }
 
     #[test]

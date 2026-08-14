@@ -1085,23 +1085,7 @@
                     }
                   ]
                 },
-                "summary": "done",
-                "events": [
-                  {
-                    "event_type": "trace.first",
-                    "source": "agent:worker",
-                    "payload": {
-                      "position": 0
-                    }
-                  },
-                  {
-                    "event_type": "trace.second",
-                    "source": "agent:worker",
-                    "payload": {
-                      "position": 1
-                    }
-                  }
-                ]
+                "summary": "done"
               }
             },
             {

@@ -350,12 +350,12 @@ fn callback_observer_forwards_transient_values_in_order() {
 
 #[test]
 fn callback_draft_recorder_propagates_durability_failure() {
-    let mut recorder = CallbackDraftRecorder::new(|_draft: &DraftEvent| {
-        Err::<(), String>("storage offline".to_owned())
+    let mut recorder = CallbackDraftRecorder::new(|_event_id: &str, _draft: &DraftEvent| {
+        Err::<String, String>("storage offline".to_owned())
     });
 
     let error = recorder
-        .record(&draft())
+        .record("event-1", &draft())
         .expect_err("the callback failure must stop the durability boundary");
 
     assert_eq!(error.kind, AgentErrorKind::Durability);
@@ -416,19 +416,7 @@ fn agent_result_becomes_typed_dispatch_completion_without_reordering_controls() 
         completion.metadata()["usage"],
         json!({"input_tokens": 12, "output_tokens": 4})
     );
-    assert_eq!(
-        completion.metadata()["events"],
-        json!([{
-            "type": "runtime.effect.started",
-            "source": "capability:test.effect",
-            "payload": {},
-            "idempotency_key": "runtime.effect.started:effect-1",
-            "caused_by": "call-1",
-            "session_id": "session-1",
-            "run_id": "run-1",
-            "turn_id": "turn-1",
-        }])
-    );
+    assert!(!completion.metadata().contains_key("events"));
     assert_eq!(
         completion.controls(),
         &[
@@ -471,7 +459,7 @@ fn agent_result_records_the_maximum_model_call_stop_reason() {
 }
 
 #[test]
-fn agent_result_preserves_null_draft_event_evidence_fields() {
+fn agent_result_does_not_embed_draft_events() {
     let result = AgentRunResult {
         events: vec![DraftEvent {
             event_type: "trace.empty".to_owned(),
@@ -488,19 +476,7 @@ fn agent_result_preserves_null_draft_event_evidence_fields() {
 
     let completion = attempt_completion("2026-08-12T10:00:01Z", &result).unwrap();
 
-    assert_eq!(
-        completion.metadata()["events"],
-        json!([{
-            "type": "trace.empty",
-            "source": "agent:worker",
-            "payload": {"nested": {"value": 1}},
-            "idempotency_key": null,
-            "caused_by": null,
-            "session_id": null,
-            "run_id": null,
-            "turn_id": null,
-        }])
-    );
+    assert!(!completion.metadata().contains_key("events"));
 }
 
 #[test]

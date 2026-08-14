@@ -618,7 +618,6 @@ fn completion_controls(
 ) -> Result<(OffsetDateTime, Vec<AttemptControl>), DispatchError> {
     let completed_at = parse_completion_timestamp(&completion.finished_at, "finished_at")?;
     validate_optional_completion_string(&completion.metadata, "final_answer")?;
-    validate_optional_completion_array(&completion.metadata, "events")?;
     validate_optional_completion_array(&completion.metadata, "tool_calls")?;
     if let Some(value) = completion.metadata.get("usage") {
         if !value.is_object() {
@@ -860,7 +859,7 @@ fn completed_attempt_event(
     if let Some(Value::String(summary)) = summary {
         payload.insert("summary".to_owned(), Value::String(summary.clone()));
     }
-    for key in ["events", "tool_calls", "usage"] {
+    for key in ["tool_calls", "usage"] {
         if let Some(value) = result.get(key) {
             payload.insert(key.to_owned(), value.clone());
         }

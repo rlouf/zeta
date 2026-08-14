@@ -869,13 +869,6 @@ pub fn attempt_completion(
             Value::String(stop_reason.to_owned()),
         );
     }
-    if !result.events.is_empty() {
-        let mut events = Vec::new();
-        for event in &result.events {
-            events.push(draft_event_value(event));
-        }
-        metadata.insert("events".to_owned(), Value::Array(events));
-    }
     if let Some(usage) = result.telemetry.get("usage") {
         let Value::Object(usage) = usage else {
             return Err(CompletionHandoffError::new(
@@ -957,40 +950,6 @@ fn completion_position(position: usize) -> Result<u64, CompletionHandoffError> {
     })
 }
 
-fn draft_event_value(event: &zeta_journal::DraftEvent) -> Value {
-    let mut value = Map::new();
-    value.insert("type".to_owned(), Value::String(event.event_type.clone()));
-    value.insert("source".to_owned(), Value::String(event.source.clone()));
-    value.insert("payload".to_owned(), Value::Object(event.payload.clone()));
-    value.insert(
-        "idempotency_key".to_owned(),
-        optional_string_value(event.idempotency_key.as_ref()),
-    );
-    value.insert(
-        "caused_by".to_owned(),
-        optional_string_value(event.caused_by.as_ref()),
-    );
-    value.insert(
-        "session_id".to_owned(),
-        optional_string_value(event.session_id.as_ref()),
-    );
-    value.insert(
-        "run_id".to_owned(),
-        optional_string_value(event.run_id.as_ref()),
-    );
-    value.insert(
-        "turn_id".to_owned(),
-        optional_string_value(event.turn_id.as_ref()),
-    );
-    Value::Object(value)
-}
-
-fn optional_string_value(value: Option<&String>) -> Value {
-    match value {
-        Some(value) => Value::String(value.clone()),
-        None => Value::Null,
-    }
-}
 
 /// Converts a verified authored project into deterministic runtime routes.
 ///

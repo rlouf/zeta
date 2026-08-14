@@ -22,7 +22,14 @@ Use decorators to declare providers:
 from zeta_plugin import connector, model, tool
 
 
-@tool("pi.bash")
+@tool(
+    "pi.bash",
+    input_schema={
+        "type": "object",
+        "required": ["command"],
+        "properties": {"command": {"type": "string"}},
+    },
+)
 async def bash(request, context):
     """Run a command in the Pi workspace."""
     return {"output": "ok"}
@@ -47,6 +54,9 @@ Each tool must have a model description. The SDK uses its first docstring
 paragraph by default. Use `@tool(..., description="...")` or
 `zeta.tools.register(..., description="...")` to override it. An undescribed
 tool fails during provider registration.
+
+Each tool must also have an `input_schema` object. Zeta sends the schema to
+the model. It does not infer a schema or use a permissive default.
 
 A subscription receives an event type, filter, and optional cursor. It returns
 an `events` array of payload objects and an optional replacement cursor.
@@ -98,7 +108,12 @@ The setup object has `models`, `tools`, and `connectors` registration APIs:
 
 ```python
 def setup(zeta):
-    zeta.tools.register("pi.bash", bash, description="Run a command in the Pi workspace.")
+    zeta.tools.register(
+        "pi.bash",
+        bash,
+        description="Run a command in the Pi workspace.",
+        input_schema={"type": "object", "required": ["command"]},
+    )
     zeta.models.register("pi", generate, tool_profile={"pi.bash": "bash"})
     zeta.connectors.register("slack", Slack)
 ```

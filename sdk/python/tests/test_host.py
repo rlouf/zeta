@@ -17,7 +17,7 @@ def test_invokes_a_decorated_tool_with_context(tmp_path: Path) -> None:
 from zeta_plugin import tool
 
 
-@tool("pi.bash")
+@tool("pi.bash", input_schema={"type": "object", "required": ["command"]})
 async def bash(request, context):
     '''Run one shell command.'''
     return {"command": request["command"], "effect_key": context["effect_key"]}
@@ -53,7 +53,7 @@ def test_preserves_a_provider_error_retry_contract(tmp_path: Path) -> None:
 from zeta_plugin import ProviderError, tool
 
 
-@tool("limited")
+@tool("limited", input_schema={"type": "object"})
 async def limited(request, context):
     '''Call the limited test provider.'''
     raise ProviderError("The provider rate limit is active", code="rate_limited", retryable=True)
@@ -208,7 +208,7 @@ def test_serves_the_private_json_rpc_protocol(tmp_path: Path) -> None:
 from zeta_plugin import tool
 
 
-@tool("echo")
+@tool("echo", input_schema={"type": "object", "required": ["value"]})
 async def echo(request, context):
     '''Return the supplied value.'''
     return {"value": request["value"]}
@@ -312,7 +312,9 @@ def test_host_requires_object_results(tmp_path: Path) -> None:
         return "not an object"
 
     registration = ProviderRegistration(
-        declaration=tool("invalid")(invalid).__zeta_plugin_registration__.declaration,
+        declaration=tool(
+            "invalid", input_schema={"type": "object"}
+        )(invalid).__zeta_plugin_registration__.declaration,
         target=invalid,
     )
     catalog = ProviderCatalog()

@@ -32,7 +32,7 @@ async def generate(request, context):
 from zeta_plugin import tool
 
 
-@tool("web_search")
+@tool("web_search", input_schema={"type": "object"})
 async def search(request, context):
     '''Search the web for relevant sources.'''
     return {"results": []}
@@ -56,7 +56,7 @@ class Slack:
 from zeta_plugin import tool
 
 
-@tool("not_loaded")
+@tool("not_loaded", input_schema={"type": "object"})
 async def not_loaded(request, context):
     '''Do not load this internal test provider.'''
     return None
@@ -98,7 +98,7 @@ def test_rejects_a_duplicate_provider_identifier(tmp_path: Path) -> None:
 from zeta_plugin import tool
 
 
-@tool("bash")
+@tool("bash", input_schema={"type": "object"})
 async def bash(request, context):
     '''Run one shell command.'''
     return None
@@ -121,7 +121,7 @@ def test_provider_catalog_filters_by_kind(tmp_path: Path) -> None:
 from zeta_plugin import tool
 
 
-@tool("bash")
+@tool("bash", input_schema={"type": "object"})
 async def bash(request, context):
     '''Run one shell command.'''
     return None
@@ -137,7 +137,7 @@ async def bash(request, context):
 def test_discovers_a_decorated_package_entry_point() -> None:
     module = ModuleType("example.providers")
 
-    @tool("pi.bash")
+    @tool("pi.bash", input_schema={"type": "object"})
     async def bash(request, context):
         """Run one shell command."""
         return None
@@ -157,7 +157,7 @@ def test_discovers_an_advanced_package_setup_function() -> None:
         return None
 
     def setup(zeta):
-        zeta.tools.register("web_search", web_search)
+        zeta.tools.register("web_search", web_search, input_schema={"type": "object"})
 
     catalog = discover_entry_points([_EntryPoint("example", setup)])
 
@@ -174,10 +174,10 @@ def test_rejects_a_duplicate_package_identifier() -> None:
         return None
 
     def setup_first(zeta):
-        zeta.tools.register("bash", first)
+        zeta.tools.register("bash", first, input_schema={"type": "object"})
 
     def setup_second(zeta):
-        zeta.tools.register("bash", second)
+        zeta.tools.register("bash", second, input_schema={"type": "object"})
 
     with pytest.raises(DiscoveryError, match="Duplicate tool provider 'bash'"):
         discover_entry_points(
@@ -192,7 +192,7 @@ def test_higher_priority_scope_replaces_a_lower_provider(tmp_path: Path) -> None
 from zeta_plugin import tool
 
 
-@tool("bash")
+@tool("bash", input_schema={"type": "object"})
 async def bash(request, context):
     '''Run the project shell command.'''
     return {"source": "project"}
@@ -205,7 +205,7 @@ async def bash(request, context):
         return {"source": "package"}
 
     def setup(zeta):
-        zeta.tools.register("bash", package_bash)
+        zeta.tools.register("bash", package_bash, input_schema={"type": "object"})
 
     packages = discover_entry_points([_EntryPoint("package", setup)])
 

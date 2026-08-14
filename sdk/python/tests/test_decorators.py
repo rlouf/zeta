@@ -12,7 +12,7 @@ from zeta_plugin import (
 
 
 def test_tool_declaration_attaches_metadata() -> None:
-    @tool("web_search")
+    @tool("web_search", input_schema={"type": "object"})
     async def web_search() -> None:
         """Search the web for relevant sources.
 
@@ -30,7 +30,11 @@ def test_tool_declaration_attaches_metadata() -> None:
 
 
 def test_tool_description_can_override_the_docstring() -> None:
-    @tool("web_search", description="Search current web sources.")
+    @tool(
+        "web_search",
+        description="Search current web sources.",
+        input_schema={"type": "object"},
+    )
     async def web_search() -> None:
         """Search the web for relevant sources."""
         return None
@@ -44,8 +48,17 @@ def test_tool_description_can_override_the_docstring() -> None:
 def test_tool_requires_a_description_or_docstring() -> None:
     with pytest.raises(DeclarationError, match="description or a non-empty docstring"):
 
+        @tool("web_search", input_schema={"type": "object"})
+        async def web_search() -> None:
+            return None
+
+
+def test_tool_requires_an_input_schema() -> None:
+    with pytest.raises(DeclarationError, match="requires an input schema"):
+
         @tool("web_search")
         async def web_search() -> None:
+            """Search the web for relevant sources."""
             return None
 
 

@@ -124,7 +124,7 @@ fn python_host_reports_a_provider_failure() {
 from zeta_plugin import tool
 
 
-@tool("fail")
+@tool("fail", input_schema={"type": "object"})
 async def fail(request, context):
     """Fail the provider call for this test."""
     raise RuntimeError("fixture failure")

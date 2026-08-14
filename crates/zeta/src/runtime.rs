@@ -867,12 +867,12 @@ fn python_capability(provider: &crate::PythonProvider) -> Result<zeta_agent::Cap
                 provider.id
             )
         })?;
-    let input_schema = provider.input_schema.clone().unwrap_or_else(|| {
-        serde_json::json!({"type": "object", "additionalProperties": true})
-            .as_object()
-            .cloned()
-            .expect("the default Python tool schema is an object")
-    });
+    let input_schema = provider.input_schema.clone().ok_or_else(|| {
+        format!(
+            "Python tool provider {:?} has no input schema",
+            provider.id
+        )
+    })?;
     Ok(zeta_agent::Capability {
         id,
         description: provider
@@ -2841,6 +2841,27 @@ mod tests {
             capabilities[0].model_description,
             "Search the web for relevant sources."
         );
+    }
+
+    #[test]
+    fn python_tool_without_an_input_schema_is_rejected() {
+        let provider = crate::PythonProvider {
+            id: "web_search".to_owned(),
+            source: crate::PythonProviderSource {
+                module: "test".to_owned(),
+                path: None,
+                distribution: None,
+            },
+            fingerprint: "a".repeat(64),
+            description: Some("Search the web for relevant sources.".to_owned()),
+            tool_profile: None,
+            input_schema: None,
+            output_schema: None,
+        };
+
+        let error = python_capability(&provider).expect_err("schema must be present");
+
+        assert!(error.contains("has no input schema"));
     }
 
     #[test]

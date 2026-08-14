@@ -53,6 +53,9 @@ class ProviderDeclaration:
         if self.description is not None and not self.description.strip():
             raise DeclarationError("A tool description must not be empty")
 
+        if self.kind is ProviderKind.TOOL and self.input_schema is None:
+            raise DeclarationError("A tool requires an input schema")
+
 
 @dataclass(frozen=True)
 class ProviderRegistration:

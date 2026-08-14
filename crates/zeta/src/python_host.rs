@@ -1,11 +1,17 @@
 //! Supervises the private Python provider host for one project environment.
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use zeta_agent::{AbortSignal, AgentError};
+use zeta_agent::{
+    AbortSignal, AgentError, AgentObserver, CapabilityExecutor, CapabilityFuture,
+    CapabilityInvocation, ModelGateway, ModelInput, ModelOutput, ModelRequest, NativeToolExecutor,
+};
 
 use crate::{ProcessExecutor, ProcessExecutorConfig, ProcessLaunch};
 
@@ -97,6 +103,98 @@ impl PythonProviderCatalog {
 pub struct PythonProviderHost {
     executor: ProcessExecutor,
     catalog: PythonProviderCatalog,
+}
+
+/// Shares one supervised Python host between model and tool adapters.
+pub type SharedPythonProviderHost = Arc<Mutex<PythonProviderHost>>;
+
+/// Generates model responses through a Python model provider.
+pub struct PythonModelGateway {
+    host: SharedPythonProviderHost,
+    model: String,
+}
+
+impl PythonModelGateway {
+    /// Creates one model gateway for a selected Python model provider.
+    pub fn new(host: SharedPythonProviderHost, model: impl Into<String>) -> Self {
+        Self {
+            host,
+            model: model.into(),
+        }
+    }
+}
+
+impl ModelGateway for PythonModelGateway {
+    fn generate<'a>(
+        &'a mut self,
+        input: &'a ModelInput,
+        request: &'a ModelRequest,
+        _observer: &'a mut dyn AgentObserver,
+        abort: &'a dyn AbortSignal,
+    ) -> Pin<Box<dyn Future<Output = Result<ModelOutput, AgentError>> + 'a>> {
+        Box::pin(async move {
+            let mut provider_request = Map::new();
+            provider_request.insert("input".to_owned(), serialize_object(input, "model input")?);
+            provider_request.insert(
+                "model_request".to_owned(),
+                serialize_object(request, "model request")?,
+            );
+            let mut host = self
+                .host
+                .lock()
+                .map_err(|_error| AgentError::tool("the Python provider host is unavailable"))?;
+            let result = host.generate(&self.model, provider_request, abort)?;
+            serde_json::from_value(Value::Object(result)).map_err(|error| {
+                AgentError::tool(format!(
+                    "Python model provider returned an invalid response: {error}"
+                ))
+            })
+        })
+    }
+}
+
+/// Executes Python tools and retains native tools as a fallback.
+pub struct PythonToolExecutor {
+    host: SharedPythonProviderHost,
+    native: NativeToolExecutor,
+}
+
+impl PythonToolExecutor {
+    /// Combines one Python host with the native fallback executor.
+    pub fn new(host: SharedPythonProviderHost, native: NativeToolExecutor) -> Self {
+        Self { host, native }
+    }
+}
+
+impl CapabilityExecutor for PythonToolExecutor {
+    fn execute<'a>(
+        &'a mut self,
+        invocation: &'a CapabilityInvocation,
+        abort: &'a dyn AbortSignal,
+    ) -> CapabilityFuture<'a> {
+        Box::pin(async move {
+            let routes_to_python = self
+                .host
+                .lock()
+                .map_err(|_error| AgentError::tool("the Python provider host is unavailable"))?
+                .catalog()
+                .tools()
+                .contains_key(invocation.capability_id.as_str());
+            if routes_to_python {
+                let mut host = self.host.lock().map_err(|_error| {
+                    AgentError::tool("the Python provider host is unavailable")
+                })?;
+                return host.invoke(
+                    invocation.capability_id.as_str(),
+                    invocation.params.clone(),
+                    invocation.base_directory.clone(),
+                    invocation.effect_key.clone(),
+                    abort,
+                );
+            }
+            self.native.execute(invocation, abort).await
+        })
+    }
 }
 
 impl PythonProviderHost {
@@ -281,6 +379,17 @@ fn parse_catalog(value: Map<String, Value>) -> Result<PythonProviderCatalog, Age
         tools,
         connectors,
     })
+}
+
+fn serialize_object<T: Serialize>(value: &T, name: &str) -> Result<Value, AgentError> {
+    let value = serde_json::to_value(value)
+        .map_err(|error| AgentError::tool(format!("cannot serialize {name}: {error}")))?;
+    let Value::Object(value) = value else {
+        return Err(AgentError::tool(format!(
+            "{name} does not encode as an object"
+        )));
+    };
+    Ok(Value::Object(value))
 }
 
 fn parse_category(

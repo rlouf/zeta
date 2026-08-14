@@ -34,8 +34,8 @@ pub use project_revision::{
     ActiveAgent, ActiveProjectStatus, Project, ProjectError, ProjectRevision, ProjectRevisionStore,
 };
 pub use python_host::{
-    PythonProvider, PythonProviderCatalog, PythonProviderHost, PythonProviderHostConfig,
-    PythonProviderSource,
+    PythonModelGateway, PythonProvider, PythonProviderCatalog, PythonProviderHost,
+    PythonProviderHostConfig, PythonProviderSource, PythonToolExecutor, SharedPythonProviderHost,
 };
 pub use runtime::{IngressResult, Runtime, RuntimeError, RuntimeStatus, RuntimeWake};
 pub use runtime_services::{

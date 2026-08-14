@@ -27,9 +27,9 @@ pub use http::{
     HttpModelGateway, HttpModelGatewayConfig, ModelHttpEndpoint, ModelTransportTimeouts,
 };
 pub use responses::{
-    codex_request_headers, decode_responses_stream, responses_request, CodexCredentials,
+    CodexCredentials, codex_request_headers, decode_responses_stream, responses_request,
 };
-pub use sse::{model_stream_timeout, parse_sse_lines, ModelStreamTimeout, SseByteDecoder};
+pub use sse::{ModelStreamTimeout, SseByteDecoder, model_stream_timeout, parse_sse_lines};
 
 /// Carries a model-ready request without provider transport details.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -73,6 +73,7 @@ pub struct ModelOutput {
     /// Carries normalized provider telemetry.
     pub telemetry: Map<String, Value>,
     /// Reports whether the provider emitted any text delta.
+    #[serde(default)]
     pub streamed_content: bool,
 }
 

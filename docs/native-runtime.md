@@ -15,12 +15,39 @@ agent outside the Dispatch actor, renews its lease, and commits its terminal
 proposal before it wakes more work. Queue items retain their archived agent
 revision across reload and restart.
 
-The native executor supports direct model declarations, durable controls, and
-selected native tools. Each Codex Responses request also includes hosted web
-search. Web search has no Zeta capability or effect record. The egress lane
-stores connector effects, claims them separately from agent work, and retries
-safe delivery. The native command does not start connector processes yet.
-Connector process support remains future work.
+The native executor supports model profile references, durable controls, and
+selected native tools. `zeta.web_search` posts to Codex `alpha/search`.
+The runner saves normal tool call records. It sends text and bounded source
+records back to the model. The egress lane stores connector effects, claims
+them separately from agent work, and retries safe delivery. The native command
+does not start connector processes yet. Connector process support remains
+future work.
+
+## Model profiles
+
+An agent can name a model profile in its frontmatter.
+
+```yaml
+model: fast-local
+```
+
+Define project profiles in `zeta.toml`.
+
+```toml
+[[models]]
+name = "fast-local"
+model = "qwen3.5"
+url = "http://127.0.0.1:8080/v1/chat/completions"
+default = true
+```
+
+`zeta up` resolves a project profile before a local profile.
+It uses `~/.zeta/models.toml` after a project miss.
+It warns when an explicit agent profile uses the local file.
+An agent without `model` uses the project default, then the local default.
+It emits no warning for either default.
+It sends one bounded request to each resolved model before readiness.
+It stops before startup when no required profile exists.
 
 ## Decision
 

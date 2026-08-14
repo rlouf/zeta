@@ -1,22 +1,22 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::fs;
-use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use tempfile::tempdir;
 use zeta::runtime_services::{
     RuntimeLease, RuntimeMetadata, RuntimeOwnerMode, RuntimePaths, RuntimePhase,
     RuntimeSocketDisposition,
 };
 use zeta::{
-    attempt_completion, prepare_agent, CallbackDraftRecorder, CallbackObserver, CancellationToken,
-    CompletionHandoffErrorKind, ExecutorSelection, InvocationInputs, PrepareAgentErrorKind,
-    ScheduleStatus, Scheduler, SchedulerErrorKind, SystemClock, UuidIdSource,
+    CallbackDraftRecorder, CallbackObserver, CancellationToken, CompletionHandoffErrorKind,
+    ExecutorSelection, InvocationInputs, PrepareAgentErrorKind, ScheduleStatus, Scheduler,
+    SchedulerErrorKind, SystemClock, UuidIdSource, attempt_completion, prepare_agent,
 };
 use zeta_agent::{
     AbortReason, AbortSignal, AgentErrorKind, AgentInvocation, AgentObserver, AgentProposal,
@@ -30,10 +30,10 @@ use zeta_dispatch::{
 };
 use zeta_journal::{DraftEvent, Event, EventFilter};
 use zeta_manifest::{
-    compile_project, execution_manifest, parse_agent, project_manifest, verify_execution_manifest,
     AgentProjectInput, CapabilitySpec, DeliverySemantics as AuthoredDeliverySemantics,
     EventRegistry, ExecutionManifest, ExecutorProviderSpec, ImplementationFingerprint,
-    ModelSelectionSpec, ProjectManifest,
+    ModelSelectionSpec, ProjectManifest, compile_project, execution_manifest, parse_agent,
+    project_manifest, verify_execution_manifest,
 };
 
 fn draft() -> DraftEvent {
@@ -696,7 +696,7 @@ fn prepared_agent_preserves_the_verified_authored_projection() {
         "codex-responses",
         "codex",
     );
-    let declarations = "model:\n  name: agent-model\n  url: https://agent.example/v1/responses\ntools: [unsafe-call, deliver, retry-safe, replay]\npublishes: [work.completed, audit.signal]\nbase_dir: agent-work\n";
+    let declarations = "model: fast\ntools: [unsafe-call, deliver, retry-safe, replay]\npublishes: [work.completed, audit.signal]\nbase_dir: agent-work\n";
     let (project, execution) = manifest_pair(declarations, events, capabilities, Some(model));
 
     verify_execution_manifest(&execution, &project)
@@ -812,10 +812,10 @@ fn prepared_agent_preserves_the_verified_authored_projection() {
     assert_eq!(allowed_ids, ids);
     assert_eq!(tool_profile, ToolProfile::Codex);
     assert_eq!(max_model_calls, 7);
-    assert_eq!(model_name.as_deref(), Some("agent-model"));
+    assert_eq!(model_name.as_deref(), Some("project-model"));
     assert_eq!(
         model_url.as_deref(),
-        Some("https://agent.example/v1/responses")
+        Some("https://project.example/v1/responses")
     );
     assert_eq!(model_api.as_deref(), Some("codex-responses"));
     assert_eq!(thinking.as_deref(), Some("high"));
@@ -928,29 +928,29 @@ fn preparation_rejects_model_facing_alias_collisions_after_profile_adaptation() 
 }
 
 #[test]
-fn model_selection_uses_agent_overrides_and_project_fallbacks() {
+fn model_profile_uses_the_project_model_selection() {
     let project_model = selected_model(
         "project-model",
         "https://project.example/v1/responses",
         "codex-responses",
         "codex",
     );
-    let declarations = "model:\n  name: agent-model\n  url: https://agent.example/v1/responses\n";
+    let declarations = "model: fast\n";
     let (project, execution) = manifest_pair(
         declarations,
         EventRegistry::new(),
         Vec::new(),
         Some(project_model.clone()),
     );
-    let prepared = prepare_agent(&project, &execution).expect("the model override must prepare");
+    let prepared = prepare_agent(&project, &execution).expect("the model profile must prepare");
     let invocation = prepared
         .invocation(invocation_inputs(PathBuf::from("/projects/override")))
-        .expect("the model override invocation must resolve");
+        .expect("the model profile invocation must resolve");
 
-    assert_eq!(invocation.model_name.as_deref(), Some("agent-model"));
+    assert_eq!(invocation.model_name.as_deref(), Some("project-model"));
     assert_eq!(
         invocation.model_url.as_deref(),
-        Some("https://agent.example/v1/responses")
+        Some("https://project.example/v1/responses")
     );
     assert_eq!(invocation.model_api.as_deref(), Some("codex-responses"));
     assert_eq!(invocation.thinking.as_deref(), Some("high"));
@@ -974,20 +974,16 @@ fn model_selection_uses_agent_overrides_and_project_fallbacks() {
 }
 
 #[test]
-fn model_selection_uses_native_chat_defaults_without_a_project_model() {
-    let declarations =
-        "model:\n  name: agent-model\n  url: https://agent.example/v1/chat/completions\n";
+fn model_profile_uses_native_chat_defaults_without_a_project_model() {
+    let declarations = "model: fast\n";
     let (project, execution) = manifest_pair(declarations, EventRegistry::new(), Vec::new(), None);
-    let prepared = prepare_agent(&project, &execution).expect("the agent model must prepare");
+    let prepared = prepare_agent(&project, &execution).expect("the model profile must prepare");
     let invocation = prepared
         .invocation(invocation_inputs(PathBuf::from("/projects/agent-only")))
-        .expect("the agent-only model invocation must resolve");
+        .expect("the model profile invocation must resolve");
 
-    assert_eq!(invocation.model_name.as_deref(), Some("agent-model"));
-    assert_eq!(
-        invocation.model_url.as_deref(),
-        Some("https://agent.example/v1/chat/completions")
-    );
+    assert_eq!(invocation.model_name, None);
+    assert_eq!(invocation.model_url, None);
     assert_eq!(invocation.model_api.as_deref(), Some("chat-completions"));
     assert_eq!(invocation.thinking, None);
     assert_eq!(invocation.tool_profile, ToolProfile::Native);
@@ -1732,18 +1728,24 @@ fn runtime_lease_removes_only_matching_or_regular_stale_metadata() {
         .write_metadata(&metadata)
         .expect("owner metadata must commit");
 
-    assert!(!lease
-        .remove_metadata("replacement-instance")
-        .expect("replacement metadata must be preserved"));
+    assert!(
+        !lease
+            .remove_metadata("replacement-instance")
+            .expect("replacement metadata must be preserved")
+    );
     assert!(paths.metadata().exists());
-    assert!(lease
-        .remove_metadata("current-instance")
-        .expect("matching metadata must be removed"));
+    assert!(
+        lease
+            .remove_metadata("current-instance")
+            .expect("matching metadata must be removed")
+    );
 
     fs::write(paths.metadata(), "not json\n").expect("stale metadata must exist");
-    assert!(lease
-        .remove_stale_metadata()
-        .expect("regular stale metadata must be removed"));
+    assert!(
+        lease
+            .remove_stale_metadata()
+            .expect("regular stale metadata must be removed")
+    );
     assert!(!paths.metadata().exists());
 
     let target = directory.path().join("metadata-target");
@@ -1752,10 +1754,12 @@ fn runtime_lease_removes_only_matching_or_regular_stale_metadata() {
         .remove_stale_metadata()
         .expect_err("metadata symlinks must be preserved");
     assert_eq!(error.reason(), "metadata");
-    assert!(fs::symlink_metadata(paths.metadata())
-        .expect("the metadata symlink must remain")
-        .file_type()
-        .is_symlink());
+    assert!(
+        fs::symlink_metadata(paths.metadata())
+            .expect("the metadata symlink must remain")
+            .file_type()
+            .is_symlink()
+    );
 }
 
 #[test]
@@ -1815,8 +1819,10 @@ fn runtime_lease_preserves_regular_files_and_symlinks() {
         fs::read_to_string(paths.socket()).expect("the regular fixture must remain"),
         "occupied"
     );
-    assert!(fs::symlink_metadata(paths.control_socket())
-        .expect("the symlink fixture must remain")
-        .file_type()
-        .is_symlink());
+    assert!(
+        fs::symlink_metadata(paths.control_socket())
+            .expect("the symlink fixture must remain")
+            .file_type()
+            .is_symlink()
+    );
 }

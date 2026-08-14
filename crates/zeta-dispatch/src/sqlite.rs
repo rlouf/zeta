@@ -9,6 +9,7 @@ mod projection;
 mod resources;
 mod routing;
 mod sessions;
+mod trace;
 
 use self::projection::rebuild_projections_in_transaction;
 
@@ -230,6 +231,20 @@ const CREATE_PROJECTIONS: &str = "
     ) STRICT;
 ";
 
+const CREATE_TRACE_SCHEMA: &str = "
+    CREATE TABLE IF NOT EXISTS substrate_objects (
+        object_id TEXT PRIMARY KEY CHECK (length(object_id) > 0),
+        object_json BLOB NOT NULL
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS substrate_derivations (
+        derivation_id TEXT PRIMARY KEY CHECK (length(derivation_id) > 0),
+        output_id TEXT NOT NULL CHECK (length(output_id) > 0),
+        derivation_json BLOB NOT NULL
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS substrate_derivations_output
+        ON substrate_derivations(output_id, derivation_id);
+";
+
 const DROP_PROJECTIONS: &str = "
     DROP TABLE IF EXISTS recurring_schedules;
     DROP TABLE IF EXISTS effect_claims;
@@ -400,6 +415,20 @@ pub enum DispatchError {
         /// Names the malformed or unsupported result field.
         field: &'static str,
     },
+    /// A trace value does not match its claimed immutable address.
+    InvalidTrace {
+        /// Carries the claimed immutable address.
+        identifier: String,
+        /// Names the rejected trace field.
+        field: &'static str,
+    },
+    /// A stored immutable trace value cannot be rehydrated safely.
+    CorruptTrace {
+        /// Carries the stored immutable address.
+        identifier: String,
+        /// Names the rejected trace field.
+        field: &'static str,
+    },
     /// A retained journal row cannot reconstruct its logical proof value.
     CorruptJournal {
         /// Locates the malformed row when its cursor was readable.
@@ -499,6 +528,14 @@ impl DispatchError {
                 "cancellation_authority_mismatch"
             }
             DispatchError::InvalidCompletion { field: _field } => "invalid_completion",
+            DispatchError::InvalidTrace {
+                identifier: _identifier,
+                field: _field,
+            } => "invalid_trace",
+            DispatchError::CorruptTrace {
+                identifier: _identifier,
+                field: _field,
+            } => "corrupt_trace",
             DispatchError::CorruptJournal {
                 cursor: _cursor,
                 field: _field,
@@ -556,6 +593,14 @@ impl fmt::Display for DispatchError {
             DispatchError::InvalidLifecycleEvent { event_id, field } => write!(
                 formatter,
                 "runtime lifecycle event {event_id:?} has invalid field {field:?}"
+            ),
+            DispatchError::InvalidTrace { identifier, field } => write!(
+                formatter,
+                "trace value {identifier:?} has invalid field {field:?}"
+            ),
+            DispatchError::CorruptTrace { identifier, field } => write!(
+                formatter,
+                "stored trace value {identifier:?} has corrupt field {field:?}"
             ),
             DispatchError::Transition(error) => error.fmt(formatter),
             DispatchError::Session(error) => error.fmt(formatter),
@@ -683,6 +728,14 @@ impl std::error::Error for DispatchError {
             DispatchError::CancellationResourceNotFound { handle: _handle } => None,
             DispatchError::CancellationAuthorityMismatch { handle: _handle } => None,
             DispatchError::InvalidCompletion { field: _field } => None,
+            DispatchError::InvalidTrace {
+                identifier: _identifier,
+                field: _field,
+            } => None,
+            DispatchError::CorruptTrace {
+                identifier: _identifier,
+                field: _field,
+            } => None,
             DispatchError::CorruptJournal {
                 cursor: _cursor,
                 field: _field,
@@ -780,6 +833,9 @@ fn initialize_schema(connection: &mut Connection) -> Result<(), DispatchError> {
             .execute_batch(CREATE_PROJECTIONS)
             .map_err(|error| database_error("create projections", error))?;
         transaction
+            .execute_batch(CREATE_TRACE_SCHEMA)
+            .map_err(|error| database_error("create trace schema", error))?;
+        transaction
             .commit()
             .map_err(|error| database_error("commit schema", error))?;
         return Ok(());
@@ -842,6 +898,9 @@ fn initialize_schema(connection: &mut Connection) -> Result<(), DispatchError> {
             )
             .map_err(|error| database_error("record projection epoch", error))?;
     }
+    transaction
+        .execute_batch(CREATE_TRACE_SCHEMA)
+        .map_err(|error| database_error("create trace schema", error))?;
     transaction
         .commit()
         .map_err(|error| database_error("commit schema check", error))?;

@@ -128,6 +128,20 @@ impl AgentEventSink {
     fn observe(&self, progress: AgentProgress) {
         let _sent = self.sender.send(RuntimeCommand::AgentProgress { progress });
     }
+
+    fn record_trace(&self, trace: &zeta_agent::TraceBatch) -> Result<(), zeta_agent::AgentError> {
+        let (reply, receiver) = mpsc::channel();
+        self.sender
+            .send(RuntimeCommand::RecordAgentTrace {
+                trace: trace.clone(),
+                reply,
+            })
+            .map_err(|_error| zeta_agent::AgentError::durability("the runtime actor is not running"))?;
+        receiver
+            .recv()
+            .map_err(|_error| zeta_agent::AgentError::durability("the runtime actor stopped before it stored an agent trace"))?
+            .map_err(zeta_agent::AgentError::durability)
+    }
 }
 
 struct RuntimeDraftRecorder {
@@ -149,6 +163,13 @@ impl zeta_agent::DraftRecorder for RuntimeDraftRecorder {
         match &self.sink {
             Some(sink) => sink.record(event_id, draft),
             None => Ok(event_id.to_owned()),
+        }
+    }
+
+    fn record_trace(&mut self, trace: &zeta_agent::TraceBatch) -> Result<(), zeta_agent::AgentError> {
+        match &self.sink {
+            Some(sink) => sink.record_trace(trace),
+            None => Ok(()),
         }
     }
 }
@@ -1176,6 +1197,10 @@ enum RuntimeCommand {
     AgentProgress {
         progress: AgentProgress,
     },
+    RecordAgentTrace {
+        trace: zeta_agent::TraceBatch,
+        reply: mpsc::Sender<Result<(), String>>,
+    },
     AgentFinished {
         claim: QueueClaim,
         execution: AgentExecution,
@@ -1492,6 +1517,10 @@ fn run_actor(
             }
             Received::Command(RuntimeCommand::AgentProgress { progress: update }) => {
                 let _sent = progress.send(update);
+            }
+            Received::Command(RuntimeCommand::RecordAgentTrace { trace, reply }) => {
+                let result = record_agent_trace(&mut dispatch, &trace);
+                let _sent = reply.send(result);
             }
             Received::Command(RuntimeCommand::AgentFinished {
                 claim,
@@ -1923,6 +1952,25 @@ fn record_agent_draft(
         .append_trusted_event(event)
         .map_err(|error| error.to_string())?;
     Ok(outcome.event.id)
+}
+
+fn record_agent_trace(
+    dispatch: &mut Dispatch,
+    trace: &zeta_agent::TraceBatch,
+) -> Result<(), String> {
+    let objects = trace
+        .objects
+        .iter()
+        .map(|value| (value.id.as_str(), &value.object))
+        .collect::<Vec<_>>();
+    let derivations = trace
+        .derivations
+        .iter()
+        .map(|value| (value.id.as_str(), &value.derivation))
+        .collect::<Vec<_>>();
+    dispatch
+        .persist_trace(&objects, &derivations)
+        .map_err(|error| error.to_string())
 }
 
 fn refresh_actor_state(
@@ -2864,11 +2912,31 @@ mod tests {
         let temporary = TempDir::new().expect("temporary directory");
         let database = temporary.path().join("zeta.sqlite3");
         let (recorded_sender, recorded_receiver) = mpsc::channel();
+        let trace_object = zeta_substrate::Object {
+            kind: "test.agent_step".to_owned(),
+            schema: "test.agent_step.v1".to_owned(),
+            data: serde_json::from_value(serde_json::json!({"text": "Hello"}))
+                .expect("trace data"),
+            links: Vec::new(),
+        };
+        let trace_object_id = trace_object
+            .content_address()
+            .expect("trace address")
+            .to_string();
+        let trace = zeta_agent::TraceBatch {
+            objects: vec![zeta_agent::AddressedObject {
+                id: trace_object_id.clone(),
+                object: trace_object,
+            }],
+            derivations: Vec::new(),
+        };
         let runtime = Runtime::start_with_test_agent_runner(
             &database,
             project(temporary.path()),
             Arc::new(move |task, _cancellation| {
                 let sink = task.event_sink.expect("the runtime injects an agent event sink");
+                sink.record_trace(&trace)
+                    .expect("the actor stores the agent trace");
                 sink.observe(AgentProgress {
                     queue_item_id: task.queue_item_id.clone(),
                     agent_slug: task.agent.slug.clone(),
@@ -2939,6 +3007,12 @@ mod tests {
         assert_eq!(events[0].id, "agent-model-1");
         assert!(events[0].cursor.is_some());
         assert_eq!(events[0].idempotency_key.as_deref(), Some("model:1"));
+        assert!(
+            dispatch
+                .trace_object(&trace_object_id)
+                .expect("agent trace object")
+                .is_some()
+        );
     }
 
     #[test]

@@ -211,6 +211,7 @@ impl<'a> AgentRunner<'a> {
             objects,
             derivations,
         })?;
+        self.record_trace(result)?;
         result.steps.push(StepName::CallModel);
         let active_abort = RunAbort {
             external: self.abort,
@@ -261,6 +262,9 @@ impl<'a> AgentRunner<'a> {
         }
         let event_id = next_event_id(self.id_source)?;
         let model_payload = model_payload(&output.message, &prompt_object_id);
+        let assistant_object_id =
+            record_model_trace(&mut result.trace, &prompt_object_id, &model_payload)?;
+        self.record_trace(result)?;
         let draft = model_draft(
             invocation,
             model_payload.clone(),
@@ -268,8 +272,6 @@ impl<'a> AgentRunner<'a> {
             state.next_model_caused_by.clone(),
         );
         let event_id = self.record_durable_draft(result, &event_id, draft)?;
-        let assistant_object_id =
-            record_model_trace(&mut result.trace, &prompt_object_id, &model_payload)?;
         state.projection.models.insert(
             event_id.clone(),
             (prompt_object_id.clone(), assistant_object_id.clone()),
@@ -342,6 +344,12 @@ impl<'a> AgentRunner<'a> {
                 Value::String(validated.route.id.to_string()),
             );
         }
+        let call_object_id = record_tool_call_trace(
+            &mut result.trace,
+            &call_payload,
+            projection.latest_assistant.as_deref(),
+        )?;
+        self.record_trace(result)?;
         let call_event_id = parsed.call_id.clone();
         let call_draft = tool_draft(
             invocation,
@@ -351,11 +359,6 @@ impl<'a> AgentRunner<'a> {
             assistant_event_id,
         );
         let call_event_id = self.record_durable_draft(result, &call_event_id, call_draft)?;
-        let call_object_id = record_tool_call_trace(
-            &mut result.trace,
-            &call_payload,
-            projection.latest_assistant.as_deref(),
-        )?;
         projection
             .tool_calls
             .insert(parsed.call_id.clone(), call_object_id.clone());
@@ -412,6 +415,9 @@ impl<'a> AgentRunner<'a> {
         } else {
             "zeta.tool_call.completed"
         };
+        let result_object_id =
+            record_tool_result_trace(&mut result.trace, &result_payload, &call_object_id)?;
+        self.record_trace(result)?;
         let result_draft = tool_draft(
             invocation,
             event_type,
@@ -420,8 +426,6 @@ impl<'a> AgentRunner<'a> {
             assistant_event_id,
         );
         let event_id = self.record_durable_draft(result, &event_id, result_draft)?;
-        let result_object_id =
-            record_tool_result_trace(&mut result.trace, &result_payload, &call_object_id)?;
         projection
             .tool_results
             .insert(event_id.clone(), result_object_id);
@@ -735,6 +739,12 @@ impl<'a> AgentRunner<'a> {
             .map_err(AgentRunError::Failed)?;
         result.events.push(draft);
         Ok(retained_id)
+    }
+
+    fn record_trace(&mut self, result: &AgentRunResult) -> Result<(), AgentRunError> {
+        self.draft_recorder
+            .record_trace(&result.trace)
+            .map_err(AgentRunError::Failed)
     }
 
     fn abort_run(

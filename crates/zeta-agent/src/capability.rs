@@ -9,6 +9,7 @@ use serde_json::{Map, Value, json};
 use zeta_journal::DraftEvent;
 
 use crate::error::AgentError;
+use crate::trace::TraceBatch;
 use crate::model::AbortSignal;
 
 /// Resolves one capability execution at an injected runtime boundary.
@@ -304,6 +305,13 @@ pub trait DraftRecorder {
     /// Returns the retained event identity. A durable sink can resolve an
     /// idempotency duplicate to an earlier event identity.
     fn record(&mut self, event_id: &str, draft: &DraftEvent) -> Result<String, AgentError>;
+
+    /// Stores trace values before a durable draft refers to their addresses.
+    ///
+    /// The default keeps injected test recorders source-compatible.
+    fn record_trace(&mut self, _trace: &TraceBatch) -> Result<(), AgentError> {
+        Ok(())
+    }
 }
 
 /// Supplies deterministic identities without reading process-global randomness.

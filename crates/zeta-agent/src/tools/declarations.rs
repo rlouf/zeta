@@ -171,6 +171,67 @@ pub fn native_capabilities() -> Vec<Capability> {
             None,
         ),
         capability(
+            "zeta.web_search",
+            "Search public pages. Set query to search. Set url to open a page. Set pattern to find page text.",
+            object(json!({
+                "type": "object",
+                "additionalProperties": false,
+                "oneOf": [
+                    {
+                        "required": ["query"],
+                        "not": {"anyOf": [
+                            {"required": ["url"]},
+                            {"required": ["pattern"]},
+                        ]},
+                    },
+                    {
+                        "required": ["url"],
+                        "not": {"required": ["pattern"]},
+                    },
+                    {"required": ["url", "pattern"]},
+                ],
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "A self-contained public web search query.",
+                    },
+                    "url": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "A public page URL or a prior search result reference.",
+                    },
+                    "pattern": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Text to find in the page.",
+                    },
+                    "line": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Line number to use when the page opens.",
+                    },
+                    "domains": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Domains to include in a search.",
+                    },
+                    "recency": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Maximum age in days for search results.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20,
+                        "description": "Maximum stored source records.",
+                    },
+                },
+            })),
+            None,
+        ),
+        capability(
             "zeta.write",
             "Write content to a file.",
             object(json!({

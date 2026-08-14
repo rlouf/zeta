@@ -237,6 +237,23 @@ impl AgentExecutor {
                 AttemptFailureCode::AgentExecutionFailed,
             ));
         };
+        let web_search = if model.api == "codex-responses" {
+            match zeta_agent::WebSearchConfig::from_responses_endpoint(
+                &model.url,
+                model.name.clone(),
+                task.session_id.clone(),
+            ) {
+                Ok(config) => Some(config.with_headers(model.headers.clone())),
+                Err(error) => {
+                    return AgentExecution::Failed(AgentExecutionError::new(
+                        error.to_string(),
+                        AttemptFailureCode::AgentExecutionFailed,
+                    ));
+                }
+            }
+        } else {
+            None
+        };
         let mut timeline_event = Map::new();
         timeline_event.insert("id".to_owned(), Value::String(task.event.id.clone()));
         timeline_event.insert(
@@ -305,7 +322,19 @@ impl AgentExecutor {
                 AttemptFailureCode::AgentExecutionFailed,
             ));
         };
-        let mut executor = zeta_agent::NativeToolExecutor::new(zeta_agent::SystemCommandRunner);
+        let executor = zeta_agent::NativeToolExecutor::new(zeta_agent::SystemCommandRunner);
+        let mut executor = match web_search {
+            Some(config) => match executor.with_web_search(config) {
+                Ok(executor) => executor,
+                Err(error) => {
+                    return AgentExecution::Failed(AgentExecutionError::new(
+                        error.to_string(),
+                        AttemptFailureCode::AgentExecutionFailed,
+                    ));
+                }
+            },
+            None => executor,
+        };
         let mut observer = CallbackObserver::new(|_observation: zeta_agent::Observation| {});
         let mut recorder = CallbackDraftRecorder::new(|_draft: &DraftEvent| Ok::<(), String>(()));
         let mut ids = UuidIdSource::new("agent");

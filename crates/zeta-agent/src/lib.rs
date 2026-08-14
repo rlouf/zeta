@@ -32,6 +32,6 @@ pub use result::{AgentRunResult, RunStopReason, StepName};
 pub use runner::AgentRunner;
 pub use tools::{
     bounded_output, native_capabilities, CommandOutput, CommandRunner, NativeToolExecutor,
-    SystemCommandRunner,
+    SystemCommandRunner, WebSearchConfig,
 };
 pub use trace::{AddressedDerivation, AddressedObject, PromptTrace, TraceBatch};

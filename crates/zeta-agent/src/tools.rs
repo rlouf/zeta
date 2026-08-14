@@ -5,6 +5,7 @@ mod declarations;
 mod edit;
 mod files;
 mod search;
+mod web;
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -18,6 +19,7 @@ use crate::{AbortSignal, AgentError, CapabilityExecutor, CapabilityFuture, Capab
 
 pub use declarations::native_capabilities;
 pub use search::{CommandOutput, CommandRunner, SystemCommandRunner};
+pub use web::WebSearchConfig;
 
 static NEXT_ARTIFACT_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -31,6 +33,7 @@ static NEXT_ARTIFACT_ID: AtomicU64 = AtomicU64::new(0);
 /// ```
 pub struct NativeToolExecutor<C = SystemCommandRunner> {
     commands: C,
+    web_search: Option<web::WebSearchClient>,
 }
 
 impl Default for NativeToolExecutor<SystemCommandRunner> {
@@ -51,7 +54,20 @@ impl<C> NativeToolExecutor<C> {
     /// drop(executor);
     /// ```
     pub fn new(commands: C) -> Self {
-        NativeToolExecutor { commands }
+        NativeToolExecutor {
+            commands,
+            web_search: None,
+        }
+    }
+
+    /// Adds the Codex standalone web search client.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AgentError`] when the HTTP client cannot start.
+    pub fn with_web_search(mut self, config: WebSearchConfig) -> Result<Self, AgentError> {
+        self.web_search = Some(web::WebSearchClient::new(config)?);
+        Ok(self)
     }
 }
 
@@ -122,6 +138,15 @@ where
                 &mut self.commands,
                 abort,
             );
+        }
+        if id == "zeta.web_search" {
+            let Some(web_search) = &self.web_search else {
+                return Ok(error_result(
+                    "web-search-unavailable",
+                    "web search needs a Codex Responses model",
+                ));
+            };
+            return web_search.execute(&invocation.params, abort).await;
         }
         Ok(error_result(
             "unknown-native-tool",

@@ -168,10 +168,7 @@ impl ModelGateway for HttpModelGateway {
             }
             let protocol = Protocol::parse(request.api.as_deref())?;
             let endpoint = self.endpoint(protocol, request.url.as_deref())?;
-            let mut input = resolved_input(input, request);
-            if matches!(protocol, Protocol::Responses) {
-                input.tools.push(serde_json::json!({"type": "web_search"}));
-            }
+            let input = resolved_input(input, request);
             let body = match protocol {
                 Protocol::ChatCompletions => chat_completions_request(&input)?,
                 Protocol::Responses => responses_request(&input)?,

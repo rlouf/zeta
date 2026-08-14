@@ -177,6 +177,18 @@ fn complete_agent_matches_python_declaration_behavior() {
 }
 
 #[test]
+fn scalar_executor_selects_one_profile() {
+    let spec = parse_agent(
+        "worker",
+        b"---\nname: Worker\ndescription: Works.\nexecutor: isolated-code\n---\nWork.\n",
+    )
+    .unwrap();
+
+    assert_eq!(spec.executor.provider, "isolated-code");
+    assert!(spec.executor.config.is_empty());
+}
+
+#[test]
 fn omitted_and_explicit_empty_capabilities_keep_inheritance_distinct() {
     let omitted = parse_agent(
         "worker",

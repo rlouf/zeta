@@ -1,0 +1,13 @@
+version: 1
+profiles:
+  ephemeral-tests:
+    provider: modal
+    reuse: call
+    modal:
+      app: zeta-executors
+    network: none
+    workspace:
+      access: read_write
+      include: ["agents/**", "capabilities/**", "tools/**", "src/**", "tests/**", "pyproject.toml"]
+    limits:
+      call_seconds: 300

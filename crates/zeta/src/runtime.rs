@@ -22,9 +22,9 @@ use zeta_journal::{DraftEvent, Event, EventFilter};
 use zeta_manifest::AgentSpec;
 
 use crate::{
-    CancellationToken, ProjectRevision, ProjectRevisionStore, PythonModelGateway,
-    PythonProviderCatalog, PythonProviderHost, PythonToolExecutor, Scheduler,
-    SharedPythonProviderHost, SystemClock, UuidIdSource, attempt_completion, host_model,
+    CancellationToken, ExecutorBundle, ExecutorReuse, ProjectRevision, ProjectRevisionStore,
+    PythonModelGateway, PythonProviderCatalog, PythonProviderHost, PythonToolExecutor,
+    Scheduler, SharedPythonProviderHost, SystemClock, UuidIdSource, attempt_completion, host_model,
 };
 use zeta_substrate::{canonical_json, hash_bytes};
 
@@ -74,6 +74,10 @@ struct AgentTask {
     pub project_revision_id: String,
     /// Carries the selected Python provider catalog for this task.
     pub providers: PythonProviderCatalog,
+    /// Carries the selected executor profile for this agent.
+    pub executor_profile: crate::ExecutorProfile,
+    /// Carries the immutable workspace and tool content for a remote executor.
+    pub executor_bundle: Option<ExecutorBundle>,
     /// Carries the exact declared agent source.
     pub agent: AgentSpec,
     /// Carries the retained triggering event.
@@ -367,6 +371,7 @@ impl ProviderHosts {
         if providers.models().is_empty()
             && providers.tools().is_empty()
             && providers.connectors().is_empty()
+            && providers.executors().is_empty()
         {
             return Ok(None);
         }
@@ -527,6 +532,18 @@ impl AgentExecutor {
             }
             Some(_) | None => selected_native_capabilities(&task.agent, model.tool_profile),
         };
+        let remote_executor = task.executor_profile.provider() != "local";
+        let executor_bundle = if remote_executor {
+            let Some(bundle) = task.executor_bundle.clone() else {
+                return AgentExecution::Failed(AgentExecutionError::new(
+                    "the selected remote executor has no executor bundle",
+                    AttemptFailureCode::AgentExecutionFailed,
+                ));
+            };
+            Some(bundle)
+        } else {
+            None
+        };
         let allowed_capabilities = capabilities
             .iter()
             .map(|capability| capability.canonical.id.clone())
@@ -591,10 +608,30 @@ impl AgentExecutor {
         let mut recorder = RuntimeDraftRecorder::new(task.event_sink.clone());
         let mut ids = UuidIdSource::new("agent");
         let clock = SystemClock;
-        let result = match provider_host.filter(|_host| !task.providers.tools().is_empty()) {
+        let tool_host = if remote_executor {
+            provider_host
+        } else {
+            provider_host.filter(|_host| !task.providers.tools().is_empty())
+        };
+        let result = match tool_host {
             Some(host) => {
-                let mut executor = PythonToolExecutor::new(host, executor);
-                runtime.block_on(
+                let mut executor = if remote_executor {
+                    PythonToolExecutor::with_executor(
+                        host,
+                        executor,
+                        task.executor_profile.provider(),
+                        task.agent.executor.provider.clone(),
+                        task.executor_profile.policy().clone(),
+                        task.executor_profile.reuse(),
+                        executor_instance_name(&task),
+                        executor_bundle
+                            .clone()
+                            .expect("a remote executor has a verified bundle"),
+                    )
+                } else {
+                    PythonToolExecutor::new(host, executor)
+                };
+                let result = runtime.block_on(
                     zeta_agent::AgentRunner::new(
                         &capabilities,
                         &mut gateway,
@@ -606,9 +643,15 @@ impl AgentExecutor {
                         &clock,
                     )
                     .run(&invocation),
-                )
+                );
+                let cleanup = executor.finish();
+                match (result, cleanup) {
+                    (Ok(result), Ok(())) => Ok(result),
+                    (Ok(_result), Err(error)) => Err(error.to_string()),
+                    (Err(error), Ok(()) | Err(_)) => Err(error.to_string()),
+                }
             }
-            None => runtime.block_on(
+            None if !remote_executor => runtime.block_on(
                 zeta_agent::AgentRunner::new(
                     &capabilities,
                     &mut gateway,
@@ -620,7 +663,14 @@ impl AgentExecutor {
                     &clock,
                 )
                 .run(&invocation),
-            ),
+            )
+            .map_err(|error| error.to_string()),
+            None => {
+                return AgentExecution::Failed(AgentExecutionError::new(
+                    "the selected executor driver host is unavailable",
+                    AttemptFailureCode::AgentExecutionFailed,
+                ));
+            }
         };
         let result = match result {
             Ok(result) => result,
@@ -686,6 +736,18 @@ impl AgentExecutor {
                     ));
                 }
             };
+        let remote_executor = task.executor_profile.provider() != "local";
+        let executor_bundle = if remote_executor {
+            let Some(bundle) = task.executor_bundle.clone() else {
+                return AgentExecution::Failed(AgentExecutionError::new(
+                    "the selected remote executor has no executor bundle",
+                    AttemptFailureCode::AgentExecutionFailed,
+                ));
+            };
+            Some(bundle)
+        } else {
+            None
+        };
         let allowed_capabilities = capabilities
             .iter()
             .map(|capability| capability.canonical.id.clone())
@@ -735,7 +797,20 @@ impl AgentExecutor {
         };
         let native = zeta_agent::NativeToolExecutor::new(zeta_agent::SystemCommandRunner);
         let mut gateway = PythonModelGateway::new(Arc::clone(&host), model);
-        let mut executor = PythonToolExecutor::new(host, native);
+        let mut executor = if task.executor_profile.provider() != "local" {
+            PythonToolExecutor::with_executor(
+                host,
+                native,
+                task.executor_profile.provider(),
+                task.agent.executor.provider.clone(),
+                task.executor_profile.policy().clone(),
+                task.executor_profile.reuse(),
+                executor_instance_name(&task),
+                executor_bundle.expect("a remote executor has a verified bundle"),
+            )
+        } else {
+            PythonToolExecutor::new(host, native)
+        };
         let mut observer = RuntimeAgentObserver::new(&task);
         let mut recorder = RuntimeDraftRecorder::new(task.event_sink.clone());
         let mut ids = UuidIdSource::new("agent");
@@ -753,6 +828,12 @@ impl AgentExecutor {
             )
             .run(&invocation),
         );
+        let cleanup = executor.finish();
+        let result = match (result, cleanup) {
+            (Ok(result), Ok(())) => Ok(result),
+            (Ok(_result), Err(error)) => Err(error.to_string()),
+            (Err(error), Ok(()) | Err(_)) => Err(error.to_string()),
+        };
         let result = match result {
             Ok(result) => result,
             Err(error) => {
@@ -790,6 +871,44 @@ fn selected_native_capabilities(
             .collect()
     };
     zeta_agent::resolve_capabilities(&selected, profile)
+}
+
+/// Returns the provider-visible name for one reusable executor environment.
+fn executor_instance_name(task: &AgentTask) -> Option<String> {
+    let scope = match task.executor_profile.reuse() {
+        ExecutorReuse::Call => return None,
+        ExecutorReuse::Session => task.session_id.as_str(),
+        ExecutorReuse::Durable => "durable",
+    };
+    let mut identity = Map::new();
+    identity.insert(
+        "project_revision_id".to_owned(),
+        Value::String(task.project_revision_id.clone()),
+    );
+    identity.insert(
+        "agent_slug".to_owned(),
+        Value::String(task.agent.slug.clone()),
+    );
+    identity.insert(
+        "profile".to_owned(),
+        Value::String(task.agent.executor.provider.clone()),
+    );
+    identity.insert(
+        "provider".to_owned(),
+        Value::String(task.executor_profile.provider().to_owned()),
+    );
+    identity.insert(
+        "reuse".to_owned(),
+        Value::String(task.executor_profile.reuse().as_str().to_owned()),
+    );
+    identity.insert("scope".to_owned(), Value::String(scope.to_owned()));
+    identity.insert(
+        "policy".to_owned(),
+        Value::Object(task.executor_profile.policy().clone()),
+    );
+    let bytes = canonical_json(&Value::Object(identity)).ok()?;
+    let hash = hash_bytes(&bytes).to_hex();
+    Some(format!("zeta-{}", &hash[..40]))
 }
 
 fn selected_python_capabilities(
@@ -2531,11 +2650,30 @@ fn build_agent_task(
         .as_str()
         .to_owned();
     let retry_policy = retry_policy_for_agent(&agent.slug, &revision);
+    let executor_profile = revision
+        .executor_profiles()
+        .get(&agent.executor.provider)
+        .cloned()
+        .ok_or_else(|| RuntimeError::new("the queued agent executor profile is absent"))?;
+    let executor_bundle = if executor_profile.provider() == "local" {
+        None
+    } else {
+        Some(
+            revision
+                .executor_bundle(&agent.slug)
+                .cloned()
+                .ok_or_else(|| {
+                    RuntimeError::new("the queued agent executor bundle is absent")
+                })?,
+        )
+    };
     Ok(AgentTask {
         queue_item_id: claim.queue_item_id().as_str().to_owned(),
         project_root: revision.project_root().to_path_buf(),
         project_revision_id: revision.revision_id().to_owned(),
         providers: revision.providers().clone(),
+        executor_profile,
+        executor_bundle,
         agent,
         event,
         session_id,
@@ -3304,6 +3442,12 @@ mod tests {
             project_root: temporary.path().to_path_buf(),
             project_revision_id: revision.revision_id().to_owned(),
             providers: revision.providers().clone(),
+            executor_profile: revision
+                .executor_profiles()
+                .get("local")
+                .expect("local profile")
+                .clone(),
+            executor_bundle: None,
             agent: revision.agent("worker").expect("worker").clone(),
             event: Event {
                 id: "event-1".to_owned(),

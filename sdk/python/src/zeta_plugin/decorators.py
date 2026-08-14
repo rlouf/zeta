@@ -74,3 +74,26 @@ def connector(identifier: str) -> Callable[[Target], Target]:
         return attach_registration(target, declaration)  # type: ignore[return-value]
 
     return decorate
+
+
+def executor(identifier: str) -> Callable[[Target], Target]:
+    """Declare a trusted execution-environment driver.
+
+    The open request has workspace and tool bundles. It also has the reuse
+    mode. Reused environments receive a stable instance name. The close
+    request has a disposition.
+    """
+
+    declaration = ProviderDeclaration(
+        kind=ProviderKind.EXECUTOR, identifier=identifier
+    )
+
+    def decorate(target: Target) -> Target:
+        if not isinstance(target, type):
+            raise DeclarationError("An executor target must be a class")
+        required = ("open", "call", "close")
+        if any(not callable(getattr(target, name, None)) for name in required):
+            raise DeclarationError("An executor class must define open, call, and close")
+        return attach_registration(target, declaration)  # type: ignore[return-value]
+
+    return decorate

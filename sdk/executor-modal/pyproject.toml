@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "zeta-executor-modal"
+version = "0.1.0"
+description = "Modal executor driver for Zeta"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "modal>=1.0.0",
+  "zeta-plugin>=0.2.0",
+]
+
+[project.entry-points."zeta.providers"]
+modal = "zeta_executor_modal:provider"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/zeta_executor_modal"]

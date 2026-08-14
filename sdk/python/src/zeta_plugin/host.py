@@ -8,10 +8,10 @@ import hashlib
 import inspect
 import json
 import sys
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, TextIO
+from typing import Any, TextIO
 
 from .declarations import ProviderKind
 from .discovery import (
@@ -33,7 +33,17 @@ from .protocol import (
     write_message,
 )
 
-_METHODS = ("providers.catalog", "generate", "invoke", "deliver", "subscribe")
+_METHODS = (
+    "providers.catalog",
+    "generate",
+    "invoke",
+    "deliver",
+    "subscribe",
+    "executors.open",
+    "executors.call",
+    "executors.cancel",
+    "executors.close",
+)
 _INVALID_PARAMS = -32602
 _METHOD_NOT_FOUND = -32601
 _SERVER_ERROR = -32000
@@ -76,6 +86,7 @@ class ProviderHost:
             "models": self._descriptors(ProviderKind.MODEL),
             "tools": self._descriptors(ProviderKind.TOOL),
             "connectors": self._descriptors(ProviderKind.CONNECTOR),
+            "executors": self._descriptors(ProviderKind.EXECUTOR),
         }
 
     def call(
@@ -95,6 +106,10 @@ class ProviderHost:
             "invoke": (ProviderKind.TOOL, "tool", "invoke"),
             "deliver": (ProviderKind.CONNECTOR, "connector", "deliver"),
             "subscribe": (ProviderKind.CONNECTOR, "connector", "subscribe"),
+            "executors.open": (ProviderKind.EXECUTOR, "executor", "open"),
+            "executors.call": (ProviderKind.EXECUTOR, "executor", "call"),
+            "executors.cancel": (ProviderKind.EXECUTOR, "executor", "cancel"),
+            "executors.close": (ProviderKind.EXECUTOR, "executor", "close"),
         }.get(method)
         if operation is None:
             raise HostError(
@@ -214,9 +229,12 @@ class ProviderHost:
         if isinstance(target, type):
             key = (provider.registration.declaration.kind, provider.identifier)
             target = self._instances.setdefault(key, target())
-        if callable(target) and not isinstance(target, type):
-            if operation in {"generate", "invoke"}:
-                return target
+        if (
+            callable(target)
+            and not isinstance(target, type)
+            and operation in {"generate", "invoke"}
+        ):
+            return target
         handler = getattr(target, operation, None)
         if not callable(handler):
             raise HostError(

@@ -23,6 +23,7 @@ class ProviderKind(StrEnum):
     MODEL = "model"
     TOOL = "tool"
     CONNECTOR = "connector"
+    EXECUTOR = "executor"
 
 
 @dataclass(frozen=True)

@@ -13,7 +13,7 @@ use zeta_agent::{
     CapabilityInvocation, ModelGateway, ModelInput, ModelOutput, ModelRequest, NativeToolExecutor,
 };
 
-use crate::{ProcessExecutor, ProcessExecutorConfig, ProcessLaunch};
+use crate::{ExecutorBundle, ExecutorReuse, ProcessExecutor, ProcessExecutorConfig, ProcessLaunch};
 
 /// Configures one Python provider host process.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -83,6 +83,8 @@ pub struct PythonProviderCatalog {
     models: BTreeMap<String, PythonProvider>,
     tools: BTreeMap<String, PythonProvider>,
     connectors: BTreeMap<String, PythonProvider>,
+    #[serde(default)]
+    executors: BTreeMap<String, PythonProvider>,
 }
 
 impl PythonProviderCatalog {
@@ -99,6 +101,11 @@ impl PythonProviderCatalog {
     /// Returns the selected connector providers by identifier.
     pub fn connectors(&self) -> &BTreeMap<String, PythonProvider> {
         &self.connectors
+    }
+
+    /// Returns the trusted executor drivers by identifier.
+    pub fn executors(&self) -> &BTreeMap<String, PythonProvider> {
+        &self.executors
     }
 }
 
@@ -156,16 +163,90 @@ impl ModelGateway for PythonModelGateway {
     }
 }
 
-/// Executes Python tools and retains native tools as a fallback.
+/// Executes trusted Python tools, native tools, or one selected executor route.
 pub struct PythonToolExecutor {
     host: SharedPythonProviderHost,
     native: NativeToolExecutor,
+    executor: Option<PythonExecutorRoute>,
+}
+
+/// Selects one trusted executor driver for capability calls.
+#[derive(Clone)]
+pub struct PythonExecutorRoute {
+    driver: String,
+    profile: String,
+    policy: Map<String, Value>,
+    reuse: ExecutorReuse,
+    instance_name: Option<String>,
+    bundle: ExecutorBundle,
+    lease: Arc<Mutex<Option<String>>>,
 }
 
 impl PythonToolExecutor {
     /// Combines one Python host with the native fallback executor.
     pub fn new(host: SharedPythonProviderHost, native: NativeToolExecutor) -> Self {
-        Self { host, native }
+        Self {
+            host,
+            native,
+            executor: None,
+        }
+    }
+
+    /// Routes every capability call through one trusted executor driver.
+    pub fn with_executor(
+        host: SharedPythonProviderHost,
+        native: NativeToolExecutor,
+        driver: impl Into<String>,
+        profile: impl Into<String>,
+        policy: Map<String, Value>,
+        reuse: ExecutorReuse,
+        instance_name: Option<String>,
+        bundle: ExecutorBundle,
+    ) -> Self {
+        Self {
+            host,
+            native,
+            executor: Some(PythonExecutorRoute {
+                driver: driver.into(),
+                profile: profile.into(),
+                policy,
+                reuse,
+                instance_name,
+                bundle,
+                lease: Arc::new(Mutex::new(None)),
+            }),
+        }
+    }
+
+    /// Releases one retained executor environment when this agent attempt ends.
+    ///
+    /// A durable environment remains available for a later name-based attach.
+    pub fn finish(&self) -> Result<(), AgentError> {
+        let Some(route) = &self.executor else {
+            return Ok(());
+        };
+        if route.reuse == ExecutorReuse::Call {
+            return Ok(());
+        }
+        let handle = route
+            .lease
+            .lock()
+            .map_err(|_error| AgentError::tool("the executor lease is unavailable"))?
+            .take();
+        let Some(handle) = handle else {
+            return Ok(());
+        };
+        let mut close = Map::new();
+        close.insert("handle".to_owned(), Value::String(handle));
+        close.insert(
+            "disposition".to_owned(),
+            Value::String("release".to_owned()),
+        );
+        self.host
+            .lock()
+            .map_err(|_error| AgentError::tool("the Python provider host is unavailable"))?
+            .close_executor(&route.driver, close, &InactiveAbort)
+            .map(|_closed| ())
     }
 }
 
@@ -176,6 +257,9 @@ impl CapabilityExecutor for PythonToolExecutor {
         abort: &'a dyn AbortSignal,
     ) -> CapabilityFuture<'a> {
         Box::pin(async move {
+            if let Some(route) = &self.executor {
+                return self.execute_in_executor(route, invocation, abort);
+            }
             let routes_to_python = self
                 .host
                 .lock()
@@ -198,6 +282,178 @@ impl CapabilityExecutor for PythonToolExecutor {
             self.native.execute(invocation, abort).await
         })
     }
+}
+
+impl PythonToolExecutor {
+    fn execute_in_executor(
+        &self,
+        route: &PythonExecutorRoute,
+        invocation: &CapabilityInvocation,
+        abort: &dyn AbortSignal,
+    ) -> Result<Map<String, Value>, AgentError> {
+        match route.reuse {
+            ExecutorReuse::Call => self.execute_call_in_executor(route, invocation, abort),
+            ExecutorReuse::Session | ExecutorReuse::Durable => {
+                self.execute_reused_in_executor(route, invocation, abort)
+            }
+        }
+    }
+
+    fn execute_call_in_executor(
+        &self,
+        route: &PythonExecutorRoute,
+        invocation: &CapabilityInvocation,
+        abort: &dyn AbortSignal,
+    ) -> Result<Map<String, Value>, AgentError> {
+        let handle = self.open_executor(route, invocation, abort)?;
+        let result = self.call_executor(route, &handle, invocation, abort);
+        let closed = self.close_executor(route, handle, "terminate");
+        match (result, closed) {
+            (Ok(result), Ok(())) => Ok(result),
+            (Ok(_result), Err(error)) => Err(error),
+            (Err(error), Ok(()) | Err(_)) => Err(error),
+        }
+    }
+
+    fn execute_reused_in_executor(
+        &self,
+        route: &PythonExecutorRoute,
+        invocation: &CapabilityInvocation,
+        abort: &dyn AbortSignal,
+    ) -> Result<Map<String, Value>, AgentError> {
+        let handle = {
+            let mut lease = route
+                .lease
+                .lock()
+                .map_err(|_error| AgentError::tool("the executor lease is unavailable"))?;
+            match lease.as_ref() {
+                Some(handle) => handle.clone(),
+                None => {
+                    let handle = self.open_executor(route, invocation, abort)?;
+                    *lease = Some(handle.clone());
+                    handle
+                }
+            }
+        };
+        self.call_executor(route, &handle, invocation, abort)
+    }
+
+    fn open_executor(
+        &self,
+        route: &PythonExecutorRoute,
+        invocation: &CapabilityInvocation,
+        abort: &dyn AbortSignal,
+    ) -> Result<String, AgentError> {
+        route.bundle.verify().map_err(|error| {
+            AgentError::tool(format!("the executor bundle is invalid: {error}"))
+        })?;
+        let mut open = Map::new();
+        open.insert("profile".to_owned(), Value::String(route.profile.clone()));
+        open.insert("policy".to_owned(), Value::Object(route.policy.clone()));
+        let workspace_bundle = serde_json::to_value(route.bundle.workspace()).map_err(|error| {
+            AgentError::tool(format!("cannot encode the workspace bundle: {error}"))
+        })?;
+        open.insert("workspace_bundle".to_owned(), workspace_bundle);
+        let tool_bundle = serde_json::to_value(route.bundle.tools())
+            .map_err(|error| AgentError::tool(format!("cannot encode the tool bundle: {error}")))?;
+        open.insert("tool_bundle".to_owned(), tool_bundle);
+        open.insert(
+            "reuse".to_owned(),
+            Value::String(route.reuse.as_str().to_owned()),
+        );
+        if route.reuse != ExecutorReuse::Call && route.instance_name.is_none() {
+            return Err(AgentError::tool(
+                "a reused executor route requires an instance name",
+            ));
+        }
+        if let Some(instance_name) = &route.instance_name {
+            open.insert(
+                "instance_name".to_owned(),
+                Value::String(instance_name.clone()),
+            );
+        }
+        open.insert(
+            "capabilities".to_owned(),
+            Value::Array(
+                route
+                    .bundle
+                    .tools()
+                    .capabilities
+                    .iter()
+                    .map(|capability| Value::String(capability.id.clone()))
+                    .collect(),
+            ),
+        );
+        if let Some(base_directory) = &invocation.base_directory {
+            open.insert(
+                "base_directory".to_owned(),
+                Value::String(base_directory.clone()),
+            );
+        }
+        let mut host = self
+            .host
+            .lock()
+            .map_err(|_error| AgentError::tool("the Python provider host is unavailable"))?;
+        let opened = host.open_executor(&route.driver, open, abort)?;
+        executor_handle(&opened)
+    }
+
+    fn call_executor(
+        &self,
+        route: &PythonExecutorRoute,
+        handle: &str,
+        invocation: &CapabilityInvocation,
+        abort: &dyn AbortSignal,
+    ) -> Result<Map<String, Value>, AgentError> {
+        if !route.bundle.permits(invocation.capability_id.as_str()) {
+            return Err(AgentError::tool(format!(
+                "the executor bundle does not permit capability {:?}",
+                invocation.capability_id
+            )));
+        }
+        let mut call = Map::new();
+        call.insert("handle".to_owned(), Value::String(handle.to_owned()));
+        call.insert(
+            "capability".to_owned(),
+            Value::String(invocation.capability_id.to_string()),
+        );
+        call.insert("input".to_owned(), Value::Object(invocation.params.clone()));
+        if let Some(effect_key) = &invocation.effect_key {
+            call.insert("effect_key".to_owned(), Value::String(effect_key.clone()));
+        }
+        self.host
+            .lock()
+            .map_err(|_error| AgentError::tool("the Python provider host is unavailable"))?
+            .call_executor(&route.driver, call, abort)
+    }
+
+    fn close_executor(
+        &self,
+        route: &PythonExecutorRoute,
+        handle: String,
+        disposition: &str,
+    ) -> Result<(), AgentError> {
+        let mut close = Map::new();
+        close.insert("handle".to_owned(), Value::String(handle));
+        close.insert(
+            "disposition".to_owned(),
+            Value::String(disposition.to_owned()),
+        );
+        self.host
+            .lock()
+            .map_err(|_error| AgentError::tool("the Python provider host is unavailable"))?
+            .close_executor(&route.driver, close, &InactiveAbort)
+            .map(|_closed| ())
+    }
+}
+
+fn executor_handle(value: &Map<String, Value>) -> Result<String, AgentError> {
+    value
+        .get("handle")
+        .and_then(Value::as_str)
+        .filter(|handle| !handle.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| AgentError::tool("executor open returned no handle"))
 }
 
 impl PythonProviderHost {
@@ -362,6 +618,94 @@ impl PythonProviderHost {
         )
     }
 
+    /// Opens one executor environment through a trusted Python driver.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AgentError`] when the driver is absent or rejects the request.
+    pub fn open_executor(
+        &mut self,
+        executor: &str,
+        request: Map<String, Value>,
+        abort: &dyn AbortSignal,
+    ) -> Result<Map<String, Value>, AgentError> {
+        self.call(
+            "executors.open",
+            "executor",
+            executor,
+            request,
+            None,
+            None,
+            abort,
+        )
+    }
+
+    /// Calls one open executor environment through a trusted Python driver.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AgentError`] when the driver is absent or rejects the request.
+    pub fn call_executor(
+        &mut self,
+        executor: &str,
+        request: Map<String, Value>,
+        abort: &dyn AbortSignal,
+    ) -> Result<Map<String, Value>, AgentError> {
+        self.call(
+            "executors.call",
+            "executor",
+            executor,
+            request,
+            None,
+            None,
+            abort,
+        )
+    }
+
+    /// Requests cancellation of one executor call.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AgentError`] when the driver is absent or rejects the request.
+    pub fn cancel_executor(
+        &mut self,
+        executor: &str,
+        request: Map<String, Value>,
+        abort: &dyn AbortSignal,
+    ) -> Result<Map<String, Value>, AgentError> {
+        self.call(
+            "executors.cancel",
+            "executor",
+            executor,
+            request,
+            None,
+            None,
+            abort,
+        )
+    }
+
+    /// Closes one executor environment through a trusted Python driver.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AgentError`] when the driver is absent or rejects the request.
+    pub fn close_executor(
+        &mut self,
+        executor: &str,
+        request: Map<String, Value>,
+        abort: &dyn AbortSignal,
+    ) -> Result<Map<String, Value>, AgentError> {
+        self.call(
+            "executors.close",
+            "executor",
+            executor,
+            request,
+            None,
+            None,
+            abort,
+        )
+    }
+
     fn call(
         &mut self,
         method: &str,
@@ -402,6 +746,7 @@ fn parse_catalog(value: Map<String, Value>) -> Result<PythonProviderCatalog, Age
     let models = parse_category(&mut values, "models")?;
     let tools = parse_category(&mut values, "tools")?;
     let connectors = parse_category(&mut values, "connectors")?;
+    let executors = parse_category(&mut values, "executors")?;
     if !values.is_empty() {
         return Err(AgentError::tool(
             "Python provider catalog has unknown fields",
@@ -411,6 +756,7 @@ fn parse_catalog(value: Map<String, Value>) -> Result<PythonProviderCatalog, Age
         models,
         tools,
         connectors,
+        executors,
     })
 }
 

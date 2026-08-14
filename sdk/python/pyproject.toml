@@ -4,12 +4,15 @@ build-backend = "hatchling.build"
 
 [project]
 name = "zeta-plugin"
-version = "0.1.0"
+version = "0.2.0"
 description = "Python provider SDK for Zeta"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Zeta Contributors" }]
+dependencies = [
+  "blake3>=1.0.5",
+]
 classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",

@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
-from zeta_plugin import ProviderRegistration, ProviderSource, model, tool
+from zeta_plugin import ProviderRegistration, ProviderSource, executor, model, tool
 from zeta_plugin.discovery import LoadedProvider, ProviderCatalog
 from zeta_plugin.host import HostError, ProviderHost, serve
 
@@ -91,6 +91,43 @@ async def web_search(request, context):
     assert descriptor["description"] == "Search the web for relevant sources."
     assert descriptor["source"]["path"] == str(tmp_path / "tools" / "search.py")
     assert len(descriptor["fingerprint"]) == 64
+
+
+def test_calls_an_executor_lifecycle_method(tmp_path: Path) -> None:
+    @executor("daytona")
+    class Daytona:
+        async def open(self, request, context):
+            return {"handle": request["profile"], "base_dir": context["base_dir"]}
+
+        async def call(self, request, context):
+            return {"handle": request["handle"]}
+
+        async def close(self, request, context):
+            return {"closed": request["handle"]}
+
+    registration = ProviderRegistration(
+        declaration=Daytona.__zeta_plugin_registration__.declaration,
+        target=Daytona,
+    )
+    catalog = ProviderCatalog()
+    catalog.add(
+        LoadedProvider(
+            registration=registration,
+            source=ProviderSource(module="test", path=None),
+        )
+    )
+    host = ProviderHost(tmp_path, entry_points=[])
+    host._catalog = catalog
+
+    result = host.call(
+        "executors.open",
+        {
+            "input": {"executor": "daytona", "request": {"profile": "code"}},
+            "base_dir": "/workspace",
+        },
+    )
+
+    assert result == {"handle": "code", "base_dir": "/workspace"}
 
 
 def test_passes_model_observations_to_the_host_caller(tmp_path: Path) -> None:

@@ -1,0 +1,13 @@
+version: 1
+profiles:
+  isolated-code:
+    provider: daytona
+    reuse: session
+    daytona:
+      snapshot: zeta-python
+    network: none
+    workspace:
+      access: read_write
+      include: ["agents/**", "capabilities/**", "tools/**", "src/**", "tests/**", "pyproject.toml"]
+    limits:
+      call_seconds: 60

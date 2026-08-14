@@ -1,6 +1,7 @@
 # Zeta Plugin SDK
 
-The Zeta Plugin SDK declares Python model, tool, and connector providers.
+The Zeta Plugin SDK declares Python model, tool, connector, and executor
+providers.
 The Zeta host loads declarations and calls providers through a private protocol.
 The SDK does not run agents.
 
@@ -47,8 +48,9 @@ class Slack:
 ```
 
 A model or tool receives `request` and `context`. A connector class must define
-`deliver`, `subscribe`, or both. Zeta creates one connector instance per host.
-Raise `ProviderError` to set a stable error code and its retryable state.
+`deliver`, `subscribe`, or both. An executor class must define `open`, `call`,
+and `close`. Zeta creates one class instance per host. Raise `ProviderError` to
+set a stable error code and its retryable state.
 
 Each tool must have a model description. The SDK uses its first docstring
 paragraph by default. Use `@tool(..., description="...")` or
@@ -104,7 +106,8 @@ pi = "pi_zeta.providers:setup"
 ```
 
 The entry point can export decorated providers or a `setup(zeta)` function.
-The setup object has `models`, `tools`, and `connectors` registration APIs:
+The setup object has `models`, `tools`, `connectors`, and `executors`
+registration APIs:
 
 ```python
 def setup(zeta):
@@ -116,6 +119,7 @@ def setup(zeta):
     )
     zeta.models.register("pi", generate, tool_profile={"pi.bash": "bash"})
     zeta.connectors.register("slack", Slack)
+    zeta.executors.register("modal", ModalExecutor)
 ```
 
 Project providers take priority over distribution providers with the same

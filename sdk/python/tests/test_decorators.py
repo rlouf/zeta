@@ -5,6 +5,7 @@ from zeta_plugin import (
     DeclarationError,
     ProviderKind,
     connector,
+    executor,
     model,
     provider_registration,
     tool,
@@ -78,6 +79,14 @@ def test_connector_must_expose_a_connector_method() -> None:
 
         @connector("slack")
         class Slack:
+            pass
+
+
+def test_executor_must_expose_its_lifecycle_methods() -> None:
+    with pytest.raises(DeclarationError, match="open, call, and close"):
+
+        @executor("daytona")
+        class Daytona:
             pass
 
 

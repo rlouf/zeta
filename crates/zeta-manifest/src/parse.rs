@@ -728,8 +728,17 @@ fn take_executor(values: &mut Map<String, Value>) -> Result<ExecutorSpec, AgentS
     if value == Value::Null {
         return Ok(ExecutorSpec::default());
     }
+    if let Value::String(profile) = value {
+        return Ok(ExecutorSpec {
+            provider: profile,
+            config: Map::new(),
+        });
+    }
     let Value::Object(mut value) = value else {
-        return Err(invalid_field("executor", "expected an object"));
+        return Err(invalid_field(
+            "executor",
+            "expected a profile string or a legacy object",
+        ));
     };
     reject_unknown_fields(&value, &["provider", "config"], "executor")?;
     let provider = take_nested_required_string(&mut value, "provider", "executor")?;

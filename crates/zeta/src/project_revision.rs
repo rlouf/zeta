@@ -10,16 +10,80 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use zeta_dispatch::{EventPattern, Route, SessionRule};
-use zeta_manifest::{AgentSpec, load_agent, parse_agent};
+use zeta_manifest::{load_agent, parse_agent, AgentSpec};
 use zeta_substrate::{canonical_json, hash_bytes};
 
-use crate::{PythonProviderCatalog, PythonProviderHost};
+use crate::{ExecutorBundle, PythonProviderCatalog, PythonProviderHost, WorkspaceBundle};
 
 const ACTIVE_PROJECT_SCHEMA: &str = "zeta.active_project";
 const ACTIVE_PROJECT_VERSION: u64 = 3;
+const EXECUTOR_PROFILES_FILE: &str = "executors.yaml";
+const EXECUTOR_PROFILES_VERSION: u64 = 1;
 
 static NEXT_TEMPORARY_ID: AtomicU64 = AtomicU64::new(0);
+
+/// Selects how Zeta reuses one executor environment.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutorReuse {
+    /// Creates and closes an environment for each capability call.
+    #[default]
+    Call,
+    /// Reuses one environment for one agent session.
+    Session,
+    /// Reuses one environment across eligible agent sessions.
+    Durable,
+}
+
+impl ExecutorReuse {
+    /// Returns the stable configuration value for this reuse mode.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Call => "call",
+            Self::Session => "session",
+            Self::Durable => "durable",
+        }
+    }
+}
+
+/// Declares the trusted execution environment for one named profile.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ExecutorProfile {
+    /// Names the trusted executor driver.
+    provider: String,
+    /// Selects the environment reuse lifetime.
+    #[serde(default)]
+    reuse: ExecutorReuse,
+    /// Carries declarative project policy for the driver.
+    #[serde(flatten)]
+    policy: Map<String, Value>,
+}
+
+impl ExecutorProfile {
+    /// Returns the selected trusted executor driver.
+    pub fn provider(&self) -> &str {
+        &self.provider
+    }
+
+    /// Returns the selected environment reuse lifetime.
+    pub fn reuse(&self) -> ExecutorReuse {
+        self.reuse
+    }
+
+    /// Returns the declarative project policy for the driver.
+    pub fn policy(&self) -> &Map<String, Value> {
+        &self.policy
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExecutorProfilesFile {
+    version: u64,
+    profiles: BTreeMap<String, ExecutorProfile>,
+}
 
 /// Reports a project-source or revision failure.
 #[derive(Debug)]
@@ -160,6 +224,12 @@ pub struct ProjectRevision {
     revision_id: String,
     agents: BTreeMap<String, AgentSpec>,
     providers: PythonProviderCatalog,
+    #[serde(default = "default_executor_profiles")]
+    executor_profiles: BTreeMap<String, ExecutorProfile>,
+    #[serde(default)]
+    workspace_bundles: BTreeMap<String, WorkspaceBundle>,
+    #[serde(default)]
+    executor_bundles: BTreeMap<String, ExecutorBundle>,
 }
 
 impl ProjectRevision {
@@ -314,6 +384,21 @@ impl ProjectRevision {
         &self.providers
     }
 
+    /// Returns the named executor profiles selected for this revision.
+    pub fn executor_profiles(&self) -> &BTreeMap<String, ExecutorProfile> {
+        &self.executor_profiles
+    }
+
+    /// Returns the immutable workspace bundle for one executor profile.
+    pub fn workspace_bundle(&self, profile: &str) -> Option<&WorkspaceBundle> {
+        self.workspace_bundles.get(profile)
+    }
+
+    /// Returns the immutable remote tool bundle for one agent.
+    pub fn executor_bundle(&self, agent: &str) -> Option<&ExecutorBundle> {
+        self.executor_bundles.get(agent)
+    }
+
     /// Returns the public active-revision view.
     pub fn status(&self) -> ActiveProjectStatus {
         ActiveProjectStatus {
@@ -361,7 +446,54 @@ impl ProjectRevision {
                 project_root.display()
             ))
         })?;
-        let providers = load_python_providers(&project_root)?;
+        let executor_profiles = load_executor_profiles(&project_root)?;
+        let providers = load_python_providers(
+            &project_root,
+            executor_profiles
+                .values()
+                .any(|profile| profile.provider() != "local"),
+        )?;
+        let workspace_bundles = executor_profiles
+            .iter()
+            .filter(|(_name, profile)| profile.provider() != "local")
+            .map(|(name, profile)| {
+                WorkspaceBundle::build(&project_root, profile)
+                    .map(|bundle| (name.clone(), bundle))
+                    .map_err(|error| {
+                        ProjectError::new(format!(
+                            "cannot build the workspace bundle for executor profile {name:?}: {error}"
+                        ))
+                    })
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
+        let executor_bundles = agents
+            .values()
+            .filter(|agent| agent.enabled)
+            .filter(|agent| {
+                executor_profiles
+                    .get(&agent.executor.provider)
+                    .is_some_and(|profile| profile.provider() != "local")
+            })
+            .map(|agent| {
+                let workspace = workspace_bundles
+                    .get(&agent.executor.provider)
+                    .cloned()
+                    .ok_or_else(|| {
+                        ProjectError::new(format!(
+                            "executor profile {:?} has no workspace bundle",
+                            agent.executor.provider
+                        ))
+                    })?;
+                ExecutorBundle::build_for_agent(&project_root, workspace, &providers, agent)
+                    .map(|bundle| (agent.slug.clone(), bundle))
+                    .map_err(|error| {
+                        ProjectError::new(format!(
+                            "cannot build the executor bundle for agent {:?}: {error}",
+                            agent.slug
+                        ))
+                    })
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
         let mut revision = Self {
             schema: ACTIVE_PROJECT_SCHEMA.to_owned(),
             version: ACTIVE_PROJECT_VERSION,
@@ -369,6 +501,9 @@ impl ProjectRevision {
             revision_id: String::new(),
             agents,
             providers,
+            executor_profiles,
+            workspace_bundles,
+            executor_bundles,
         };
         revision.validate_provider_references(&revision.project_root)?;
         revision.revision_id = revision.expected_id()?;
@@ -438,6 +573,9 @@ impl ProjectRevision {
             "project_root": self.project_root,
             "agents": self.agents,
             "providers": self.providers,
+            "executor_profiles": self.executor_profiles,
+            "workspace_bundles": self.workspace_bundles,
+            "executor_bundles": self.executor_bundles,
         });
         let bytes = canonical_json(&value).map_err(|error| {
             ProjectError::new(format!("cannot calculate project revision id: {error}"))
@@ -448,6 +586,59 @@ impl ProjectRevision {
     fn validate_provider_references(&self, path: &Path) -> Result<(), ProjectError> {
         let native = zeta_agent::native_capabilities();
         for agent in self.agents.values().filter(|agent| agent.enabled) {
+            let Some(executor_profile) = self.executor_profiles.get(&agent.executor.provider)
+            else {
+                return Err(ProjectError::new(format!(
+                    "active project '{}' has agent {:?} with unavailable executor profile {:?}",
+                    path.display(),
+                    agent.slug,
+                    agent.executor.provider
+                )));
+            };
+            if executor_profile.provider() != "local"
+                && !self
+                    .providers
+                    .executors()
+                    .contains_key(executor_profile.provider())
+            {
+                return Err(ProjectError::new(format!(
+                    "active project '{}' has agent {:?} with unavailable executor driver {:?}",
+                    path.display(),
+                    agent.slug,
+                    executor_profile.provider()
+                )));
+            }
+            if executor_profile.provider() != "local" {
+                let bundle = self.workspace_bundles.get(&agent.executor.provider).ok_or_else(|| {
+                    ProjectError::new(format!(
+                        "active project '{}' has agent {:?} with no workspace bundle for executor profile {:?}",
+                        path.display(),
+                        agent.slug,
+                        agent.executor.provider
+                    ))
+                })?;
+                bundle.verify().map_err(|error| {
+                    ProjectError::new(format!(
+                        "active project '{}' has an invalid workspace bundle for executor profile {:?}: {error}",
+                        path.display(),
+                        agent.executor.provider
+                    ))
+                })?;
+                let bundle = self.executor_bundles.get(&agent.slug).ok_or_else(|| {
+                    ProjectError::new(format!(
+                        "active project '{}' has agent {:?} with no executor bundle",
+                        path.display(),
+                        agent.slug
+                    ))
+                })?;
+                bundle.verify().map_err(|error| {
+                    ProjectError::new(format!(
+                        "active project '{}' has an invalid executor bundle for agent {:?}: {error}",
+                        path.display(),
+                        agent.slug
+                    ))
+                })?;
+            }
             if let Some(model) = &agent.model {
                 let selected_python = self.providers.models().contains_key(model.profile());
                 if !selected_python {
@@ -515,8 +706,84 @@ impl ProjectRevision {
     }
 }
 
-fn load_python_providers(project_root: &Path) -> Result<PythonProviderCatalog, ProjectError> {
-    if !has_python_provider_scope(project_root) {
+fn default_executor_profiles() -> BTreeMap<String, ExecutorProfile> {
+    BTreeMap::from([(
+        "local".to_owned(),
+        ExecutorProfile {
+            provider: "local".to_owned(),
+            reuse: ExecutorReuse::Call,
+            policy: Map::new(),
+        },
+    )])
+}
+
+fn load_executor_profiles(
+    project_root: &Path,
+) -> Result<BTreeMap<String, ExecutorProfile>, ProjectError> {
+    let path = project_root.join(EXECUTOR_PROFILES_FILE);
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(default_executor_profiles());
+        }
+        Err(error) => {
+            return Err(ProjectError::new(format!(
+                "cannot inspect executor profiles '{}': {error}",
+                path.display()
+            )));
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(ProjectError::new(format!(
+            "executor profiles path is not a regular file: {}",
+            path.display()
+        )));
+    }
+    let source = fs::read_to_string(&path).map_err(|error| {
+        ProjectError::new(format!(
+            "cannot read executor profiles '{}': {error}",
+            path.display()
+        ))
+    })?;
+    let profiles: ExecutorProfilesFile = yaml_serde::from_str(&source).map_err(|error| {
+        ProjectError::new(format!(
+            "cannot parse executor profiles '{}': {error}",
+            path.display()
+        ))
+    })?;
+    if profiles.version != EXECUTOR_PROFILES_VERSION {
+        return Err(ProjectError::new(format!(
+            "executor profiles '{}' have unsupported version {}",
+            path.display(),
+            profiles.version
+        )));
+    }
+    if profiles.profiles.is_empty() {
+        return Err(ProjectError::new(format!(
+            "executor profiles '{}' contain no profiles",
+            path.display()
+        )));
+    }
+    for (name, profile) in &profiles.profiles {
+        if name.is_empty() || name.chars().any(char::is_whitespace) {
+            return Err(ProjectError::new(format!(
+                "executor profile name is invalid: {name:?}"
+            )));
+        }
+        if profile.provider().is_empty() || profile.provider().chars().any(char::is_whitespace) {
+            return Err(ProjectError::new(format!(
+                "executor profile {name:?} has an invalid provider"
+            )));
+        }
+    }
+    Ok(profiles.profiles)
+}
+
+fn load_python_providers(
+    project_root: &Path,
+    needs_executor_driver: bool,
+) -> Result<PythonProviderCatalog, ProjectError> {
+    if !needs_executor_driver && !has_python_provider_scope(project_root) {
         return Ok(PythonProviderCatalog::default());
     }
     let host = PythonProviderHost::start(project_root).map_err(|error| {
@@ -708,6 +975,84 @@ mod tests {
                 source_address: revision.agents["zulu"].content_address.to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn load_resolves_a_scalar_executor_profile() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let agents = temporary.path().join("agents");
+        fs::create_dir(&agents).expect("agents directory");
+        fs::write(
+            agents.join("worker.md"),
+            "---\nname: Worker\ndescription: Runs in one profile.\nexecutor: isolated-code\n---\nWork.\n",
+        )
+        .expect("agent source");
+        fs::write(
+            temporary.path().join(EXECUTOR_PROFILES_FILE),
+            "version: 1\nprofiles:\n  isolated-code:\n    provider: local\n    reuse: session\n    network: none\n",
+        )
+        .expect("executor profiles");
+
+        let first = ProjectRevision::load(temporary.path()).expect("project loads");
+        assert_eq!(
+            first
+                .executor_profiles()
+                .get("isolated-code")
+                .expect("profile exists")
+                .provider(),
+            "local"
+        );
+        assert_eq!(
+            first
+                .executor_profiles()
+                .get("isolated-code")
+                .expect("profile exists")
+                .reuse(),
+            ExecutorReuse::Session
+        );
+
+        fs::write(
+            temporary.path().join(EXECUTOR_PROFILES_FILE),
+            "version: 1\nprofiles:\n  isolated-code:\n    provider: local\n    network: restricted\n",
+        )
+        .expect("changed executor profiles");
+        let second = ProjectRevision::load(temporary.path()).expect("project reloads");
+        assert_ne!(first.revision_id(), second.revision_id());
+    }
+
+    #[test]
+    fn load_rejects_an_unknown_executor_reuse_mode() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let agents = temporary.path().join("agents");
+        fs::create_dir(&agents).expect("agents directory");
+        fs::write(
+            agents.join("worker.md"),
+            "---\nname: Worker\ndescription: Runs in one profile.\nexecutor: isolated-code\n---\nWork.\n",
+        )
+        .expect("agent source");
+        fs::write(
+            temporary.path().join(EXECUTOR_PROFILES_FILE),
+            "version: 1\nprofiles:\n  isolated-code:\n    provider: local\n    reuse: forever\n",
+        )
+        .expect("executor profiles");
+
+        let error = ProjectRevision::load(temporary.path()).expect_err("reuse must be known");
+        assert!(error.to_string().contains("reuse"));
+    }
+
+    #[test]
+    fn load_rejects_an_unknown_scalar_executor_profile() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let agents = temporary.path().join("agents");
+        fs::create_dir(&agents).expect("agents directory");
+        fs::write(
+            agents.join("worker.md"),
+            "---\nname: Worker\ndescription: Requires one profile.\nexecutor: missing\n---\nWork.\n",
+        )
+        .expect("agent source");
+
+        let error = ProjectRevision::load(temporary.path()).expect_err("profile must exist");
+        assert!(error.to_string().contains("unavailable executor profile"));
     }
 
     #[test]

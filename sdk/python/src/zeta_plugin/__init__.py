@@ -9,7 +9,7 @@ from .declarations import (
     provider_registration,
     providers,
 )
-from .decorators import connector, model, tool
+from .decorators import connector, executor, model, tool
 from .discovery import (
     ENTRY_POINT_GROUP,
     DiscoveryError,
@@ -24,21 +24,22 @@ from .discovery import (
 from .errors import ProviderError
 
 __all__ = [
+    "ENTRY_POINT_GROUP",
     "DeclarationError",
     "DiscoveryError",
-    "ENTRY_POINT_GROUP",
     "LoadedProvider",
     "ProviderCatalog",
     "ProviderCollection",
     "ProviderDeclaration",
     "ProviderError",
     "ProviderKind",
-    "ProviderRegistrationApi",
     "ProviderRegistration",
+    "ProviderRegistrationApi",
     "ProviderSource",
     "connector",
     "discover_entry_points",
     "discover_project",
+    "executor",
     "model",
     "provider_registration",
     "providers",

@@ -1,0 +1,11 @@
+id: workspace.grep
+description: Find text in workspace files.
+input_schema:
+  type: object
+  required: [query]
+  properties:
+    query:
+      type: string
+    path:
+      type: string
+  additionalProperties: false

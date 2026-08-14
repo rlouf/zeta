@@ -16,6 +16,7 @@ croner.workspace = true
 rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+yaml_serde.workspace = true
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "signal", "sync", "time"] }
 uuid = { version = "1", features = ["v4"] }
 zeta-agent = { path = "../zeta-agent" }

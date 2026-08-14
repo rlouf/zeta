@@ -105,6 +105,12 @@ class ProviderCatalog:
 
         return self._providers[ProviderKind.CONNECTOR].copy()
 
+    @property
+    def executors(self) -> Mapping[str, LoadedProvider]:
+        """Get the trusted executor drivers."""
+
+        return self._providers[ProviderKind.EXECUTOR].copy()
+
     def providers(self, kind: ProviderKind) -> Mapping[str, LoadedProvider]:
         """Get the providers for one category."""
 
@@ -145,6 +151,14 @@ class _CategoryRegistration:
                 raise DeclarationError(
                     "A connector class must define deliver or subscribe"
                 )
+        if self._kind is ProviderKind.EXECUTOR:
+            if not isinstance(target, type):
+                raise DeclarationError("An executor target must be a class")
+            required = ("open", "call", "close")
+            if any(not callable(getattr(target, name, None)) for name in required):
+                raise DeclarationError(
+                    "An executor class must define open, call, and close"
+                )
         declaration = ProviderDeclaration(
             kind=self._kind,
             identifier=identifier,
@@ -167,6 +181,7 @@ class ProviderRegistrationApi:
         self.models = _CategoryRegistration(catalog, source, ProviderKind.MODEL)
         self.tools = _CategoryRegistration(catalog, source, ProviderKind.TOOL)
         self.connectors = _CategoryRegistration(catalog, source, ProviderKind.CONNECTOR)
+        self.executors = _CategoryRegistration(catalog, source, ProviderKind.EXECUTOR)
 
 
 _DIRECTORIES: dict[ProviderKind, str] = {

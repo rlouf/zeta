@@ -23,6 +23,7 @@ use zeta_ipc::{
 use zeta_journal::Event;
 
 mod host_model;
+pub mod executor_bundle;
 pub mod process_executor;
 pub mod project_revision;
 pub mod python_host;
@@ -30,8 +31,12 @@ pub mod runtime;
 pub mod runtime_services;
 
 pub use process_executor::{ProcessExecutor, ProcessExecutorConfig, ProcessLaunch};
+pub use executor_bundle::{
+    BundleFile, ExecutorBundle, ExecutorCapability, ToolBundle, WorkspaceBundle,
+};
 pub use project_revision::{
-    ActiveAgent, ActiveProjectStatus, Project, ProjectError, ProjectRevision, ProjectRevisionStore,
+    ActiveAgent, ActiveProjectStatus, ExecutorProfile, ExecutorReuse, Project, ProjectError,
+    ProjectRevision, ProjectRevisionStore,
 };
 pub use python_host::{
     PythonModelGateway, PythonProvider, PythonProviderCatalog, PythonProviderHost,

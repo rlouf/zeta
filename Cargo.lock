@@ -2950,6 +2950,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "uuid",
+ "yaml_serde",
  "zeta-agent",
  "zeta-dispatch",
  "zeta-ipc",

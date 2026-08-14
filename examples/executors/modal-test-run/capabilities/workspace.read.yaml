@@ -1,0 +1,9 @@
+id: workspace.read
+description: Read one UTF-8 workspace file.
+input_schema:
+  type: object
+  required: [path]
+  properties:
+    path:
+      type: string
+  additionalProperties: false

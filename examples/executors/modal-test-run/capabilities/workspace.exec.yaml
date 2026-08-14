@@ -1,0 +1,17 @@
+id: workspace.exec
+description: Run one argument-vector command in the workspace.
+input_schema:
+  type: object
+  required: [argv]
+  properties:
+    argv:
+      type: array
+      items:
+        type: string
+    cwd:
+      type: string
+    timeout_seconds:
+      type: integer
+      minimum: 1
+      maximum: 60
+  additionalProperties: false

@@ -159,7 +159,7 @@ pub struct RetrySpec {
     pub backoff_seconds: Option<f64>,
 }
 
-/// Selects a tool executor and its JSON configuration.
+/// Selects a tool executor profile and its legacy JSON configuration.
 ///
 /// # Examples
 ///
@@ -171,9 +171,11 @@ pub struct RetrySpec {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExecutorSpec {
-    /// Names the executor provider.
+    /// Names the selected executor profile.
+    ///
+    /// This field retains its historical name during the profile migration.
     pub provider: String,
-    /// Carries provider-specific JSON configuration.
+    /// Carries legacy provider-specific JSON configuration.
     pub config: Map<String, Value>,
 }
 

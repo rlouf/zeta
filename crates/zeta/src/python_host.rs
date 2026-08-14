@@ -129,7 +129,7 @@ impl ModelGateway for PythonModelGateway {
         &'a mut self,
         input: &'a ModelInput,
         request: &'a ModelRequest,
-        _observer: &'a mut dyn AgentObserver,
+        observer: &'a mut dyn AgentObserver,
         abort: &'a dyn AbortSignal,
     ) -> Pin<Box<dyn Future<Output = Result<ModelOutput, AgentError>> + 'a>> {
         Box::pin(async move {
@@ -143,7 +143,7 @@ impl ModelGateway for PythonModelGateway {
                 .host
                 .lock()
                 .map_err(|_error| AgentError::tool("the Python provider host is unavailable"))?;
-            let result = host.generate(&self.model, provider_request, abort)?;
+            let result = host.generate(&self.model, provider_request, observer, abort)?;
             serde_json::from_value(Value::Object(result)).map_err(|error| {
                 AgentError::tool(format!(
                     "Python model provider returned an invalid response: {error}"
@@ -279,9 +279,39 @@ impl PythonProviderHost {
         &mut self,
         model: &str,
         request: Map<String, Value>,
+        observer: &mut dyn AgentObserver,
         abort: &dyn AbortSignal,
     ) -> Result<Map<String, Value>, AgentError> {
-        self.call("generate", "model", model, request, None, None, abort)
+        let mut input = Map::new();
+        input.insert("model".to_owned(), Value::String(model.to_owned()));
+        input.insert("request".to_owned(), Value::Object(request));
+        self.executor.call_with_notifications(
+            "generate",
+            input,
+            None,
+            None,
+            abort,
+            &mut |notification| {
+                if notification.method != "model.observation" {
+                    return Err(AgentError::tool(format!(
+                        "Python model provider sent unsupported notification '{}'",
+                        notification.method
+                    )));
+                }
+                let Some(value) = notification.params.get("observation") else {
+                    return Err(AgentError::tool(
+                        "Python model provider observation has no observation field",
+                    ));
+                };
+                let observation = serde_json::from_value(value.clone()).map_err(|error| {
+                    AgentError::tool(format!(
+                        "Python model provider sent an invalid observation: {error}"
+                    ))
+                })?;
+                observer.observe(observation);
+                Ok(())
+            },
+        )
     }
 
     /// Delivers one connector effect through a Python provider.

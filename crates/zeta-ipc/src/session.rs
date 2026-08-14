@@ -557,6 +557,12 @@ impl Session {
                 Err(error) => vec![Action::Violation(error)],
             };
         }
+        if self.side == Side::Runtime
+            && self.has_peer_role(Role::Provider)
+            && notification.method == "model.observation"
+        {
+            return vec![Action::HandleNotification(notification)];
+        }
         vec![Action::Violation(IpcError::new(
             METHOD_NOT_FOUND,
             format!(

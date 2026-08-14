@@ -443,6 +443,35 @@ fn client_event_notifications_are_delivered_without_pending_state() {
 }
 
 #[test]
+fn provider_model_observations_are_delivered_without_pending_state() {
+    let mut peer = Session::peer(
+        source_provider_params(),
+        ShutdownDirection::RemoteSupervisesLocal,
+    );
+    let mut runtime = Session::runtime(
+        RuntimeConfig::new(PeerIdentity::new("runtime", "0")),
+        ShutdownDirection::LocalSupervisesRemote,
+    );
+    establish(&mut peer, &mut runtime);
+
+    let notification = Message::Notification(Notification::new(
+        "model.observation",
+        json!({"observation": {"kind": "text_delta", "text": "Hello"}})
+            .as_object()
+            .unwrap()
+            .clone(),
+    ));
+    let Action::HandleNotification(Notification { method, .. }) =
+        only_action(runtime.receive(notification))
+    else {
+        panic!("the runtime must receive the model observation");
+    };
+
+    assert_eq!(method, "model.observation");
+    assert_eq!(runtime.incoming_request_count(), 0);
+}
+
+#[test]
 fn ping_is_automatic_and_shutdown_closes_the_managed_side() {
     let mut peer = Session::peer(
         source_provider_params(),

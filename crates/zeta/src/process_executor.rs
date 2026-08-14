@@ -17,8 +17,8 @@ use zeta_agent::{
     CapabilityInvocation,
 };
 use zeta_ipc::{
-    Action, ErrorObject, Frame, FrameReader, FrameWriter, PeerIdentity, RequestId, ResolvedRequest,
-    Role, RuntimeConfig, Session, ShutdownDirection,
+    Action, ErrorObject, Frame, FrameReader, FrameWriter, Notification, PeerIdentity, RequestId,
+    ResolvedRequest, Role, RuntimeConfig, Session, ShutdownDirection,
 };
 
 /// Describes one provider process and its inherited execution environment.
@@ -127,6 +127,7 @@ impl ProcessExecutor {
             params,
             self.config.shutdown_timeout,
             None,
+            &mut reject_notification,
         );
         if outcome.is_ok() {
             wait_for_exit(&mut process.child, self.config.shutdown_timeout);
@@ -158,7 +159,42 @@ impl ProcessExecutor {
         effect_key: Option<String>,
         abort: &dyn AbortSignal,
     ) -> Result<Map<String, Value>, AgentError> {
-        self.call_now(method, input, base_directory, effect_key, abort)
+        self.call_now(
+            method,
+            input,
+            base_directory,
+            effect_key,
+            abort,
+            &mut reject_notification,
+        )
+    }
+
+    /// Calls one provider method and handles its notifications.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AgentError`] when the provider call or the notification
+    /// handler fails.
+    pub fn call_with_notifications(
+        &mut self,
+        method: &str,
+        input: Map<String, Value>,
+        base_directory: Option<String>,
+        effect_key: Option<String>,
+        abort: &dyn AbortSignal,
+        on_notification: &mut dyn FnMut(&Notification) -> Result<(), AgentError>,
+    ) -> Result<Map<String, Value>, AgentError> {
+        let mut handler = |notification: &Notification| {
+            on_notification(notification).map_err(|error| error.message)
+        };
+        self.call_now(
+            method,
+            input,
+            base_directory,
+            effect_key,
+            abort,
+            &mut handler,
+        )
     }
 
     fn execute_now(
@@ -166,12 +202,14 @@ impl ProcessExecutor {
         invocation: &CapabilityInvocation,
         abort: &dyn AbortSignal,
     ) -> Result<Map<String, Value>, AgentError> {
+        let mut handler = reject_notification;
         self.call_now(
             invocation.capability_id.as_str(),
             invocation.params.clone(),
             invocation.base_directory.clone(),
             invocation.effect_key.clone(),
             abort,
+            &mut handler,
         )
     }
 
@@ -182,6 +220,7 @@ impl ProcessExecutor {
         base_directory: Option<String>,
         effect_key: Option<String>,
         abort: &dyn AbortSignal,
+        on_notification: &mut dyn FnMut(&Notification) -> Result<(), String>,
     ) -> Result<Map<String, Value>, AgentError> {
         if let Some(reason) = abort.reason() {
             return Err(AgentError::tool(format!("provider call aborted: {reason}")));
@@ -209,6 +248,7 @@ impl ProcessExecutor {
             params,
             self.config.call_timeout,
             Some(abort),
+            on_notification,
         );
         if call_outcome_invalidates_process(&outcome) {
             self.terminate_current_provider();
@@ -476,7 +516,7 @@ fn initialize(
             ));
         };
         let actions = process.session.receive(message);
-        drive_actions(process, actions)?;
+        drive_actions(process, actions, &mut reject_notification)?;
     }
     let Some(parameters) = process.session.peer_parameters() else {
         return Err("provider initialization parameters are unavailable".to_owned());
@@ -516,6 +556,7 @@ fn transact(
     params: Map<String, Value>,
     timeout: Duration,
     abort: Option<&dyn AbortSignal>,
+    on_notification: &mut dyn FnMut(&Notification) -> Result<(), String>,
 ) -> Result<Value, ProcessFailure> {
     if let Some(reason) = abort.and_then(|signal| signal.reason()) {
         return Err(ProcessFailure::Aborted(reason));
@@ -524,7 +565,7 @@ fn transact(
         .session
         .send_request(request_id.clone(), method, params)
         .map_err(|error| ProcessFailure::Transport(error.to_string()))?;
-    drive_actions(process, actions).map_err(ProcessFailure::Transport)?;
+    drive_actions(process, actions, on_notification).map_err(ProcessFailure::Transport)?;
     let deadline = Instant::now() + timeout;
     loop {
         let frame = receive_frame(process, deadline, abort)?;
@@ -541,7 +582,7 @@ fn transact(
         let malformed_response = actions
             .iter()
             .any(|action| matches!(action, Action::Violation(_)));
-        let resolved = drive_actions(process, actions).map_err(|message| {
+        let resolved = drive_actions(process, actions, on_notification).map_err(|message| {
             if malformed_response {
                 ProcessFailure::MalformedResponse(message)
             } else {
@@ -612,6 +653,7 @@ fn reader_event(event: ReaderEvent) -> Result<Frame, ProcessFailure> {
 fn drive_actions(
     process: &mut ProcessState,
     actions: Vec<Action>,
+    on_notification: &mut dyn FnMut(&Notification) -> Result<(), String>,
 ) -> Result<Option<ResolvedRequest>, String> {
     let mut resolved = None;
     for action in actions {
@@ -633,10 +675,7 @@ fn drive_actions(
                 ));
             }
             Action::HandleNotification(notification) => {
-                return Err(format!(
-                    "provider sent unsupported notification '{}'",
-                    notification.method
-                ));
+                on_notification(&notification)?;
             }
             Action::Violation(error) => return Err(error.to_string()),
             Action::Close { reason } => {
@@ -645,6 +684,13 @@ fn drive_actions(
         }
     }
     Ok(resolved)
+}
+
+fn reject_notification(notification: &Notification) -> Result<(), String> {
+    Err(format!(
+        "provider sent unsupported notification '{}'",
+        notification.method
+    ))
 }
 
 fn provider_error(error: ErrorObject) -> AgentError {

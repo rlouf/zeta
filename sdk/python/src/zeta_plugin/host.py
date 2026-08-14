@@ -11,7 +11,7 @@ import sys
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, Callable, TextIO
 
 from .declarations import ProviderKind
 from .discovery import (
@@ -26,6 +26,7 @@ from .protocol import (
     PROTOCOL_VERSION,
     ProtocolError,
     error,
+    notification,
     read_message,
     request,
     success,
@@ -77,7 +78,13 @@ class ProviderHost:
             "connectors": self._descriptors(ProviderKind.CONNECTOR),
         }
 
-    def call(self, method: str, params: Mapping[str, Any]) -> dict[str, Any]:
+    def call(
+        self,
+        method: str,
+        params: Mapping[str, Any],
+        *,
+        observe: Callable[[Mapping[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         """Run one private host operation."""
 
         if method == "providers.catalog":
@@ -119,6 +126,8 @@ class ProviderHost:
                 stable_code="provider_not_found",
             )
         context = self._context(input_value, params)
+        if observe is not None:
+            context["observe"] = observe
         handler = self._handler(provider, target_method)
         try:
             result = handler(dict(request_value), context)
@@ -278,7 +287,20 @@ def serve(
             write_message(output_stream, success(identifier, {}))
             return
         try:
-            result = host.call(method, params)
+            def observe(value: Mapping[str, Any]) -> None:
+                write_message(
+                    output_stream,
+                    notification(
+                        "model.observation",
+                        {"observation": _observation(value)},
+                    ),
+                )
+
+            result = host.call(
+                method,
+                params,
+                observe=observe if method == "generate" else None,
+            )
             write_message(output_stream, success(identifier, result))
         except HostError as failure:
             write_message(
@@ -312,6 +334,30 @@ def _read_or_fail(input_stream: TextIO) -> Mapping[str, Any]:
     if message is None:
         raise ProtocolError("The runtime closed input during provider initialization")
     return message
+
+
+def _observation(value: Any) -> dict[str, str]:
+    if not isinstance(value, Mapping):
+        raise HostError(
+            "A model observation must be an object",
+            code=_INVALID_PARAMS,
+            stable_code="invalid_provider_observation",
+        )
+    kind = value.get("kind")
+    if kind in {"text_delta", "reasoning_delta"}:
+        text = value.get("text")
+        if isinstance(text, str):
+            return {"kind": kind, "text": text}
+    elif kind == "status":
+        status = value.get("status")
+        text = value.get("text")
+        if isinstance(status, str) and isinstance(text, str):
+            return {"kind": kind, "status": status, "text": text}
+    raise HostError(
+        "The model observation has an invalid shape",
+        code=_INVALID_PARAMS,
+        stable_code="invalid_provider_observation",
+    )
 
 
 def _fingerprint(provider: LoadedProvider) -> str:

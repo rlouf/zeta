@@ -1,16 +1,30 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
-use zeta::{PythonProviderHost, PythonProviderHostConfig};
-use zeta_agent::{AbortReason, AbortSignal};
+use zeta::{PythonModelGateway, PythonProviderHost, PythonProviderHostConfig};
+use zeta_agent::{
+    AbortReason, AbortSignal, AgentObserver, ModelGateway, ModelInput, ModelRequest, Observation,
+};
 
 struct ActiveAbort;
 
 impl AbortSignal for ActiveAbort {
     fn reason(&self) -> Option<AbortReason> {
         None
+    }
+}
+
+#[derive(Default)]
+struct RecordingObserver {
+    observations: Vec<Observation>,
+}
+
+impl AgentObserver for RecordingObserver {
+    fn observe(&mut self, observation: Observation) {
+        self.observations.push(observation);
     }
 }
 
@@ -123,5 +137,65 @@ async def fail(request, context):
     assert_eq!(
         error.message,
         "provider call failed [provider_failed, retryable=false]: Provider 'fail' failed: fixture failure"
+    );
+}
+
+#[test]
+fn python_model_observations_reach_the_model_observer() {
+    let project = TempDir::new().expect("temporary project");
+    write_project_file(
+        &project,
+        "models/fixture.py",
+        r#"
+from zeta_plugin import model
+
+
+@model("fixture")
+async def fixture(request, context):
+    context["observe"]({"kind": "text_delta", "text": "Hello"})
+    return {
+        "message": {"role": "assistant", "content": "Hello"},
+        "telemetry": {},
+        "streamed_content": True,
+    }
+"#,
+    );
+    let host = PythonProviderHost::with_config(project.path(), host_config())
+        .expect("Python host starts");
+    let host = Arc::new(Mutex::new(host));
+    let mut gateway = PythonModelGateway::new(Arc::clone(&host), "fixture");
+    let input = ModelInput {
+        messages: Vec::new(),
+        tools: Vec::new(),
+        tool_choice: Value::String("none".to_owned()),
+        max_tokens: 64,
+        selected_model: Some("fixture".to_owned()),
+        session_id: Some("session-1".to_owned()),
+        thinking: None,
+    };
+    let request = ModelRequest {
+        api: None,
+        model: Some("fixture".to_owned()),
+        url: None,
+        thinking: None,
+        session_id: Some("session-1".to_owned()),
+    };
+    let mut observer = RecordingObserver::default();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+
+    let output = runtime
+        .block_on(gateway.generate(&input, &request, &mut observer, &ActiveAbort))
+        .expect("model call succeeds");
+
+    assert_eq!(output.message, object(json!({"role": "assistant", "content": "Hello"})));
+    assert!(output.streamed_content);
+    assert_eq!(
+        observer.observations,
+        vec![Observation::TextDelta {
+            text: "Hello".to_owned()
+        }]
     );
 }

@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
-from zeta_plugin import ProviderRegistration, ProviderSource, tool
+from zeta_plugin import ProviderRegistration, ProviderSource, model, tool
 from zeta_plugin.discovery import LoadedProvider, ProviderCatalog
 from zeta_plugin.host import HostError, ProviderHost, serve
 
@@ -87,6 +87,43 @@ async def web_search(request, context):
     assert descriptor["id"] == "web_search"
     assert descriptor["source"]["path"] == str(tmp_path / "tools" / "search.py")
     assert len(descriptor["fingerprint"]) == 64
+
+
+def test_passes_model_observations_to_the_host_caller(tmp_path: Path) -> None:
+    @model("fixture")
+    async def fixture(request, context):
+        context["observe"]({"kind": "text_delta", "text": "Hello"})
+        context["observe"](
+            {"kind": "status", "status": "complete", "text": "Done"}
+        )
+        return {"message": {"role": "assistant"}, "telemetry": {}}
+
+    registration = ProviderRegistration(
+        declaration=fixture.__zeta_plugin_registration__.declaration,
+        target=fixture,
+    )
+    catalog = ProviderCatalog()
+    catalog.add(
+        LoadedProvider(
+            registration=registration,
+            source=ProviderSource(module="test", path=None),
+        )
+    )
+    host = ProviderHost(tmp_path, entry_points=[])
+    host._catalog = catalog
+    observations: list[dict[str, str]] = []
+
+    result = host.call(
+        "generate",
+        {"input": {"model": "fixture", "request": {}}},
+        observe=lambda value: observations.append(dict(value)),
+    )
+
+    assert result == {"message": {"role": "assistant"}, "telemetry": {}}
+    assert observations == [
+        {"kind": "text_delta", "text": "Hello"},
+        {"kind": "status", "status": "complete", "text": "Done"},
+    ]
 
 
 def test_delivers_to_a_decorated_connector_with_effect_context(tmp_path: Path) -> None:
@@ -208,6 +245,60 @@ async def echo(request, context):
     assert messages[0]["method"] == "initialize"
     assert messages[1]["result"] == {"value": "ok"}
     assert messages[2]["result"] == {}
+
+
+def test_serves_model_observations_before_the_response(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "models" / "fixture.py",
+        """\
+from zeta_plugin import model
+
+
+@model("fixture")
+async def fixture(request, context):
+    context["observe"]({"kind": "text_delta", "text": "Hello"})
+    return {"message": {"role": "assistant"}, "telemetry": {}}
+""",
+    )
+    input_stream = io.StringIO(
+        "\n".join(
+            [
+                json.dumps(
+                    {"jsonrpc": "2.0", "id": "provider-initialize", "result": {}}
+                ),
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "one",
+                        "method": "generate",
+                        "params": {
+                            "input": {"model": "fixture", "request": {}}
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "two",
+                        "method": "shutdown",
+                        "params": {"reason": "test"},
+                    }
+                ),
+            ]
+        )
+        + "\n"
+    )
+    output_stream = io.StringIO()
+
+    serve(ProviderHost(tmp_path, entry_points=[]), input_stream, output_stream)
+
+    messages = [json.loads(line) for line in output_stream.getvalue().splitlines()]
+    assert messages[1] == {
+        "jsonrpc": "2.0",
+        "method": "model.observation",
+        "params": {"observation": {"kind": "text_delta", "text": "Hello"}},
+    }
+    assert messages[2]["result"] == {"message": {"role": "assistant"}, "telemetry": {}}
 
 
 def test_host_requires_object_results(tmp_path: Path) -> None:

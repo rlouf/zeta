@@ -52,6 +52,16 @@ def request(
     }
 
 
+def notification(method: str, params: Mapping[str, Any]) -> dict[str, Any]:
+    """Create one JSON-RPC notification."""
+
+    return {
+        "jsonrpc": JSONRPC_VERSION,
+        "method": method,
+        "params": dict(params),
+    }
+
+
 def success(identifier: str | int, result: Mapping[str, Any]) -> dict[str, Any]:
     """Create one JSON-RPC success response."""
 

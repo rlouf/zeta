@@ -193,6 +193,7 @@ impl Default for ExecutorSpec {
 /// ```
 /// let binding = zeta_manifest::IngressBinding {
 ///     event: "message.received".to_owned(),
+///     connector: Some("slack".to_owned()),
 ///     filter: serde_json::Map::new(),
 ///     idempotency_key: Some("message:{id}".to_owned()),
 /// };
@@ -203,6 +204,9 @@ impl Default for ExecutorSpec {
 pub struct IngressBinding {
     /// Names the accepted event.
     pub event: String,
+    /// Selects the connector that supplies this external event.
+    #[serde(default)]
+    pub connector: Option<String>,
     /// Carries connector-specific filter values.
     pub filter: Map<String, Value>,
     /// Defines the stable external idempotency identity.

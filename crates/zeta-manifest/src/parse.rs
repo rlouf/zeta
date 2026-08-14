@@ -801,14 +801,20 @@ fn take_accepts(
         match entry {
             Value::String(event) if !event.is_empty() => events.push(event),
             Value::Object(mut entry) => {
-                reject_unknown_fields(&entry, &["event", "filter", "idempotency_key"], "accepts")?;
+                reject_unknown_fields(
+                    &entry,
+                    &["event", "connector", "filter", "idempotency_key"],
+                    "accepts",
+                )?;
                 let event = take_nested_required_string(&mut entry, "event", "accepts")?;
+                let connector = take_optional_string(&mut entry, "connector", "accepts")?;
                 let filter = take_object(&mut entry, "filter", "accepts")?;
                 let idempotency_key =
                     take_optional_string(&mut entry, "idempotency_key", "accepts")?;
                 events.push(event.clone());
                 bindings.push(IngressBinding {
                     event,
+                    connector,
                     filter,
                     idempotency_key,
                 });

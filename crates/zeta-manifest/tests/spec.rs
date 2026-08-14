@@ -27,6 +27,7 @@ executor:
     fallback: null
 accepts:
   - event: slack.message.received
+    connector: slack
     filter:
       channel_ids: [C123]
     idempotency_key: slack:{team_id}:{message_ts}
@@ -154,6 +155,7 @@ fn complete_agent_matches_python_declaration_behavior() {
         ingress,
         vec![IngressBinding {
             event: "slack.message.received".to_owned(),
+            connector: Some("slack".to_owned()),
             filter: object(json!({"channel_ids": ["C123"]})),
             idempotency_key: Some("slack:{team_id}:{message_ts}".to_owned()),
         }]

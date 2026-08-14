@@ -40,6 +40,7 @@ class Slack:
 
 A model or tool receives `request` and `context`. A connector class must define
 `deliver`, `subscribe`, or both. Zeta creates one connector instance per host.
+Raise `ProviderError` to set a stable error code and its retryable state.
 
 ## Select a connector
 

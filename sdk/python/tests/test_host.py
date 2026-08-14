@@ -45,6 +45,28 @@ def test_rejects_an_unknown_provider(tmp_path: Path) -> None:
     assert error.value.stable_code == "provider_not_found"
 
 
+def test_preserves_a_provider_error_retry_contract(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "tools" / "limited.py",
+        """\
+from zeta_plugin import ProviderError, tool
+
+
+@tool("limited")
+async def limited(request, context):
+    raise ProviderError("The provider rate limit is active", code="rate_limited", retryable=True)
+""",
+    )
+    host = ProviderHost(tmp_path, entry_points=[])
+
+    with pytest.raises(HostError) as error:
+        host.call("invoke", {"input": {"tool": "limited"}})
+
+    assert error.value.message == "The provider rate limit is active"
+    assert error.value.stable_code == "rate_limited"
+    assert error.value.retryable is True
+
+
 def test_catalog_includes_a_source_and_fingerprint(tmp_path: Path) -> None:
     _write(
         tmp_path / "tools" / "search.py",

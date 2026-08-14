@@ -84,6 +84,9 @@ The host exposes `subscribe` for connector code. The runtime does not yet map
 subscription input to durable Zeta events. Use Zeta ingress until that mapping
 has a declared contract.
 
+Raise `ProviderError` when a provider must return a stable failure code. Set
+`retryable=True` when the connector can safely retry the same request.
+
 ## Provider distributions
 
 Provider packages use the `zeta.providers` Python entry point group. This

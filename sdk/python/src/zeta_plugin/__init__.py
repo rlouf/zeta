@@ -21,6 +21,7 @@ from .discovery import (
     discover_project,
     resolve_catalog,
 )
+from .errors import ProviderError
 
 __all__ = [
     "DeclarationError",
@@ -30,6 +31,7 @@ __all__ = [
     "ProviderCatalog",
     "ProviderCollection",
     "ProviderDeclaration",
+    "ProviderError",
     "ProviderKind",
     "ProviderRegistrationApi",
     "ProviderRegistration",

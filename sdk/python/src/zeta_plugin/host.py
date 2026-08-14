@@ -21,6 +21,7 @@ from .discovery import (
     discover_project,
     resolve_catalog,
 )
+from .errors import ProviderError
 from .protocol import (
     PROTOCOL_VERSION,
     ProtocolError,
@@ -125,6 +126,12 @@ class ProviderHost:
                 result = asyncio.run(result)
         except HostError:
             raise
+        except ProviderError as failure:
+            raise HostError(
+                failure.message,
+                stable_code=failure.code,
+                retryable=failure.retryable,
+            ) from failure
         except Exception as error:
             raise HostError(
                 f"Provider {identifier!r} failed: {error}",

@@ -301,10 +301,10 @@ pub struct AgentSpec {
     pub extensions: Map<String, Value>,
 }
 
-/// Identifies a provider-qualified capability declaration.
+/// Identifies one canonical capability declaration.
 ///
-/// The identity contains at least one provider segment and one operation
-/// segment. It carries no executable callback or language-specific import.
+/// The identity can be unqualified or use a package namespace. It carries no
+/// executable callback or language-specific import.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(transparent)]
 pub struct CapabilityId(String);
@@ -326,31 +326,26 @@ impl FromStr for CapabilityId {
     type Err = ManifestError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let mut segments = value.split('.');
-        let provider = segments.next();
-        let operation = segments.next();
-        let mut invalid_segment = false;
-        for segment in value.split('.') {
-            if segment.is_empty() {
-                invalid_segment = true;
-            }
-        }
-        let mut contains_whitespace = false;
-        for character in value.chars() {
-            if character.is_whitespace() {
-                contains_whitespace = true;
-            }
-        }
-        if provider.is_none() || operation.is_none() || invalid_segment || contains_whitespace {
+        if !valid_capability_id(value) {
             return Err(ManifestError::new(
                 ManifestErrorKind::InvalidCapability,
                 Some(value),
                 Some("id"),
-                "capability id must contain non-empty provider and operation segments",
+                "capability id must use lower-case names separated by dots",
             ));
         }
         Ok(CapabilityId(value.to_owned()))
     }
+}
+
+fn valid_capability_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.split('.').all(|segment| {
+            let mut bytes = segment.bytes();
+            matches!(bytes.next(), Some(byte) if byte.is_ascii_lowercase())
+                && bytes
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        })
 }
 
 impl<'de> Deserialize<'de> for CapabilityId {

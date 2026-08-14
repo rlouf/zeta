@@ -5,7 +5,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use zeta_journal::DraftEvent;
 
 use crate::error::AgentError;
@@ -20,9 +20,9 @@ pub type CapabilityFuture<'a> =
 /// # Examples
 ///
 /// ```
-/// let id: zeta_agent::CapabilityId = "test.lookup".parse().unwrap();
-/// assert_eq!(id.as_str(), "test.lookup");
-/// assert_eq!(id.model_name(), "lookup");
+/// let id: zeta_agent::CapabilityId = "web_search".parse().unwrap();
+/// assert_eq!(id.as_str(), "web_search");
+/// assert_eq!(id.model_name(), "web_search");
 /// ```
 #[derive(Clone, Debug, Deserialize, Hash, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
@@ -34,7 +34,7 @@ impl CapabilityId {
         &self.0
     }
 
-    /// Returns the model-facing name after the provider prefix.
+    /// Returns the model-facing name after a namespace prefix.
     pub fn model_name(&self) -> &str {
         match self.0.split_once('.') {
             Some((_provider, name)) => name,
@@ -53,18 +53,23 @@ impl std::str::FromStr for CapabilityId {
     type Err = AgentError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let Some((provider, name)) = value.split_once('.') else {
+        if !valid_capability_id(value) {
             return Err(AgentError::invocation(
-                "capability id must contain a provider and name",
-            ));
-        };
-        if provider.is_empty() || name.is_empty() {
-            return Err(AgentError::invocation(
-                "capability id must contain a provider and name",
+                "capability id must use lower-case names separated by dots",
             ));
         }
         Ok(CapabilityId(value.to_owned()))
     }
+}
+
+fn valid_capability_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.split('.').all(|segment| {
+            let mut bytes = segment.bytes();
+            matches!(bytes.next(), Some(byte) if byte.is_ascii_lowercase())
+                && bytes
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        })
 }
 
 /// Names how a side effect may be retried after an interrupted call.

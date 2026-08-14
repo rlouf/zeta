@@ -17,9 +17,10 @@ revision across reload and restart.
 
 The initial native executor supports direct model declarations and durable
 internal controls. It does not grant native tools yet. Those tools need their
-own durable effect boundary. Schedules, the connector process host, and the
-durable egress outbox remain future work. No connector call occurs in this
-slice.
+own durable effect boundary. The egress lane stores connector effects,
+claims them separately from agent work, and retries safe delivery. A host
+supplies its connector executor and event-to-connector map. The connector
+process host and schedules remain future work.
 
 ## Decision
 
@@ -91,7 +92,7 @@ therefore an optimization, not a recovery mechanism.
 
 ## Queue lanes
 
-The runtime will have separate bounded lanes.
+The runtime has separate bounded lanes.
 
 | Lane | Unit | Default rule |
 | --- | --- | --- |
@@ -107,14 +108,14 @@ The agent lane will use the existing `queue_items`, `queue_claims`, locks, and
 attempt lifecycle. The runtime must renew a live claim before its deadline.
 The renewal stops when the task returns or loses authority.
 
-The egress lane will use a durable outbox. It must not use a fake agent id or share
-the agent lane. Slow or failed connector delivery must not delay an unrelated
-model call.
+The egress lane uses the durable connector-effect outbox. It must not use a fake
+agent id or share the agent lane. Slow or failed connector delivery must not delay
+an unrelated model call.
 
 ## Durable outbox
 
-`zeta-dispatch` will add an `outbox_deliveries` projection and matching claim rows.
-Each delivery has these fields:
+`zeta-dispatch` stores connector deliveries in its `effects` projection and
+matching `effect_claims` rows. Each delivery has these fields:
 
 - a deterministic delivery id from the source event and egress binding;
 - the source event id and project revision;
@@ -123,12 +124,12 @@ Each delivery has these fields:
 - availability, attempt, claim, and terminal state;
 - an optional connector ordering key.
 
-The actor will create the delivery record in the same transaction as the source
-event and its route decision. A unique source-event and binding key makes a
-retry or replay return the original delivery.
+The actor scans committed agent-published events before it drains egress. It
+stores a delivery before it calls a connector. A restart repeats that scan.
+A unique source-event and binding key returns the original delivery.
 
-`effects` will remain the durable record for external-effect semantics. The outbox
-will be its delivery projection. A delivery claim will append `runtime.effect.started`
+`effects` is the durable record for external-effect semantics. The outbox is
+its delivery projection. A delivery claim appends `runtime.effect.started`
 before the connector call. A terminal result appends `runtime.effect.completed`,
 `runtime.effect.failed`, or `runtime.effect.ambiguous`.
 
@@ -187,7 +188,7 @@ perform both durable transitions before it returns execution input.
 then sends a wakeup so the timer uses the new schedule plan. Existing queued
 items and outbox deliveries retain their stored revision.
 
-`zeta status` will report separate agent and egress lane counts. It will also report
+`zeta status` reports separate agent and egress lane counts. It will also report
 the next deadline and the oldest available work time. This makes delay visible
 without log inspection.
 
@@ -206,9 +207,8 @@ to stop. The actor will write no synthetic successful result.
 
 ## Remaining implementation order
 
-1. Add the outbox schema, claim API, and event-driven egress lane.
-2. Add durable native-tool effect handling to the agent executor.
-3. Add schedules and connector process supervision after durable egress works.
+1. Add durable native-tool effect handling to the agent executor.
+2. Add schedules and connector process supervision after durable egress works.
 
 ## Acceptance tests
 

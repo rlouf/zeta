@@ -14,10 +14,11 @@ use serde_json::{Map, Value};
 use tokio::sync::watch;
 use uuid::Uuid;
 use zeta_dispatch::{
-    route_event, AttemptCompletion, AttemptFailure, AttemptFailureCode, ClaimToken, Dispatch,
-    QueueClaim, RetryPolicy, Route, RuntimeEventIdentity,
+    effect_key, route_event, AttemptCompletion, AttemptFailure, AttemptFailureCode, ClaimToken,
+    Dispatch, Effect, EffectDeliverySemantics, EffectStatus, EgressDeliveryClaim, QueueClaim,
+    RetryPolicy, Route, RuntimeEventIdentity,
 };
-use zeta_journal::{DraftEvent, Event};
+use zeta_journal::{DraftEvent, Event, EventFilter};
 use zeta_manifest::AgentSpec;
 
 use crate::{
@@ -30,6 +31,10 @@ const AGENT_CAPACITY: usize = 4;
 const AGENT_LEASE_MS: u64 = 60_000;
 const AGENT_HEARTBEAT_MS: i64 = 15_000;
 const AGENT_WORKER_NAME: &str = "native-agent";
+const EGRESS_CAPACITY: usize = 4;
+const EGRESS_LEASE_MS: u64 = 60_000;
+const EGRESS_HEARTBEAT_MS: i64 = 15_000;
+const EGRESS_WORKER_NAME: &str = "native-egress";
 
 /// Reports a native runtime failure.
 #[derive(Debug)]
@@ -116,6 +121,85 @@ pub enum AgentExecution {
 pub trait AgentExecutor: Send + Sync + 'static {
     /// Executes one task and must observe the supplied cancellation token.
     fn execute(&self, task: AgentTask, cancellation: CancellationToken) -> AgentExecution;
+}
+
+/// Describes one connector operation that the native host can deliver.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConnectorEgress {
+    connector_id: String,
+    operation: String,
+    semantics: EffectDeliverySemantics,
+}
+
+impl ConnectorEgress {
+    /// Creates one connector operation for a published event type.
+    pub fn new(
+        connector_id: impl Into<String>,
+        operation: impl Into<String>,
+        semantics: EffectDeliverySemantics,
+    ) -> Result<Self, RuntimeError> {
+        let connector_id = connector_id.into();
+        let operation = operation.into();
+        if connector_id.is_empty() || operation.is_empty() {
+            return Err(RuntimeError::new(
+                "connector egress fields must be non-empty",
+            ));
+        }
+        Ok(Self {
+            connector_id,
+            operation,
+            semantics,
+        })
+    }
+
+    /// Returns the connector identity.
+    pub fn connector_id(&self) -> &str {
+        &self.connector_id
+    }
+
+    /// Returns the connector method.
+    pub fn operation(&self) -> &str {
+        &self.operation
+    }
+
+    /// Returns the declared retry contract.
+    pub fn semantics(&self) -> EffectDeliverySemantics {
+        self.semantics
+    }
+}
+
+/// Carries one claimed connector delivery outside the Dispatch actor.
+#[derive(Clone, Debug)]
+pub struct EgressTask {
+    /// Identifies the retry-stable external effect.
+    pub effect_key: String,
+    /// Identifies the connector child.
+    pub connector_id: String,
+    /// Names the connector method.
+    pub operation: String,
+    /// Carries the published event payload.
+    pub payload: Map<String, Value>,
+    /// Carries the authored connector options.
+    pub options: Map<String, Value>,
+    /// Carries the stable connector idempotency key.
+    pub idempotency_key: String,
+    /// Selects the durable retry contract.
+    pub semantics: EffectDeliverySemantics,
+}
+
+/// Reports the terminal result of one connector call.
+#[derive(Clone, Debug)]
+pub enum EgressExecution {
+    /// Carries a connector result object.
+    Completed(Map<String, Value>),
+    /// Carries a retry-safe connector failure message.
+    Failed(String),
+}
+
+/// Delivers one claimed connector operation outside the Dispatch actor.
+pub trait EgressExecutor: Send + Sync + 'static {
+    /// Calls a connector and must observe the supplied cancellation token.
+    fn execute(&self, task: EgressTask, cancellation: CancellationToken) -> EgressExecution;
 }
 
 /// Runs direct-model agents with no external capability grants.
@@ -273,6 +357,12 @@ pub struct RuntimeStatus {
     pub active_agents: usize,
     /// States the configured agent execution capacity.
     pub agent_capacity: usize,
+    /// Counts active connector deliveries.
+    pub active_egress: usize,
+    /// States the configured connector delivery capacity.
+    pub egress_capacity: usize,
+    /// Counts planned or retry-ready connector deliveries.
+    pub pending_egress: usize,
     /// Counts active waits.
     pub active_waits: usize,
     /// Counts pending deferred publications.
@@ -309,7 +399,7 @@ impl RuntimeWake {
     }
 }
 
-/// Owns Dispatch, agent lanes, and future connector lanes.
+/// Owns Dispatch, agent lanes, and connector delivery lanes.
 pub struct Runtime {
     sender: mpsc::Sender<RuntimeCommand>,
     wake: RuntimeWake,
@@ -325,7 +415,7 @@ impl Runtime {
         database_path: impl AsRef<Path>,
         revision: ProjectRevision,
     ) -> Result<Self, RuntimeError> {
-        Self::start_inner(database_path.as_ref(), revision, None)
+        Self::start_inner(database_path.as_ref(), revision, None, None)
     }
 
     /// Opens a durable Dispatch actor with four parallel agent slots.
@@ -334,13 +424,36 @@ impl Runtime {
         revision: ProjectRevision,
         executor: Arc<dyn AgentExecutor>,
     ) -> Result<Self, RuntimeError> {
-        Self::start_inner(database_path.as_ref(), revision, Some(executor))
+        Self::start_inner(database_path.as_ref(), revision, Some(executor), None)
+    }
+
+    /// Opens a durable Dispatch actor with agent and connector worker lanes.
+    ///
+    /// Each map entry binds one published event type to one connector method.
+    /// The project revision still decides which enabled agent may publish it.
+    pub fn start_with_executors(
+        database_path: impl AsRef<Path>,
+        revision: ProjectRevision,
+        agent_executor: Arc<dyn AgentExecutor>,
+        egress_executor: Arc<dyn EgressExecutor>,
+        connector_egress: BTreeMap<String, ConnectorEgress>,
+    ) -> Result<Self, RuntimeError> {
+        Self::start_inner(
+            database_path.as_ref(),
+            revision,
+            Some(agent_executor),
+            Some(EgressServices {
+                executor: egress_executor,
+                connector_egress,
+            }),
+        )
     }
 
     fn start_inner(
         database_path: &Path,
         revision: ProjectRevision,
         executor: Option<Arc<dyn AgentExecutor>>,
+        egress: Option<EgressServices>,
     ) -> Result<Self, RuntimeError> {
         let routes = revision
             .routes()
@@ -370,6 +483,7 @@ impl Runtime {
                     actor_sender,
                     actor_wake,
                     executor,
+                    egress,
                 )
             })
             .map_err(|error| RuntimeError::new(format!("cannot start dispatch actor: {error}")))?;
@@ -459,6 +573,12 @@ enum RuntimeCommand {
         execution: AgentExecution,
         retry_policy: RetryPolicy,
     },
+    EgressFinished {
+        claim: EgressDeliveryClaim,
+        effect: Effect,
+        execution: EgressExecution,
+        retry_policy: RetryPolicy,
+    },
 }
 
 struct ActorState {
@@ -466,10 +586,24 @@ struct ActorState {
     routes: Vec<Route>,
     archive: ProjectRevisionStore,
     active_agents: BTreeMap<String, ActiveAgent>,
+    active_egress: BTreeMap<String, ActiveEgress>,
+    egress: Option<EgressServices>,
 }
 
 struct ActiveAgent {
     claim: QueueClaim,
+    cancellation: CancellationToken,
+    heartbeat_at_ms: i64,
+    thread: thread::JoinHandle<()>,
+}
+
+struct EgressServices {
+    executor: Arc<dyn EgressExecutor>,
+    connector_egress: BTreeMap<String, ConnectorEgress>,
+}
+
+struct ActiveEgress {
+    claim: EgressDeliveryClaim,
     cancellation: CancellationToken,
     heartbeat_at_ms: i64,
     thread: thread::JoinHandle<()>,
@@ -484,12 +618,15 @@ fn run_actor(
     sender: mpsc::Sender<RuntimeCommand>,
     wake: RuntimeWake,
     executor: Option<Arc<dyn AgentExecutor>>,
+    egress: Option<EgressServices>,
 ) {
     let mut state = ActorState {
         revision,
         routes,
         archive,
         active_agents: BTreeMap::new(),
+        active_egress: BTreeMap::new(),
+        egress,
     };
     if refresh_actor_state(&mut dispatch, &mut state, &sender, executor.as_ref()).unwrap_or(false) {
         wake.signal();
@@ -533,6 +670,11 @@ fn run_actor(
                         .cancellation
                         .cancel(zeta_agent::AbortReason::Cancelled);
                 }
+                for active in state.active_egress.values() {
+                    let _cancelled = active
+                        .cancellation
+                        .cancel(zeta_agent::AbortReason::Cancelled);
+                }
                 let _sent = reply.send(Ok(()));
                 return;
             }
@@ -566,8 +708,40 @@ fn run_actor(
                     wake.signal();
                 }
             }
+            Received::Command(RuntimeCommand::EgressFinished {
+                claim,
+                effect,
+                execution,
+                retry_policy,
+            }) => {
+                let key = claim.token().as_str().to_owned();
+                let Some(active) = state.active_egress.remove(&key) else {
+                    continue;
+                };
+                let _joined = active.thread.join();
+                let changed = commit_egress_execution(
+                    &mut dispatch,
+                    &claim,
+                    &effect,
+                    execution,
+                    retry_policy,
+                )
+                .and_then(|changed| {
+                    let refreshed =
+                        refresh_actor_state(&mut dispatch, &mut state, &sender, executor.as_ref())?;
+                    Ok(changed || refreshed)
+                })
+                .unwrap_or(false);
+                if changed {
+                    wake.signal();
+                }
+            }
             Received::Deadline => {
                 let changed = renew_due_agents(&mut dispatch, &mut state)
+                    .and_then(|renewed_agents| {
+                        let renewed_egress = renew_due_egress(&mut dispatch, &mut state)?;
+                        Ok(renewed_agents || renewed_egress)
+                    })
                     .and_then(|renewed| {
                         let refreshed = refresh_actor_state(
                             &mut dispatch,
@@ -622,12 +796,23 @@ fn next_actor_deadline(
     let durable = dispatch
         .next_deadline_ms(now_ms)
         .map_err(|error| RuntimeError::new(error.to_string()))?;
-    let heartbeat = state
+    let egress = dispatch
+        .next_egress_deadline_ms(now_ms)
+        .map_err(|error| RuntimeError::new(error.to_string()))?;
+    let agent_heartbeat = state
         .active_agents
         .values()
         .map(|active| active.heartbeat_at_ms)
         .min();
-    Ok([durable, heartbeat].into_iter().flatten().min())
+    let egress_heartbeat = state
+        .active_egress
+        .values()
+        .map(|active| active.heartbeat_at_ms)
+        .min();
+    Ok([durable, egress, agent_heartbeat, egress_heartbeat]
+        .into_iter()
+        .flatten()
+        .min())
 }
 
 fn reload_actor(state: &mut ActorState, revision: ProjectRevision) -> Result<(), RuntimeError> {
@@ -672,9 +857,11 @@ fn refresh_actor_state(
     sender: &mpsc::Sender<RuntimeCommand>,
     executor: Option<&Arc<dyn AgentExecutor>>,
 ) -> Result<bool, RuntimeError> {
-    let changed = advance_actor_state(dispatch, &state.routes)?;
-    let claimed = fill_agent_lane(dispatch, state, sender, executor)?;
-    Ok(changed || claimed)
+    let advanced = advance_actor_state(dispatch, &state.routes)?;
+    let planned = plan_pending_egress(dispatch, state)?;
+    let claimed_agents = fill_agent_lane(dispatch, state, sender, executor)?;
+    let claimed_egress = fill_egress_lane(dispatch, state, sender)?;
+    Ok(advanced || planned || claimed_agents || claimed_egress)
 }
 
 fn advance_actor_state(dispatch: &mut Dispatch, routes: &[Route]) -> Result<bool, RuntimeError> {
@@ -682,11 +869,14 @@ fn advance_actor_state(dispatch: &mut Dispatch, routes: &[Route]) -> Result<bool
     let reconciled = dispatch
         .reconcile_expired_claims(now_ms)
         .map_err(|error| RuntimeError::new(error.to_string()))?;
+    let reconciled_egress = dispatch
+        .reconcile_expired_egress_delivery_claims(now_ms)
+        .map_err(|error| RuntimeError::new(error.to_string()))?;
     let due = dispatch
         .advance_due(now_ms, DUE_ADVANCE_LIMIT, || Ok(runtime_identity(now_ms)))
         .map_err(|error| RuntimeError::new(error.to_string()))?;
     let routed = route_unrouted(dispatch, routes)?;
-    Ok(reconciled > 0 || !due.is_empty() || routed > 0)
+    Ok(reconciled > 0 || reconciled_egress > 0 || !due.is_empty() || routed > 0)
 }
 
 fn fill_agent_lane(
@@ -785,6 +975,355 @@ fn fill_agent_lane(
         );
     }
     Ok(claimed)
+}
+
+fn plan_pending_egress(dispatch: &mut Dispatch, state: &ActorState) -> Result<bool, RuntimeError> {
+    let Some(services) = &state.egress else {
+        return Ok(false);
+    };
+    let events = dispatch
+        .list_events(&EventFilter::default())
+        .map_err(|error| RuntimeError::new(error.to_string()))?;
+    let mut changed = false;
+    for event in events {
+        let Some(agent_slug) = event.source.strip_prefix("agent:") else {
+            continue;
+        };
+        let Some((revision_id, queue_item_id)) = published_event_origin(dispatch, &event)? else {
+            continue;
+        };
+        let revision = if revision_id == state.revision.revision_id() {
+            state.revision.clone()
+        } else {
+            state
+                .archive
+                .load(&revision_id)
+                .map_err(|error| RuntimeError::new(error.to_string()))?
+                .ok_or_else(|| {
+                    RuntimeError::new(format!(
+                        "the egress project revision is unavailable: {revision_id}"
+                    ))
+                })?
+        };
+        let Some(agent) = revision.agent(agent_slug) else {
+            return Err(RuntimeError::new(format!(
+                "the egress agent is absent from revision {revision_id}: {agent_slug}"
+            )));
+        };
+        let Some(binding) = agent
+            .egress
+            .iter()
+            .find(|binding| binding.event == event.event_type)
+        else {
+            continue;
+        };
+        let Some(connector) = services.connector_egress.get(&binding.event) else {
+            continue;
+        };
+        let idempotency_key = match &binding.idempotency_key {
+            Some(template) => zeta_dispatch::render_event_template(template, &event)
+                .map_err(|error| RuntimeError::new(error.to_string()))?,
+            None => format!("{}:{}", connector.connector_id(), event.id),
+        };
+        let mut params = Map::new();
+        params.insert(
+            "connector_id".to_owned(),
+            Value::String(connector.connector_id().to_owned()),
+        );
+        params.insert(
+            "connector_operation".to_owned(),
+            Value::String(connector.operation().to_owned()),
+        );
+        params.insert(
+            "event_type".to_owned(),
+            Value::String(event.event_type.clone()),
+        );
+        params.insert("payload".to_owned(), Value::Object(event.payload.clone()));
+        params.insert("options".to_owned(), Value::Object(binding.options.clone()));
+        params.insert("idempotency_key".to_owned(), Value::String(idempotency_key));
+        params.insert(
+            "project_revision".to_owned(),
+            Value::String(revision_id.clone()),
+        );
+        let operation = format!(
+            "connector:{}:{}",
+            connector.connector_id(),
+            connector.operation()
+        );
+        let key = effect_key(&event.id, &operation, &params)
+            .map_err(|error| RuntimeError::new(error.to_string()))?;
+        let planned = planned_egress_effect(
+            runtime_identity(current_time_ms()?),
+            &event,
+            queue_item_id.as_deref(),
+            &key,
+            &operation,
+            connector.semantics(),
+            params,
+        );
+        let outcome = dispatch
+            .append_trusted_event(planned)
+            .map_err(|error| RuntimeError::new(error.to_string()))?;
+        changed |= outcome.inserted;
+    }
+    Ok(changed)
+}
+
+fn published_event_origin(
+    dispatch: &Dispatch,
+    event: &Event,
+) -> Result<Option<(String, Option<String>)>, RuntimeError> {
+    let chain = dispatch
+        .causal_chain(&event.id)
+        .map_err(|error| RuntimeError::new(error.to_string()))?;
+    for ancestor in chain.into_iter().rev() {
+        if ancestor.event_type != "runtime.attempt.completed" {
+            continue;
+        }
+        let Some(revision_id) = ancestor
+            .payload
+            .get("project_revision")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+        else {
+            return Ok(None);
+        };
+        let queue_item_id = ancestor
+            .payload
+            .get("queue_item_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        return Ok(Some((revision_id.to_owned(), queue_item_id)));
+    }
+    Ok(None)
+}
+
+fn planned_egress_effect(
+    identity: RuntimeEventIdentity,
+    source: &Event,
+    queue_item_id: Option<&str>,
+    effect_key: &str,
+    operation: &str,
+    semantics: EffectDeliverySemantics,
+    params: Map<String, Value>,
+) -> Event {
+    let mut payload = Map::new();
+    payload.insert(
+        "effect_key".to_owned(),
+        Value::String(effect_key.to_owned()),
+    );
+    payload.insert("operation".to_owned(), Value::String(operation.to_owned()));
+    payload.insert(
+        "semantics".to_owned(),
+        Value::String(effect_semantics_name(semantics).to_owned()),
+    );
+    payload.insert("scope".to_owned(), Value::String(source.id.clone()));
+    payload.insert(
+        "queue_item_id".to_owned(),
+        queue_item_id
+            .map(|value| Value::String(value.to_owned()))
+            .unwrap_or(Value::Null),
+    );
+    payload.insert("params".to_owned(), Value::Object(params));
+    payload.insert("status".to_owned(), Value::String("planned".to_owned()));
+    Event {
+        id: identity.id().to_owned(),
+        event_type: "runtime.effect.planned".to_owned(),
+        source: "zeta".to_owned(),
+        payload,
+        idempotency_key: Some(format!("runtime.effect.planned:{effect_key}")),
+        caused_by: Some(source.id.clone()),
+        session_id: source.session_id.clone(),
+        run_id: source.run_id.clone(),
+        turn_id: source.turn_id.clone(),
+        timestamp_ms: identity.timestamp_ms(),
+        cursor: None,
+    }
+}
+
+fn effect_semantics_name(semantics: EffectDeliverySemantics) -> &'static str {
+    match semantics {
+        EffectDeliverySemantics::IdempotentWithKey => "idempotent_with_key",
+        EffectDeliverySemantics::ConnectorDeduplicated => "connector_deduplicated",
+        EffectDeliverySemantics::AtLeastOnce => "at_least_once",
+        EffectDeliverySemantics::UnsafeToRetry => "unsafe_to_retry",
+    }
+}
+
+fn fill_egress_lane(
+    dispatch: &mut Dispatch,
+    state: &mut ActorState,
+    sender: &mpsc::Sender<RuntimeCommand>,
+) -> Result<bool, RuntimeError> {
+    let Some(services) = &state.egress else {
+        return Ok(false);
+    };
+    let mut claimed = false;
+    while state.active_egress.len() < EGRESS_CAPACITY {
+        let now_ms = current_time_ms()?;
+        let token = ClaimToken::new(next_event_id("egress_claim")).map_err(|error| {
+            RuntimeError::new(format!("cannot create native egress claim: {error}"))
+        })?;
+        let Some((claim, _effect)) = dispatch
+            .claim_next_egress_delivery(EGRESS_WORKER_NAME, token, EGRESS_LEASE_MS, now_ms)
+            .map_err(|error| RuntimeError::new(error.to_string()))?
+        else {
+            break;
+        };
+        claimed = true;
+        let effect = match dispatch.start_claimed_egress_delivery(
+            &claim,
+            now_ms,
+            runtime_identity(now_ms),
+        ) {
+            Ok(effect) => effect,
+            Err(error) => return Err(RuntimeError::new(error.to_string())),
+        };
+        let task = match build_egress_task(&effect) {
+            Ok(task) => task,
+            Err(error) => {
+                commit_egress_execution(
+                    dispatch,
+                    &claim,
+                    &effect,
+                    EgressExecution::Failed(error.to_string()),
+                    RetryPolicy::default(),
+                )?;
+                continue;
+            }
+        };
+        let cancellation = CancellationToken::new();
+        let worker_cancellation = cancellation.clone();
+        let worker_executor = Arc::clone(&services.executor);
+        let worker_sender = sender.clone();
+        let worker_claim = claim.clone();
+        let worker_effect = effect.clone();
+        let retry_policy = RetryPolicy::default();
+        let thread = match thread::Builder::new()
+            .name(format!("zeta-egress-{}", task.connector_id))
+            .spawn(move || {
+                let execution = match panic::catch_unwind(AssertUnwindSafe(|| {
+                    worker_executor.execute(task, worker_cancellation)
+                })) {
+                    Ok(execution) => execution,
+                    Err(_panic) => {
+                        EgressExecution::Failed("the native connector executor panicked".to_owned())
+                    }
+                };
+                let _sent = worker_sender.send(RuntimeCommand::EgressFinished {
+                    claim: worker_claim,
+                    effect: worker_effect,
+                    execution,
+                    retry_policy,
+                });
+            }) {
+            Ok(thread) => thread,
+            Err(error) => {
+                commit_egress_execution(
+                    dispatch,
+                    &claim,
+                    &effect,
+                    EgressExecution::Failed(format!(
+                        "cannot start native connector worker: {error}"
+                    )),
+                    retry_policy,
+                )?;
+                continue;
+            }
+        };
+        state.active_egress.insert(
+            claim.token().as_str().to_owned(),
+            ActiveEgress {
+                claim,
+                cancellation,
+                heartbeat_at_ms: now_ms.saturating_add(EGRESS_HEARTBEAT_MS),
+                thread,
+            },
+        );
+    }
+    Ok(claimed)
+}
+
+fn build_egress_task(effect: &Effect) -> Result<EgressTask, RuntimeError> {
+    let value = |field: &'static str| {
+        effect
+            .params()
+            .get(field)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| RuntimeError::new(format!("egress effect lacks {field}")))
+    };
+    let object = |field: &'static str| {
+        effect
+            .params()
+            .get(field)
+            .and_then(Value::as_object)
+            .cloned()
+            .ok_or_else(|| RuntimeError::new(format!("egress effect lacks {field}")))
+    };
+    Ok(EgressTask {
+        effect_key: effect.key().to_owned(),
+        connector_id: value("connector_id")?,
+        operation: value("connector_operation")?,
+        payload: object("payload")?,
+        options: object("options")?,
+        idempotency_key: value("idempotency_key")?,
+        semantics: effect.semantics(),
+    })
+}
+
+fn commit_egress_execution(
+    dispatch: &mut Dispatch,
+    claim: &EgressDeliveryClaim,
+    effect: &Effect,
+    execution: EgressExecution,
+    retry_policy: RetryPolicy,
+) -> Result<bool, RuntimeError> {
+    let now_ms = current_time_ms()?;
+    match execution {
+        EgressExecution::Completed(result) => dispatch
+            .complete_claimed_egress_delivery(claim, now_ms, runtime_identity(now_ms), result)
+            .map_err(|error| RuntimeError::new(error.to_string()))?,
+        EgressExecution::Failed(detail) => {
+            let mut result = Map::new();
+            result.insert("error".to_owned(), Value::String(detail));
+            if effect.semantics() == EffectDeliverySemantics::UnsafeToRetry {
+                dispatch
+                    .mark_claimed_egress_delivery_ambiguous(
+                        claim,
+                        now_ms,
+                        runtime_identity(now_ms),
+                        result,
+                    )
+                    .map_err(|error| RuntimeError::new(error.to_string()))?;
+            } else {
+                let retry_at = if retry_policy.permits_retry_after(effect.delivery_attempts()) {
+                    let delay = retry_policy
+                        .delay_ms(effect.delivery_attempts())
+                        .map_err(|error| RuntimeError::new(error.to_string()))?;
+                    let delay = i64::try_from(delay)
+                        .map_err(|_error| RuntimeError::new("egress retry delay is too large"))?;
+                    Some(now_ms.checked_add(delay).ok_or_else(|| {
+                        RuntimeError::new("egress retry time is outside the Unix range")
+                    })?)
+                } else {
+                    None
+                };
+                dispatch
+                    .fail_claimed_egress_delivery(
+                        claim,
+                        now_ms,
+                        runtime_identity(now_ms),
+                        result,
+                        retry_at,
+                    )
+                    .map_err(|error| RuntimeError::new(error.to_string()))?;
+            }
+        }
+    }
+    Ok(true)
 }
 
 fn build_agent_task(
@@ -949,6 +1488,28 @@ fn renew_due_agents(dispatch: &mut Dispatch, state: &mut ActorState) -> Result<b
     Ok(changed)
 }
 
+fn renew_due_egress(dispatch: &mut Dispatch, state: &mut ActorState) -> Result<bool, RuntimeError> {
+    let now_ms = current_time_ms()?;
+    let mut changed = false;
+    for active in state.active_egress.values_mut() {
+        if active.heartbeat_at_ms > now_ms {
+            continue;
+        }
+        let renewed = dispatch
+            .renew_egress_delivery_claim(&active.claim, EGRESS_LEASE_MS, now_ms)
+            .map_err(|error| RuntimeError::new(error.to_string()))?;
+        if renewed {
+            active.heartbeat_at_ms = now_ms.saturating_add(EGRESS_HEARTBEAT_MS);
+            changed = true;
+        } else {
+            let _cancelled = active
+                .cancellation
+                .cancel(zeta_agent::AbortReason::Cancelled);
+        }
+    }
+    Ok(changed)
+}
+
 fn route_unrouted(dispatch: &mut Dispatch, routes: &[Route]) -> Result<usize, RuntimeError> {
     let event_ids = dispatch
         .unrouted_ingress_events()
@@ -1005,11 +1566,29 @@ fn status(
             publication.status() == zeta_dispatch::DeferredPublicationStatus::Pending
         })
         .count();
+    let pending_egress = dispatch
+        .list_effects()
+        .map_err(|error| RuntimeError::new(error.to_string()))?
+        .into_iter()
+        .filter(|effect| {
+            effect.operation().starts_with("connector:")
+                && matches!(
+                    effect.status(),
+                    EffectStatus::Planned | EffectStatus::Failed
+                )
+                && effect
+                    .available_at()
+                    .is_some_and(|available_at| available_at <= now_ms)
+        })
+        .count();
     Ok(RuntimeStatus {
         wake_epoch: wake.epoch(),
         queue,
         active_agents: state.active_agents.len(),
         agent_capacity: AGENT_CAPACITY,
+        active_egress: state.active_egress.len(),
+        egress_capacity: EGRESS_CAPACITY,
+        pending_egress,
         active_waits,
         pending_publications,
         next_deadline_ms: dispatch
@@ -1103,6 +1682,55 @@ mod tests {
         instructions: mpsc::Sender<String>,
     }
 
+    struct PublishingExecutor;
+
+    impl AgentExecutor for PublishingExecutor {
+        fn execute(&self, _task: AgentTask, _cancellation: CancellationToken) -> AgentExecution {
+            AgentExecution::Completed(AttemptCompletion::new(
+                "2026-08-13T00:00:00Z",
+                zeta_dispatch::AttemptCompletionDisposition::Succeeded,
+                Map::new(),
+                vec![zeta_dispatch::AttemptControl::publish(
+                    "publish-message",
+                    "message.send",
+                    serde_json::json!({"text": "hello"})
+                        .as_object()
+                        .expect("message payload")
+                        .clone(),
+                    None,
+                    0,
+                )],
+            ))
+        }
+    }
+
+    struct CaptureEgressExecutor {
+        tasks: mpsc::Sender<EgressTask>,
+    }
+
+    impl EgressExecutor for CaptureEgressExecutor {
+        fn execute(&self, task: EgressTask, _cancellation: CancellationToken) -> EgressExecution {
+            let _sent = self.tasks.send(task);
+            EgressExecution::Completed(Map::new())
+        }
+    }
+
+    struct BlockingEgressExecutor {
+        tasks: mpsc::Sender<EgressTask>,
+        releases: Mutex<mpsc::Receiver<()>>,
+    }
+
+    impl EgressExecutor for BlockingEgressExecutor {
+        fn execute(&self, task: EgressTask, _cancellation: CancellationToken) -> EgressExecution {
+            let _sent = self.tasks.send(task);
+            let release = self.releases.lock().expect("egress release state").recv();
+            if release.is_err() {
+                return EgressExecution::Failed("the egress test stopped".to_owned());
+            }
+            EgressExecution::Completed(Map::new())
+        }
+    }
+
     impl AgentExecutor for CaptureExecutor {
         fn execute(&self, task: AgentTask, _cancellation: CancellationToken) -> AgentExecution {
             let _sent = self.instructions.send(task.agent.instructions);
@@ -1194,6 +1822,128 @@ mod tests {
             .expect("queued work must execute");
         assert!(instructions.contains("Work."));
         assert!(!instructions.contains("Replacement work."));
+        runtime.shutdown().expect("runtime shutdown");
+    }
+
+    #[test]
+    fn egress_lane_delivers_a_published_event_after_its_effect_starts() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let agents = temporary.path().join("agents");
+        fs::create_dir(&agents).expect("agents directory");
+        fs::write(
+            agents.join("worker.md"),
+            "---\nname: Worker\ndescription: Routes events.\naccepts: [example.created]\npublishes:\n  - event: message.send\n    with: {channel: test}\n    idempotency_key: 'message:{id}'\n---\nWork.\n",
+        )
+        .expect("agent source");
+        let revision = ProjectRevision::load(temporary.path()).expect("project revision");
+        let (sender, receiver) = mpsc::channel();
+        let connector = ConnectorEgress::new(
+            "messages",
+            "message.send",
+            EffectDeliverySemantics::IdempotentWithKey,
+        )
+        .expect("connector egress");
+        let runtime = Runtime::start_with_executors(
+            temporary.path().join("zeta.sqlite3"),
+            revision,
+            Arc::new(PublishingExecutor),
+            Arc::new(CaptureEgressExecutor { tasks: sender }),
+            BTreeMap::from([("message.send".to_owned(), connector)]),
+        )
+        .expect("reactive runtime");
+        let _ingress = runtime.ingest(draft(1)).expect("ingress");
+        let task = match receiver.recv_timeout(Duration::from_secs(5)) {
+            Ok(task) => task,
+            Err(error) => panic!(
+                "connector delivery: {error}; status: {:?}",
+                runtime.status().expect("runtime status")
+            ),
+        };
+        assert_eq!(task.connector_id, "messages");
+        assert_eq!(task.operation, "message.send");
+        assert_eq!(task.payload["text"], "hello");
+        assert_eq!(task.options["channel"], "test");
+        assert!(task.idempotency_key.starts_with("message:runtime_"));
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let status = runtime.status().expect("runtime status");
+            if status.pending_egress == 0 && status.active_egress == 0 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "connector work must complete"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        runtime.shutdown().expect("runtime shutdown");
+    }
+
+    #[test]
+    fn egress_status_reports_active_and_ready_deliveries() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let agents = temporary.path().join("agents");
+        fs::create_dir(&agents).expect("agents directory");
+        fs::write(
+            agents.join("worker.md"),
+            "---\nname: Worker\ndescription: Routes events.\naccepts: [example.created]\npublishes:\n  - event: message.send\n    with: {channel: test}\n---\nWork.\n",
+        )
+        .expect("agent source");
+        let revision = ProjectRevision::load(temporary.path()).expect("project revision");
+        let (task_sender, task_receiver) = mpsc::channel();
+        let (release_sender, release_receiver) = mpsc::channel();
+        let connector = ConnectorEgress::new(
+            "messages",
+            "message.send",
+            EffectDeliverySemantics::IdempotentWithKey,
+        )
+        .expect("connector egress");
+        let runtime = Runtime::start_with_executors(
+            temporary.path().join("zeta.sqlite3"),
+            revision,
+            Arc::new(PublishingExecutor),
+            Arc::new(BlockingEgressExecutor {
+                tasks: task_sender,
+                releases: Mutex::new(release_receiver),
+            }),
+            BTreeMap::from([("message.send".to_owned(), connector)]),
+        )
+        .expect("reactive runtime");
+        for id in 0..5 {
+            runtime.ingest(draft(id)).expect("ingress");
+        }
+        for _ in 0..4 {
+            task_receiver
+                .recv_timeout(Duration::from_secs(5))
+                .expect("active connector delivery");
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let status = runtime.status().expect("runtime status");
+            if status.active_egress == 4 && status.pending_egress == 1 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "egress status must show four active and one ready delivery: {status:?}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        for _ in 0..5 {
+            release_sender.send(()).expect("release connector delivery");
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let status = runtime.status().expect("runtime status");
+            if status.active_egress == 0 && status.pending_egress == 0 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "connector deliveries must complete: {status:?}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
         runtime.shutdown().expect("runtime shutdown");
     }
 

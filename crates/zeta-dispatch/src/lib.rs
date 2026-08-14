@@ -10,7 +10,7 @@ pub use dispatch::{
     Attempt, AttemptCompletion, AttemptCompletionDisposition, AttemptControl, AttemptFailure,
     CancellationFinalizationIdentities, CancellationIdentities, CancellationOutcome,
     CancellationStatus, DeferredPublication, DeferredPublicationStatus, Effect,
-    EffectDeliverySemantics, EffectStatus, LockLease, QueueClaim, QueueItem,
+    EffectDeliverySemantics, EffectStatus, EgressDeliveryClaim, LockLease, QueueClaim, QueueItem,
     ResourceCancellationOutcome, ResourceCancellationStatus, ResourceKind, RoutingOutcome,
     RuntimeEventIdentity, Session, SessionActiveWait, SessionActivityStatus, SessionLatestAttempt,
     SessionMessageIdentities, SessionMessageRequest, StartedAttempt, SubmittedSessionMessage, Wait,
@@ -23,7 +23,10 @@ pub use identity::{
     unhandled_queue_item_idempotency_key, wait_handle, AttemptId, ClaimToken, PublishHandle,
     QueueItemId, RunId, RuntimeIdParseError, SessionId, WaitHandle,
 };
-pub use routing::{route_event, EventPattern, Route, RouteDecision, SessionError, SessionRule};
+pub use routing::{
+    render_event_template, route_event, EventPattern, Route, RouteDecision, SessionError,
+    SessionRule,
+};
 pub use sqlite::{Dispatch, DispatchError};
 pub use state::{
     classify_attempt_failure_code, AttemptFailureCode, AttemptStatus, FailureClass,

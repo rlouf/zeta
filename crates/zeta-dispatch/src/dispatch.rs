@@ -925,6 +925,8 @@ pub struct Effect {
     pub(crate) planned_event_id: String,
     pub(crate) terminal_event_id: Option<String>,
     pub(crate) updated_at: i64,
+    pub(crate) delivery_attempts: u32,
+    pub(crate) available_at: Option<i64>,
 }
 
 impl Effect {
@@ -981,6 +983,47 @@ impl Effect {
     /// Returns the latest lifecycle time in Unix milliseconds.
     pub fn updated_at(&self) -> i64 {
         self.updated_at
+    }
+
+    /// Returns the number of connector delivery attempts for this effect.
+    pub fn delivery_attempts(&self) -> u32 {
+        self.delivery_attempts
+    }
+
+    /// Returns the earliest time when a failed delivery may run again.
+    pub fn available_at(&self) -> Option<i64> {
+        self.available_at
+    }
+}
+
+/// Describes one live claim for a connector egress delivery.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EgressDeliveryClaim {
+    pub(crate) effect_key: String,
+    pub(crate) worker_name: String,
+    pub(crate) token: ClaimToken,
+    pub(crate) claimed_until: i64,
+}
+
+impl EgressDeliveryClaim {
+    /// Returns the durable effect identity for the claimed delivery.
+    pub fn effect_key(&self) -> &str {
+        &self.effect_key
+    }
+
+    /// Returns the worker identity that owns the delivery.
+    pub fn worker_name(&self) -> &str {
+        &self.worker_name
+    }
+
+    /// Returns the claim fence token.
+    pub fn token(&self) -> &ClaimToken {
+        &self.token
+    }
+
+    /// Returns the exclusive claim deadline in Unix milliseconds.
+    pub fn claimed_until(&self) -> i64 {
+        self.claimed_until
     }
 }
 

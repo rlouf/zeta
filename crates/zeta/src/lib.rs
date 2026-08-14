@@ -32,8 +32,9 @@ pub use project_revision::{
     ActiveAgent, ActiveProjectStatus, Project, ProjectError, ProjectRevision, ProjectRevisionStore,
 };
 pub use runtime::{
-    AgentExecution, AgentExecutionError, AgentExecutor, AgentTask, IngressResult,
-    NativeAgentExecutor, Runtime, RuntimeError, RuntimeStatus, RuntimeWake,
+    AgentExecution, AgentExecutionError, AgentExecutor, AgentTask, ConnectorEgress,
+    EgressExecution, EgressExecutor, EgressTask, IngressResult, NativeAgentExecutor, Runtime,
+    RuntimeError, RuntimeStatus, RuntimeWake,
 };
 pub use runtime_services::{
     prepare_agent, CallbackDraftRecorder, CallbackObserver, CancellationToken, ExecutorSelection,

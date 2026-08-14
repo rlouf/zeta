@@ -104,7 +104,7 @@ impl SessionRule {
         let suffix = match self {
             SessionRule::Shared => None,
             SessionRule::PerEvent => Some(event.id.clone()),
-            SessionRule::Template(template) => Some(render_session_template(template, event)?),
+            SessionRule::Template(template) => Some(render_event_template(template, event)?),
         };
         Ok(SessionId::for_agent(agent_id, suffix.as_deref()))
     }
@@ -272,7 +272,10 @@ impl fmt::Display for SessionError {
 
 impl std::error::Error for SessionError {}
 
-fn render_session_template(template: &str, event: &Event) -> Result<String, SessionError> {
+/// Renders one event-field template for a stable runtime key.
+///
+/// The renderer uses the same field and format rules as route session keys.
+pub fn render_event_template(template: &str, event: &Event) -> Result<String, SessionError> {
     render_template_text(template, event, 0)
 }
 
@@ -344,7 +347,12 @@ fn resolve_template_field(field: &str, event: &Event) -> Result<TemplateValue, S
         return Ok(TemplateValue::Json(value));
     }
 
-    let Some(mut value) = event.payload.get(&root).cloned() else {
+    let Some(mut value) = event
+        .payload
+        .get(&root)
+        .cloned()
+        .or_else(|| event_attribute(event, &root))
+    else {
         return Err(SessionError::MissingField(field.to_owned()));
     };
     for part in parts {

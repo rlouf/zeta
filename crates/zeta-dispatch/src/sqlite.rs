@@ -26,7 +26,7 @@ use crate::routing::SessionError;
 use crate::state::TransitionError;
 
 const BASE_EPOCH: i64 = 2;
-const PROJECTION_EPOCH: i64 = 7;
+const PROJECTION_EPOCH: i64 = 8;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 const CREATE_SCHEMA: &str = "
@@ -36,7 +36,7 @@ const CREATE_SCHEMA: &str = "
         projection_epoch INTEGER NOT NULL CHECK (projection_epoch >= 0)
     ) STRICT;
     INSERT INTO dispatch_schema (singleton, base_epoch, projection_epoch)
-    VALUES (1, 2, 7);
+    VALUES (1, 2, 8);
 
     CREATE TABLE journal_entries (
         cursor INTEGER PRIMARY KEY CHECK (cursor > 0),
@@ -209,15 +209,30 @@ const CREATE_PROJECTIONS: &str = "
         planned_event_id TEXT NOT NULL UNIQUE CHECK (length(planned_event_id) > 0),
         terminal_event_id TEXT,
         updated_at INTEGER NOT NULL,
+        delivery_attempts INTEGER NOT NULL DEFAULT 0 CHECK (delivery_attempts >= 0),
+        available_at INTEGER,
         FOREIGN KEY (planned_event_id) REFERENCES journal_entries(event_id),
         FOREIGN KEY (terminal_event_id) REFERENCES journal_entries(event_id)
     ) STRICT;
     CREATE INDEX effects_retry_blocker
         ON effects(queue_item_id, semantics, status);
+    CREATE INDEX effects_egress_ready
+        ON effects(operation, status, available_at, effect_key);
+    CREATE TABLE effect_claims (
+        effect_key TEXT PRIMARY KEY CHECK (length(effect_key) > 0),
+        worker_name TEXT NOT NULL CHECK (length(worker_name) > 0),
+        claim_token TEXT NOT NULL UNIQUE CHECK (length(claim_token) > 0),
+        claimed_at INTEGER NOT NULL,
+        claimed_until INTEGER NOT NULL,
+        CHECK (claimed_until > claimed_at),
+        FOREIGN KEY (effect_key) REFERENCES effects(effect_key)
+            ON DELETE CASCADE
+    ) STRICT;
 ";
 
 const DROP_PROJECTIONS: &str = "
     DROP TABLE IF EXISTS recurring_schedules;
+    DROP TABLE IF EXISTS effect_claims;
     DROP TABLE IF EXISTS effects;
     DROP TABLE IF EXISTS scheduled_events;
     DROP TABLE IF EXISTS deferred_publications;
@@ -811,6 +826,7 @@ fn initialize_schema(connection: &mut Connection) -> Result<(), DispatchError> {
         "waits",
         "deferred_publications",
         "effects",
+        "effect_claims",
     ] {
         if !has_table(&tables, expected) {
             projections_present = false;

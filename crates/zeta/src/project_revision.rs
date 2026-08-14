@@ -227,6 +227,12 @@ impl ProjectRevision {
                 )));
             }
         }
+        if !agents.values().any(|agent| agent.enabled) {
+            return Err(ProjectError::new(format!(
+                "agents directory has no enabled agents: {}",
+                agents_directory.display()
+            )));
+        }
         Self::from_agents(project_root, agents)
     }
 
@@ -369,6 +375,12 @@ impl ProjectRevision {
         if self.agents.is_empty() {
             return Err(ProjectError::new(format!(
                 "active project '{}' has no agents",
+                path.display()
+            )));
+        }
+        if !self.agents.values().any(|agent| agent.enabled) {
+            return Err(ProjectError::new(format!(
+                "active project '{}' has no enabled agents",
                 path.display()
             )));
         }
@@ -623,6 +635,15 @@ mod tests {
 
         let error = ProjectRevision::load(temporary.path()).expect_err("link must fail");
         assert!(error.to_string().contains("symbolic link"));
+    }
+
+    #[test]
+    fn load_rejects_a_project_with_no_enabled_agents() {
+        let temporary = TempDir::new().expect("temporary directory");
+        write_agent(temporary.path(), "worker", false);
+
+        let error = ProjectRevision::load(temporary.path()).expect_err("project must fail");
+        assert!(error.to_string().contains("no enabled agents"));
     }
 
     #[test]

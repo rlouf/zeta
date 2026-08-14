@@ -102,6 +102,9 @@ The JSON document has `schema` equal to `zeta.status` and `version` equal to
 `revision_id` and an `agents` list. Each list item has `slug`, `name`,
 `description`, `schedule_count`, and `source_address`.
 
+The runtime status includes egress lane activity when its host configures
+connector egress.
+
 The CLI can add fields in later versions. Scripts must ignore fields they do
 not use. A breaking change requires a new version.
 

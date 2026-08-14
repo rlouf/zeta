@@ -4354,6 +4354,247 @@ fn effect_projection_codecs_transitions_and_rebuild_are_stable() {
     }
 }
 
+fn plan_connector_egress(dispatch: &mut Dispatch, source: &str) -> String {
+    let params: Map<String, Value> = serde_json::from_value(json!({
+        "connector_id": "mail",
+        "connector_operation": "mail.send",
+        "payload": {"text": "hello"},
+        "options": {},
+        "idempotency_key": format!("mail:{source}"),
+    }))
+    .unwrap();
+    let key = effect_key(source, "connector:mail:mail.send", &params).unwrap();
+    let mut payload = Map::new();
+    payload.insert("effect_key".to_owned(), Value::String(key.clone()));
+    payload.insert(
+        "operation".to_owned(),
+        Value::String("connector:mail:mail.send".to_owned()),
+    );
+    payload.insert(
+        "semantics".to_owned(),
+        Value::String("idempotent_with_key".to_owned()),
+    );
+    payload.insert("scope".to_owned(), Value::String(source.to_owned()));
+    payload.insert("params".to_owned(), Value::Object(params));
+    payload.insert("status".to_owned(), Value::String("planned".to_owned()));
+    dispatch
+        .append_trusted_event(Event {
+            id: format!("egress-planned-{source}"),
+            event_type: "runtime.effect.planned".to_owned(),
+            source: "zeta".to_owned(),
+            payload,
+            idempotency_key: Some(format!("runtime.effect.planned:{key}")),
+            caused_by: Some(source.to_owned()),
+            session_id: None,
+            run_id: None,
+            turn_id: None,
+            timestamp_ms: 1,
+            cursor: None,
+        })
+        .unwrap();
+    key
+}
+
+#[test]
+fn egress_delivery_claim_retries_with_the_same_effect_key() {
+    let mut dispatch = Dispatch::open_in_memory().unwrap();
+    let key = plan_connector_egress(&mut dispatch, "source-1");
+
+    let token = ClaimToken::new("egress-claim-1").unwrap();
+    let (claim, _) = dispatch
+        .claim_next_egress_delivery("test", token, 100, 10)
+        .unwrap()
+        .unwrap();
+    let effect = dispatch
+        .start_claimed_egress_delivery(
+            &claim,
+            10,
+            RuntimeEventIdentity::new("egress-start-1", 10).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(effect.delivery_attempts(), 1);
+    assert_eq!(
+        dispatch
+            .reconcile_expired_egress_delivery_claims(111)
+            .unwrap(),
+        1
+    );
+    let (claim, _) = dispatch
+        .claim_next_egress_delivery(
+            "test",
+            ClaimToken::new("egress-recovery-claim").unwrap(),
+            100,
+            111,
+        )
+        .unwrap()
+        .unwrap();
+    let effect = dispatch
+        .start_claimed_egress_delivery(
+            &claim,
+            111,
+            RuntimeEventIdentity::new("egress-recovered", 111).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(effect.delivery_attempts(), 1);
+    dispatch
+        .fail_claimed_egress_delivery(
+            &claim,
+            112,
+            RuntimeEventIdentity::new("egress-failed-1", 112).unwrap(),
+            serde_json::from_value(json!({"error": "offline"})).unwrap(),
+            Some(100),
+        )
+        .unwrap();
+    assert!(dispatch
+        .claim_next_egress_delivery("test", ClaimToken::new("egress-claim-2").unwrap(), 100, 99)
+        .unwrap()
+        .is_none());
+
+    let (claim, _) = dispatch
+        .claim_next_egress_delivery("test", ClaimToken::new("egress-claim-3").unwrap(), 100, 100)
+        .unwrap()
+        .unwrap();
+    let effect = dispatch
+        .start_claimed_egress_delivery(
+            &claim,
+            100,
+            RuntimeEventIdentity::new("egress-start-2", 100).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(effect.delivery_attempts(), 2);
+    dispatch
+        .complete_claimed_egress_delivery(
+            &claim,
+            101,
+            RuntimeEventIdentity::new("egress-completed-2", 101).unwrap(),
+            Map::new(),
+        )
+        .unwrap();
+    let effects = dispatch.list_effects().unwrap();
+    assert_eq!(effects.len(), 1);
+    assert_eq!(effects[0].key(), key);
+    assert_eq!(effects[0].status(), EffectStatus::Completed);
+    assert_eq!(effects[0].delivery_attempts(), 2);
+}
+
+#[test]
+fn egress_delivery_recovers_after_a_runtime_restart() {
+    let temporary = tempdir().unwrap();
+    let database = temporary.path().join("dispatch.sqlite3");
+    let key;
+    {
+        let mut dispatch = Dispatch::open(&database).unwrap();
+        key = plan_connector_egress(&mut dispatch, "source-restart");
+        let (claim, _) = dispatch
+            .claim_next_egress_delivery(
+                "test",
+                ClaimToken::new("egress-restart-claim-1").unwrap(),
+                100,
+                10,
+            )
+            .unwrap()
+            .unwrap();
+        let effect = dispatch
+            .start_claimed_egress_delivery(
+                &claim,
+                10,
+                RuntimeEventIdentity::new("egress-restart-start-1", 10).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(effect.delivery_attempts(), 1);
+        assert_eq!(effect.params()["idempotency_key"], "mail:source-restart");
+    }
+
+    let mut dispatch = Dispatch::open(&database).unwrap();
+    assert_eq!(
+        dispatch.list_effects().unwrap()[0].status(),
+        EffectStatus::Started
+    );
+    assert_eq!(
+        dispatch
+            .reconcile_expired_egress_delivery_claims(111)
+            .unwrap(),
+        1
+    );
+    let (claim, _) = dispatch
+        .claim_next_egress_delivery(
+            "test",
+            ClaimToken::new("egress-restart-claim-2").unwrap(),
+            100,
+            111,
+        )
+        .unwrap()
+        .unwrap();
+    let effect = dispatch
+        .start_claimed_egress_delivery(
+            &claim,
+            111,
+            RuntimeEventIdentity::new("egress-restart-start-2", 111).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(effect.key(), key);
+    assert_eq!(effect.delivery_attempts(), 1);
+    assert_eq!(effect.params()["idempotency_key"], "mail:source-restart");
+    dispatch
+        .complete_claimed_egress_delivery(
+            &claim,
+            112,
+            RuntimeEventIdentity::new("egress-restart-completed", 112).unwrap(),
+            Map::new(),
+        )
+        .unwrap();
+    assert_eq!(
+        dispatch.list_effects().unwrap()[0].status(),
+        EffectStatus::Completed
+    );
+}
+
+#[test]
+fn egress_delivery_stops_after_a_final_retry_safe_failure() {
+    let mut dispatch = Dispatch::open_in_memory().unwrap();
+    let key = plan_connector_egress(&mut dispatch, "source-final-failure");
+    let (claim, _) = dispatch
+        .claim_next_egress_delivery(
+            "test",
+            ClaimToken::new("egress-final-claim").unwrap(),
+            100,
+            10,
+        )
+        .unwrap()
+        .unwrap();
+    dispatch
+        .start_claimed_egress_delivery(
+            &claim,
+            10,
+            RuntimeEventIdentity::new("egress-final-start", 10).unwrap(),
+        )
+        .unwrap();
+    dispatch
+        .fail_claimed_egress_delivery(
+            &claim,
+            11,
+            RuntimeEventIdentity::new("egress-final-failed", 11).unwrap(),
+            serde_json::from_value(json!({"error": "offline"})).unwrap(),
+            None,
+        )
+        .unwrap();
+
+    assert!(dispatch
+        .claim_next_egress_delivery(
+            "test",
+            ClaimToken::new("egress-final-claim-2").unwrap(),
+            100,
+            12,
+        )
+        .unwrap()
+        .is_none());
+    let effect = &dispatch.list_effects().unwrap()[0];
+    assert_eq!(effect.key(), key);
+    assert_eq!(effect.status(), EffectStatus::Failed);
+    assert_eq!(effect.delivery_attempts(), 1);
+    assert!(effect.terminal_event_id().is_some());
+}
+
 #[test]
 fn unsafe_effect_failure_projects_as_a_retry_blocker() {
     let case = scripted_case("effects", "unsafe_failure_becomes_ambiguous");

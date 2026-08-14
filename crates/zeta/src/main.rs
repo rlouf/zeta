@@ -320,6 +320,8 @@ fn print_command_error(error: &str) {
         Some("Run 'zeta reload --project-root <PROJECT_ROOT>' first.")
     } else if error.contains("different project root") {
         Some("Use the same --project-root and --state-dir for each command.")
+    } else if error.contains("no enabled agents") {
+        Some("Set enabled: true in at least one Markdown agent file.")
     } else if error.contains("agents directory") {
         Some("Create <PROJECT_ROOT>/agents/ and add one Markdown agent file.")
     } else if error.contains("runtime is degraded") {
@@ -840,6 +842,10 @@ fn print_human_status(report: &StatusReport) {
         println!(
             "Agent lane: {}/{} active",
             dispatch.active_agents, dispatch.agent_capacity
+        );
+        println!(
+            "Egress lane: {}/{} active, {} ready",
+            dispatch.active_egress, dispatch.egress_capacity, dispatch.pending_egress
         );
         let queue = dispatch
             .queue

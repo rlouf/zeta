@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -14,16 +14,18 @@ use serde_json::{Map, Value};
 use tokio::sync::watch;
 use uuid::Uuid;
 use zeta_dispatch::{
-    effect_key, route_event, AttemptCompletion, AttemptFailure, AttemptFailureCode, ClaimToken,
-    Dispatch, Effect, EffectDeliverySemantics, EffectStatus, EgressDeliveryClaim, QueueClaim,
-    RetryPolicy, Route, RuntimeEventIdentity,
+    AttemptCompletion, AttemptFailure, AttemptFailureCode, ClaimToken, Dispatch, Effect,
+    EffectDeliverySemantics, EffectStatus, EgressDeliveryClaim, QueueClaim, RetryPolicy, Route,
+    RuntimeEventIdentity, effect_key, route_event,
 };
 use zeta_journal::{DraftEvent, Event, EventFilter};
 use zeta_manifest::AgentSpec;
 
 use crate::{
-    attempt_completion, host_model, CallbackDraftRecorder, CallbackObserver, CancellationToken,
-    ProjectRevision, ProjectRevisionStore, Scheduler, SystemClock, UuidIdSource,
+    CallbackDraftRecorder, CallbackObserver, CancellationToken, ProjectRevision,
+    ProjectRevisionStore, PythonModelGateway, PythonProviderCatalog, PythonProviderHost,
+    PythonToolExecutor, Scheduler, SharedPythonProviderHost, SystemClock, UuidIdSource,
+    attempt_completion, host_model,
 };
 
 const DUE_ADVANCE_LIMIT: usize = 128;
@@ -66,6 +68,10 @@ struct AgentTask {
     pub queue_item_id: String,
     /// Supplies the project directory from that revision.
     pub project_root: PathBuf,
+    /// Identifies the exact provider catalog revision for this task.
+    pub project_revision_id: String,
+    /// Carries the selected Python provider catalog for this task.
+    pub providers: PythonProviderCatalog,
     /// Carries the exact declared agent source.
     pub agent: AgentSpec,
     /// Carries the retained triggering event.
@@ -185,11 +191,75 @@ type EgressRunner =
 /// This executor supports an agent-level OpenAI-compatible model declaration.
 /// It preserves the durable attempt boundary before native tool execution is
 /// enabled in a later lane.
-#[derive(Clone, Copy, Debug, Default)]
-struct AgentExecutor;
+#[derive(Clone, Default)]
+struct ProviderHosts {
+    hosts: Arc<Mutex<BTreeMap<String, SharedPythonProviderHost>>>,
+}
+
+impl ProviderHosts {
+    fn host_for(&self, task: &AgentTask) -> Result<Option<SharedPythonProviderHost>, String> {
+        if task.providers.models().is_empty()
+            && task.providers.tools().is_empty()
+            && task.providers.connectors().is_empty()
+        {
+            return Ok(None);
+        }
+        let mut hosts = self
+            .hosts
+            .lock()
+            .map_err(|_error| "the Python provider host registry is unavailable".to_owned())?;
+        if let Some(host) = hosts.get(&task.project_revision_id) {
+            return Ok(Some(Arc::clone(host)));
+        }
+        let host =
+            PythonProviderHost::start(&task.project_root).map_err(|error| error.to_string())?;
+        if host.catalog() != &task.providers {
+            return Err(format!(
+                "Python provider catalog changed after revision {}",
+                task.project_revision_id
+            ));
+        }
+        let host = Arc::new(Mutex::new(host));
+        hosts.insert(task.project_revision_id.clone(), Arc::clone(&host));
+        Ok(Some(host))
+    }
+}
+
+/// Runs one agent with Python providers when its selected model is Python-owned.
+#[derive(Clone, Default)]
+struct AgentExecutor {
+    provider_hosts: ProviderHosts,
+}
 
 impl AgentExecutor {
     fn execute(&self, task: AgentTask, cancellation: CancellationToken) -> AgentExecution {
+        let provider_host = match self.provider_hosts.host_for(&task) {
+            Ok(host) => host,
+            Err(error) => {
+                return AgentExecution::Failed(AgentExecutionError::new(
+                    error,
+                    AttemptFailureCode::AgentExecutionFailed,
+                ));
+            }
+        };
+        let python_model = task.agent.model.as_ref().and_then(|model| {
+            task.providers
+                .models()
+                .get(model.profile())
+                .map(|provider| (model.profile().to_owned(), provider.tool_profile.clone()))
+        });
+        if let (Some(host), Some((model, tool_profile))) = (provider_host.as_ref(), python_model) {
+            return self.execute_python(task, cancellation, Arc::clone(host), model, tool_profile);
+        }
+        self.execute_native(task, cancellation, provider_host)
+    }
+
+    fn execute_native(
+        &self,
+        task: AgentTask,
+        cancellation: CancellationToken,
+        provider_host: Option<SharedPythonProviderHost>,
+    ) -> AgentExecution {
         let model = match host_model::resolve(
             task.agent.model.as_ref(),
             &task.project_root,
@@ -274,7 +344,24 @@ impl AgentExecutor {
         for event_type in &task.agent.publishes {
             publishable_events.insert(event_type.clone(), Value::Null);
         }
-        let capabilities = selected_native_capabilities(&task.agent, model.tool_profile);
+        let capabilities = match provider_host.as_ref() {
+            Some(_host) if !task.providers.tools().is_empty() => {
+                match selected_native_and_python_capabilities(
+                    &task.agent,
+                    &task.providers,
+                    model.tool_profile,
+                ) {
+                    Ok(capabilities) => capabilities,
+                    Err(error) => {
+                        return AgentExecution::Failed(AgentExecutionError::new(
+                            error,
+                            AttemptFailureCode::AgentExecutionFailed,
+                        ));
+                    }
+                }
+            }
+            Some(_) | None => selected_native_capabilities(&task.agent, model.tool_profile),
+        };
         let allowed_capabilities = capabilities
             .iter()
             .map(|capability| capability.canonical.id.clone())
@@ -339,6 +426,155 @@ impl AgentExecutor {
         let mut recorder = CallbackDraftRecorder::new(|_draft: &DraftEvent| Ok::<(), String>(()));
         let mut ids = UuidIdSource::new("agent");
         let clock = SystemClock;
+        let result = match provider_host.filter(|_host| !task.providers.tools().is_empty()) {
+            Some(host) => {
+                let mut executor = PythonToolExecutor::new(host, executor);
+                runtime.block_on(
+                    zeta_agent::AgentRunner::new(
+                        &capabilities,
+                        &mut gateway,
+                        &mut executor,
+                        &mut observer,
+                        &mut recorder,
+                        &mut ids,
+                        &cancellation,
+                        &clock,
+                    )
+                    .run(&invocation),
+                )
+            }
+            None => runtime.block_on(
+                zeta_agent::AgentRunner::new(
+                    &capabilities,
+                    &mut gateway,
+                    &mut executor,
+                    &mut observer,
+                    &mut recorder,
+                    &mut ids,
+                    &cancellation,
+                    &clock,
+                )
+                .run(&invocation),
+            ),
+        };
+        let result = match result {
+            Ok(result) => result,
+            Err(error) => {
+                return AgentExecution::Failed(AgentExecutionError::new(
+                    error.to_string(),
+                    AttemptFailureCode::AgentExecutionFailed,
+                ));
+            }
+        };
+        match attempt_completion(format_timestamp_now(), &result) {
+            Ok(completion) => AgentExecution::Completed(completion),
+            Err(error) => AgentExecution::Failed(AgentExecutionError::new(
+                error.to_string(),
+                AttemptFailureCode::AgentExecutionFailed,
+            )),
+        }
+    }
+
+    fn execute_python(
+        &self,
+        task: AgentTask,
+        cancellation: CancellationToken,
+        host: SharedPythonProviderHost,
+        model: String,
+        tool_profile: Option<Map<String, Value>>,
+    ) -> AgentExecution {
+        let base_directory = agent_base_directory(&task.agent, &task.project_root);
+        let Some(base_directory) = base_directory.to_str() else {
+            return AgentExecution::Failed(AgentExecutionError::new(
+                "the agent base directory is not valid UTF-8",
+                AttemptFailureCode::AgentExecutionFailed,
+            ));
+        };
+        let mut timeline_event = Map::new();
+        timeline_event.insert("id".to_owned(), Value::String(task.event.id.clone()));
+        timeline_event.insert(
+            "type".to_owned(),
+            Value::String(task.event.event_type.clone()),
+        );
+        timeline_event.insert(
+            "source".to_owned(),
+            Value::String(task.event.source.clone()),
+        );
+        timeline_event.insert(
+            "payload".to_owned(),
+            Value::Object(task.event.payload.clone()),
+        );
+        let context = serde_json::to_string(&Value::Object(timeline_event.clone()))
+            .unwrap_or_else(|_error| "{}".to_owned());
+        let mut publishable_events = Map::new();
+        for event_type in &task.agent.publishes {
+            publishable_events.insert(event_type.clone(), Value::Null);
+        }
+        let capabilities =
+            match selected_python_capabilities(&task.agent, &task.providers, tool_profile.as_ref())
+            {
+                Ok(capabilities) => capabilities,
+                Err(error) => {
+                    return AgentExecution::Failed(AgentExecutionError::new(
+                        error,
+                        AttemptFailureCode::AgentExecutionFailed,
+                    ));
+                }
+            };
+        let allowed_capabilities = capabilities
+            .iter()
+            .map(|capability| capability.canonical.id.clone())
+            .collect();
+        let invocation = zeta_agent::AgentInvocation {
+            objective: format!("Handle the event {}.", task.event.event_type),
+            timeline: vec![timeline_event],
+            context,
+            system_prompt: Some(task.agent.instructions.clone()),
+            allowed_capabilities,
+            tool_profile: zeta_agent::ToolProfile::Native,
+            max_model_calls: 25,
+            model_name: Some(model.clone()),
+            model_url: None,
+            model_api: Some("python".to_owned()),
+            thinking: None,
+            model_session_id: Some(task.session_id.clone()),
+            max_tokens: 8_192,
+            tool_choice: Value::String("auto".to_owned()),
+            base_directory: Some(base_directory.to_owned()),
+            effect_scope: Some(task.queue_item_id.clone()),
+            source_queue_item_id: Some(task.queue_item_id.clone()),
+            source_agent_id: Some(task.agent.slug.clone()),
+            source_session_id: Some(task.session_id.clone()),
+            caused_by: Some(task.event.id.clone()),
+            event_source: format!("agent:{}", task.agent.slug),
+            session_id: Some(task.session_id.clone()),
+            run_id: Some(task.run_id.clone()),
+            turn_id: task.event.turn_id.clone(),
+            environment: zeta_agent::PromptEnvironment {
+                working_directory: base_directory.to_owned(),
+                calendar_date: Utc::now().date_naive().to_string(),
+            },
+            prompt_transform: zeta_agent::PromptTransform::None,
+            compaction_threshold_tokens: None,
+            deadline_ms: None,
+            publishable_events,
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build();
+        let Ok(runtime) = runtime else {
+            return AgentExecution::Failed(AgentExecutionError::new(
+                "the native agent runtime cannot start",
+                AttemptFailureCode::AgentExecutionFailed,
+            ));
+        };
+        let native = zeta_agent::NativeToolExecutor::new(zeta_agent::SystemCommandRunner);
+        let mut gateway = PythonModelGateway::new(Arc::clone(&host), model);
+        let mut executor = PythonToolExecutor::new(host, native);
+        let mut observer = CallbackObserver::new(|_observation: zeta_agent::Observation| {});
+        let mut recorder = CallbackDraftRecorder::new(|_draft: &DraftEvent| Ok::<(), String>(()));
+        let mut ids = UuidIdSource::new("agent");
+        let clock = SystemClock;
         let result = runtime.block_on(
             zeta_agent::AgentRunner::new(
                 &capabilities,
@@ -391,6 +627,95 @@ fn selected_native_capabilities(
     zeta_agent::resolve_capabilities(&selected, profile)
 }
 
+fn selected_python_capabilities(
+    agent: &AgentSpec,
+    providers: &PythonProviderCatalog,
+    tool_profile: Option<&Map<String, Value>>,
+) -> Result<Vec<zeta_agent::ResolvedCapability>, String> {
+    let selected = selected_capability_definitions(agent, providers)?;
+    let mut resolved = Vec::with_capacity(selected.len());
+    for capability in selected {
+        let model_name = tool_profile
+            .and_then(|profile| profile.get(capability.id.as_str()))
+            .and_then(Value::as_str)
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| capability.id.model_name())
+            .to_owned();
+        resolved.push(zeta_agent::ResolvedCapability {
+            model_name,
+            model_description: capability.description.clone(),
+            model_input_schema: capability.input_schema.clone(),
+            argument_adapter: zeta_agent::ArgumentAdapter::Identity,
+            canonical: capability,
+        });
+    }
+    Ok(resolved)
+}
+
+fn selected_native_and_python_capabilities(
+    agent: &AgentSpec,
+    providers: &PythonProviderCatalog,
+    profile: zeta_agent::ToolProfile,
+) -> Result<Vec<zeta_agent::ResolvedCapability>, String> {
+    let selected = selected_capability_definitions(agent, providers)?;
+    Ok(profile.resolve(&selected))
+}
+
+fn selected_capability_definitions(
+    agent: &AgentSpec,
+    providers: &PythonProviderCatalog,
+) -> Result<Vec<zeta_agent::Capability>, String> {
+    let native = zeta_agent::native_capabilities();
+    let mut selected = Vec::new();
+    if agent.tools_inherit {
+        selected.extend(native);
+        for provider in providers.tools().values() {
+            selected.push(python_capability(provider)?);
+        }
+        return Ok(selected);
+    }
+    for identifier in &agent.tools {
+        if let Some(provider) = providers.tools().get(identifier) {
+            selected.push(python_capability(provider)?);
+            continue;
+        }
+        let Some(capability) = native.iter().find(|capability| {
+            capability.id.as_str() == identifier || capability.id.model_name() == identifier
+        }) else {
+            return Err(format!(
+                "agent {:?} has unavailable tool {identifier:?}",
+                agent.slug
+            ));
+        };
+        selected.push(capability.clone());
+    }
+    Ok(selected)
+}
+
+fn python_capability(provider: &crate::PythonProvider) -> Result<zeta_agent::Capability, String> {
+    let id = provider
+        .id
+        .parse()
+        .map_err(|error: zeta_agent::AgentError| {
+            format!(
+                "Python tool {:?} has an invalid identifier: {error}",
+                provider.id
+            )
+        })?;
+    let input_schema = provider.input_schema.clone().unwrap_or_else(|| {
+        serde_json::json!({"type": "object", "additionalProperties": true})
+            .as_object()
+            .cloned()
+            .expect("the default Python tool schema is an object")
+    });
+    Ok(zeta_agent::Capability {
+        id,
+        description: format!("Run the {} tool.", provider.id),
+        input_schema,
+        delivery_semantics: None,
+    })
+}
+
 fn agent_base_directory(agent: &AgentSpec, project_root: &Path) -> PathBuf {
     let Some(base_directory) = agent.base_dir.as_deref() else {
         return project_root.to_path_buf();
@@ -416,7 +741,8 @@ fn agent_base_directory(agent: &AgentSpec, project_root: &Path) -> PathBuf {
 }
 
 fn built_in_agent_runner() -> Arc<AgentRunner> {
-    Arc::new(|task, cancellation| AgentExecutor.execute(task, cancellation))
+    let executor = AgentExecutor::default();
+    Arc::new(move |task, cancellation| executor.execute(task, cancellation))
 }
 
 /// Reports the result of one durably accepted ingress event.
@@ -1545,6 +1871,8 @@ fn build_agent_task(
     Ok(AgentTask {
         queue_item_id: claim.queue_item_id().as_str().to_owned(),
         project_root: revision.project_root().to_path_buf(),
+        project_revision_id: revision.revision_id().to_owned(),
+        providers: revision.providers().clone(),
         agent,
         event,
         session_id,
@@ -1811,6 +2139,39 @@ mod tests {
         )
         .expect("agent source");
         ProjectRevision::load(root).expect("project revision")
+    }
+
+    #[test]
+    fn python_model_profile_maps_canonical_tool_names() {
+        let agent = zeta_manifest::parse_agent(
+            "worker",
+            b"---\nname: Worker\ndescription: Uses a Python tool.\ntools: [web_search]\n---\nWork.\n",
+        )
+        .expect("agent source");
+        let providers: PythonProviderCatalog = serde_json::from_value(serde_json::json!({
+            "models": [],
+            "tools": [{
+                "id": "web_search",
+                "source": {"module": "test", "path": null, "distribution": null},
+                "fingerprint": "a".repeat(64),
+                "tool_profile": null,
+                "input_schema": {"type": "object"},
+                "output_schema": null
+            }],
+            "connectors": []
+        }))
+        .expect("provider catalog");
+        let profile = serde_json::json!({"web_search": "search"})
+            .as_object()
+            .expect("profile object")
+            .clone();
+
+        let capabilities = selected_python_capabilities(&agent, &providers, Some(&profile))
+            .expect("capabilities resolve");
+
+        assert_eq!(capabilities.len(), 1);
+        assert_eq!(capabilities[0].canonical.id.as_str(), "web_search");
+        assert_eq!(capabilities[0].model_name, "search");
     }
 
     fn draft(id: usize) -> DraftEvent {
@@ -2125,6 +2486,8 @@ mod tests {
         let task = AgentTask {
             queue_item_id: "queue-1".to_owned(),
             project_root: temporary.path().to_path_buf(),
+            project_revision_id: revision.revision_id().to_owned(),
+            providers: revision.providers().clone(),
             agent: revision.agent("worker").expect("worker").clone(),
             event: Event {
                 id: "event-1".to_owned(),
@@ -2143,7 +2506,7 @@ mod tests {
             run_id: "run-1".to_owned(),
             retry_policy: RetryPolicy::default(),
         };
-        let execution = AgentExecutor.execute(task, CancellationToken::new());
+        let execution = AgentExecutor::default().execute(task, CancellationToken::new());
         let AgentExecution::Completed(completion) = execution else {
             panic!("the native model agent must complete")
         };

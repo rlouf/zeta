@@ -141,7 +141,7 @@ class Slack:
     async def subscribe(self, request, context):
         return {
             "cursor": request["cursor"],
-            "event_type": request["event_type"],
+            "events": [{"text": "hello"}],
         }
 """,
     )
@@ -157,7 +157,7 @@ class Slack:
         },
     )
 
-    assert result == {"cursor": "cursor-1", "event_type": "slack.message"}
+    assert result == {"cursor": "cursor-1", "events": [{"text": "hello"}]}
 
 
 def test_serves_the_private_json_rpc_protocol(tmp_path: Path) -> None:

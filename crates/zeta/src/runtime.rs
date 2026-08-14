@@ -27,6 +27,7 @@ use crate::{
     PythonToolExecutor, Scheduler, SharedPythonProviderHost, SystemClock, UuidIdSource,
     attempt_completion, host_model,
 };
+use zeta_substrate::{canonical_json, hash_bytes};
 
 const DUE_ADVANCE_LIMIT: usize = 128;
 const AGENT_CAPACITY: usize = 4;
@@ -38,6 +39,8 @@ const EGRESS_LEASE_MS: u64 = 60_000;
 const EGRESS_HEARTBEAT_MS: i64 = 15_000;
 const EGRESS_WORKER_NAME: &str = "native-egress";
 const SCHEDULE_TICK_INTERVAL_MS: i64 = 30_000;
+const SUBSCRIPTION_TICK_INTERVAL_MS: i64 = 1_000;
+const SUBSCRIPTION_CURSOR_EVENT: &str = "runtime.connector.cursor";
 
 /// Reports a native runtime failure.
 #[derive(Debug)]
@@ -176,6 +179,28 @@ struct EgressTask {
     idempotency_key: String,
     /// Selects the durable retry contract.
     semantics: EffectDeliverySemantics,
+}
+
+/// Describes one connector subscription selected by an agent declaration.
+#[derive(Clone, Debug, PartialEq)]
+struct SubscriptionTarget {
+    /// Identifies one stable connector subscription configuration.
+    key: String,
+    /// Identifies the connector provider.
+    connector_id: String,
+    /// Names the event that this subscription may publish.
+    event_type: String,
+    /// Carries connector-specific subscription selection values.
+    filter: Map<String, Value>,
+    /// Derives the durable ingress identity from a received event.
+    idempotency_key: String,
+}
+
+/// Holds connector subscriptions and their durable cursors.
+struct SubscriptionServices {
+    provider_hosts: ProviderHosts,
+    targets: Vec<SubscriptionTarget>,
+    cursors: BTreeMap<String, Value>,
 }
 
 /// Reports the terminal result of one connector call.
@@ -842,12 +867,14 @@ impl Runtime {
     ) -> Result<Self, RuntimeError> {
         let provider_hosts = ProviderHosts::default();
         let agent_runner = built_in_agent_runner(provider_hosts.clone());
-        let egress = built_in_egress_services(&revision, provider_hosts)?;
+        let egress = built_in_egress_services(&revision, provider_hosts.clone())?;
+        let subscriptions = built_in_subscription_services(&revision, provider_hosts)?;
         Self::start_inner(
             database_path.as_ref(),
             revision,
             Some(agent_runner),
             Some(egress),
+            Some(subscriptions),
         )
     }
 
@@ -856,6 +883,7 @@ impl Runtime {
         revision: ProjectRevision,
         agent_runner: Option<Arc<AgentRunner>>,
         egress: Option<EgressServices>,
+        mut subscriptions: Option<SubscriptionServices>,
     ) -> Result<Self, RuntimeError> {
         let routes = revision
             .routes()
@@ -871,6 +899,9 @@ impl Runtime {
             .map_err(|error| RuntimeError::new(error.to_string()))?;
         let dispatch = Dispatch::open(database_path)
             .map_err(|error| RuntimeError::new(format!("cannot open native dispatch: {error}")))?;
+        if let Some(subscriptions) = subscriptions.as_mut() {
+            subscriptions.cursors = load_subscription_cursors(&dispatch)?;
+        }
         let (sender, receiver) = mpsc::channel();
         let (wake, _initial_receiver) = RuntimeWake::new();
         let actor_wake = wake.clone();
@@ -889,6 +920,7 @@ impl Runtime {
                     actor_wake,
                     agent_runner,
                     egress,
+                    subscriptions,
                 )
             })
             .map_err(|error| RuntimeError::new(format!("cannot start dispatch actor: {error}")))?;
@@ -904,7 +936,7 @@ impl Runtime {
         database_path: impl AsRef<Path>,
         revision: ProjectRevision,
     ) -> Result<Self, RuntimeError> {
-        Self::start_inner(database_path.as_ref(), revision, None, None)
+        Self::start_inner(database_path.as_ref(), revision, None, None, None)
     }
 
     #[cfg(test)]
@@ -913,7 +945,13 @@ impl Runtime {
         revision: ProjectRevision,
         agent_runner: Arc<AgentRunner>,
     ) -> Result<Self, RuntimeError> {
-        Self::start_inner(database_path.as_ref(), revision, Some(agent_runner), None)
+        Self::start_inner(
+            database_path.as_ref(),
+            revision,
+            Some(agent_runner),
+            None,
+            None,
+        )
     }
 
     #[cfg(test)]
@@ -932,6 +970,7 @@ impl Runtime {
                 runner: egress_runner,
                 targets,
             }),
+            None,
         )
     }
 
@@ -1036,10 +1075,12 @@ struct ActorState {
     routes: Vec<Route>,
     scheduler: Scheduler,
     next_schedule_tick_ms: i64,
+    next_subscription_tick_ms: i64,
     archive: ProjectRevisionStore,
     active_agents: BTreeMap<String, ActiveAgent>,
     active_egress: BTreeMap<String, ActiveEgress>,
     egress: Option<EgressServices>,
+    subscriptions: Option<SubscriptionServices>,
 }
 
 struct ActiveAgent {
@@ -1140,6 +1181,79 @@ fn egress_targets(
     Ok(targets)
 }
 
+fn built_in_subscription_services(
+    revision: &ProjectRevision,
+    provider_hosts: ProviderHosts,
+) -> Result<SubscriptionServices, RuntimeError> {
+    Ok(SubscriptionServices {
+        provider_hosts,
+        targets: subscription_targets(revision)?,
+        cursors: BTreeMap::new(),
+    })
+}
+
+fn subscription_targets(
+    revision: &ProjectRevision,
+) -> Result<Vec<SubscriptionTarget>, RuntimeError> {
+    let mut targets = BTreeMap::new();
+    for agent in revision.active_agents() {
+        let Some(spec) = revision.agent(&agent.slug) else {
+            continue;
+        };
+        for binding in &spec.ingress {
+            let Some(connector_id) = &binding.connector else {
+                continue;
+            };
+            let Some(idempotency_key) = &binding.idempotency_key else {
+                return Err(RuntimeError::new(format!(
+                    "agent {:?} has connector ingress without an idempotency key",
+                    spec.slug
+                )));
+            };
+            if !revision.providers().connectors().contains_key(connector_id) {
+                return Err(RuntimeError::new(format!(
+                    "agent {:?} selects unavailable connector {connector_id:?}",
+                    spec.slug
+                )));
+            }
+            let key = subscription_target_key(
+                connector_id,
+                &binding.event,
+                &binding.filter,
+                idempotency_key,
+            )?;
+            targets
+                .entry(key.clone())
+                .or_insert_with(|| SubscriptionTarget {
+                    key,
+                    connector_id: connector_id.clone(),
+                    event_type: binding.event.clone(),
+                    filter: binding.filter.clone(),
+                    idempotency_key: idempotency_key.clone(),
+                });
+        }
+    }
+    Ok(targets.into_values().collect())
+}
+
+fn subscription_target_key(
+    connector_id: &str,
+    event_type: &str,
+    filter: &Map<String, Value>,
+    idempotency_key: &str,
+) -> Result<String, RuntimeError> {
+    let value = serde_json::json!({
+        "connector": connector_id,
+        "event": event_type,
+        "filter": filter,
+        "idempotency_key": idempotency_key,
+    });
+    let bytes = canonical_json(&value).map_err(|error| {
+        RuntimeError::new(format!("cannot identify connector subscription: {error}"))
+    })?;
+    Ok(format!("subscription:{}", hash_bytes(&bytes)))
+}
+
 struct ActiveEgress {
     claim: EgressDeliveryClaim,
     cancellation: CancellationToken,
@@ -1158,17 +1272,25 @@ fn run_actor(
     wake: RuntimeWake,
     agent_runner: Option<Arc<AgentRunner>>,
     egress: Option<EgressServices>,
+    subscriptions: Option<SubscriptionServices>,
 ) {
     let now_ms = current_time_ms().unwrap_or(0);
+    let next_subscription_tick_ms = subscriptions
+        .as_ref()
+        .filter(|services| !services.targets.is_empty())
+        .map(|_services| now_ms)
+        .unwrap_or(i64::MAX);
     let mut state = ActorState {
         revision,
         routes,
         scheduler,
         next_schedule_tick_ms: now_ms,
+        next_subscription_tick_ms,
         archive,
         active_agents: BTreeMap::new(),
         active_egress: BTreeMap::new(),
         egress,
+        subscriptions,
     };
     if refresh_actor_state(&mut dispatch, &mut state, &sender, agent_runner.as_ref())
         .unwrap_or(false)
@@ -1304,6 +1426,12 @@ fn run_actor(
                 }
             }
             Received::Deadline => {
+                let subscribed = current_time_ms()
+                    .ok()
+                    .filter(|now_ms| *now_ms >= state.next_subscription_tick_ms)
+                    .map(|now_ms| poll_subscriptions(&mut dispatch, &mut state, now_ms))
+                    .transpose()
+                    .unwrap_or(false);
                 let scheduled = current_time_ms()
                     .ok()
                     .filter(|now_ms| *now_ms >= state.next_schedule_tick_ms)
@@ -1323,7 +1451,7 @@ fn run_actor(
                             &sender,
                             agent_runner.as_ref(),
                         )?;
-                        Ok(scheduled || renewed || refreshed)
+                        Ok(subscribed || scheduled || renewed || refreshed)
                     })
                     .unwrap_or(false);
                 if changed {
@@ -1389,6 +1517,7 @@ fn next_actor_deadline(
         agent_heartbeat,
         egress_heartbeat,
         Some(state.next_schedule_tick_ms),
+        Some(state.next_subscription_tick_ms),
     ]
     .into_iter()
     .flatten()
@@ -1407,6 +1536,14 @@ fn reload_actor(state: &mut ActorState, revision: ProjectRevision) -> Result<(),
         .map_err(|error| RuntimeError::new(error.to_string()))?;
     if let Some(egress) = state.egress.as_mut() {
         egress.targets = egress_targets(&revision)?;
+    }
+    if let Some(subscriptions) = state.subscriptions.as_mut() {
+        subscriptions.targets = subscription_targets(&revision)?;
+        state.next_subscription_tick_ms = if subscriptions.targets.is_empty() {
+            i64::MAX
+        } else {
+            current_time_ms()?
+        };
     }
     state.revision = revision;
     state.routes = routes;
@@ -1428,6 +1565,193 @@ fn tick_schedules(
         .map_err(|error| RuntimeError::new(error.to_string()))?;
     route_unrouted(dispatch, &state.routes)?;
     Ok(requested.len())
+}
+
+struct SubscriptionBatch {
+    events: Vec<Map<String, Value>>,
+    cursor: Option<Value>,
+}
+
+fn poll_subscriptions(
+    dispatch: &mut Dispatch,
+    state: &mut ActorState,
+    now_ms: i64,
+) -> Result<bool, RuntimeError> {
+    state.next_subscription_tick_ms = now_ms.saturating_add(SUBSCRIPTION_TICK_INTERVAL_MS);
+    let Some(services) = state.subscriptions.as_mut() else {
+        return Ok(false);
+    };
+    let targets = services.targets.clone();
+    let cursors = services.cursors.clone();
+    let provider_hosts = services.provider_hosts.clone();
+    let revision = state.revision.clone();
+    let routes = state.routes.clone();
+    let mut changed = false;
+    let mut advanced_cursors = Vec::new();
+    for target in targets {
+        let host = provider_hosts
+            .host_for_revision(
+                revision.project_root(),
+                revision.revision_id(),
+                revision.providers(),
+            )
+            .map_err(RuntimeError::new)?;
+        let Some(host) = host else {
+            return Err(RuntimeError::new(
+                "the connector provider host is unavailable",
+            ));
+        };
+        let mut request = Map::new();
+        request.insert(
+            "event_type".to_owned(),
+            Value::String(target.event_type.clone()),
+        );
+        request.insert("filter".to_owned(), Value::Object(target.filter.clone()));
+        if let Some(cursor) = cursors.get(&target.key) {
+            request.insert("cursor".to_owned(), cursor.clone());
+        }
+        let cancellation = CancellationToken::new();
+        let result = host
+            .lock()
+            .map_err(|_error| RuntimeError::new("the Python connector host is unavailable"))?
+            .subscribe(&target.connector_id, request, &cancellation)
+            .map_err(|error| RuntimeError::new(error.to_string()))?;
+        let batch = parse_subscription_batch(result)?;
+        for payload in batch.events {
+            let provisional = Event::from_draft(
+                &next_event_id("connector"),
+                now_ms,
+                DraftEvent {
+                    event_type: target.event_type.clone(),
+                    source: format!("connector:{}", target.connector_id),
+                    payload: payload.clone(),
+                    idempotency_key: None,
+                    caused_by: None,
+                    session_id: None,
+                    run_id: None,
+                    turn_id: None,
+                },
+            );
+            let idempotency_key =
+                zeta_dispatch::render_event_template(&target.idempotency_key, &provisional)
+                    .map_err(|error| RuntimeError::new(error.to_string()))?;
+            let outcome = ingest_and_route(
+                dispatch,
+                &routes,
+                DraftEvent {
+                    event_type: target.event_type.clone(),
+                    source: format!("connector:{}", target.connector_id),
+                    payload,
+                    idempotency_key: Some(idempotency_key),
+                    caused_by: None,
+                    session_id: None,
+                    run_id: None,
+                    turn_id: None,
+                },
+            )?;
+            changed |= outcome.inserted;
+        }
+        if let Some(cursor) = batch.cursor {
+            advanced_cursors.push((target.key, cursor));
+        }
+    }
+    let Some(services) = state.subscriptions.as_mut() else {
+        return Ok(changed);
+    };
+    for (key, cursor) in advanced_cursors {
+        record_subscription_cursor(dispatch, &key, &cursor, now_ms)?;
+        services.cursors.insert(key, cursor);
+        changed = true;
+    }
+    Ok(changed)
+}
+
+fn parse_subscription_batch(
+    mut value: Map<String, Value>,
+) -> Result<SubscriptionBatch, RuntimeError> {
+    let events = match value.remove("events") {
+        Some(Value::Array(events)) => events,
+        Some(_) | None => {
+            return Err(RuntimeError::new(
+                "Python connector subscription result has no events array",
+            ));
+        }
+    };
+    let cursor = value.remove("cursor");
+    if !value.is_empty() {
+        return Err(RuntimeError::new(
+            "Python connector subscription result has unknown fields",
+        ));
+    }
+    let mut payloads = Vec::with_capacity(events.len());
+    for event in events {
+        let Value::Object(payload) = event else {
+            return Err(RuntimeError::new(
+                "Python connector subscription events must be objects",
+            ));
+        };
+        payloads.push(payload);
+    }
+    Ok(SubscriptionBatch {
+        events: payloads,
+        cursor,
+    })
+}
+
+fn load_subscription_cursors(dispatch: &Dispatch) -> Result<BTreeMap<String, Value>, RuntimeError> {
+    let events = dispatch
+        .list_events(&EventFilter {
+            event_type: Some(SUBSCRIPTION_CURSOR_EVENT.to_owned()),
+            ..EventFilter::default()
+        })
+        .map_err(|error| RuntimeError::new(error.to_string()))?;
+    let mut cursors = BTreeMap::new();
+    for event in events {
+        if event.source != "runtime:connector" {
+            continue;
+        }
+        let Some(key) = event.payload.get("subscription").and_then(Value::as_str) else {
+            return Err(RuntimeError::new(
+                "a connector subscription cursor lacks its subscription identity",
+            ));
+        };
+        let Some(cursor) = event.payload.get("cursor") else {
+            return Err(RuntimeError::new(
+                "a connector subscription cursor lacks its cursor value",
+            ));
+        };
+        cursors.insert(key.to_owned(), cursor.clone());
+    }
+    Ok(cursors)
+}
+
+fn record_subscription_cursor(
+    dispatch: &mut Dispatch,
+    key: &str,
+    cursor: &Value,
+    now_ms: i64,
+) -> Result<(), RuntimeError> {
+    let mut payload = Map::new();
+    payload.insert("subscription".to_owned(), Value::String(key.to_owned()));
+    payload.insert("cursor".to_owned(), cursor.clone());
+    let event = Event::from_draft(
+        &next_event_id("connector_cursor"),
+        now_ms,
+        DraftEvent {
+            event_type: SUBSCRIPTION_CURSOR_EVENT.to_owned(),
+            source: "runtime:connector".to_owned(),
+            payload,
+            idempotency_key: None,
+            caused_by: None,
+            session_id: None,
+            run_id: None,
+            turn_id: None,
+        },
+    );
+    dispatch
+        .append_trusted_event(event)
+        .map_err(|error| RuntimeError::new(error.to_string()))?;
+    Ok(())
 }
 
 fn ingest_and_route(
@@ -2302,6 +2626,24 @@ mod tests {
         assert_eq!(capabilities.len(), 1);
         assert_eq!(capabilities[0].canonical.id.as_str(), "web_search");
         assert_eq!(capabilities[0].model_name, "search");
+    }
+
+    #[test]
+    fn parses_connector_subscription_events_and_cursor() {
+        let batch = parse_subscription_batch(
+            serde_json::json!({
+                "events": [{"message_ts": "1", "text": "hello"}],
+                "cursor": "cursor-1"
+            })
+            .as_object()
+            .expect("subscription result object")
+            .clone(),
+        )
+        .expect("subscription batch");
+
+        assert_eq!(batch.events.len(), 1);
+        assert_eq!(batch.events[0]["text"], "hello");
+        assert_eq!(batch.cursor, Some(Value::String("cursor-1".to_owned())));
     }
 
     fn draft(id: usize) -> DraftEvent {

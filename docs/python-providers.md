@@ -56,6 +56,9 @@ from zeta_plugin import connector
 class Slack:
     async def deliver(self, request, context):
         return {"delivery_id": send(request["payload"])}
+
+    async def subscribe(self, request, context):
+        return {"events": [], "cursor": request.get("cursor")}
 ```
 
 Select delivery from an agent. Add `connector` to the relevant `publishes`
@@ -80,9 +83,21 @@ operation, payload, options, and idempotency key. It also gives the stable
 effect key in `context`. The runtime retries failed delivery under its normal
 effect policy.
 
-The host exposes `subscribe` for connector code. The runtime does not yet map
-subscription input to durable Zeta events. Use Zeta ingress until that mapping
-has a declared contract.
+Use `connector` in `accepts` to select a subscription:
+
+```markdown
+accepts:
+  - event: slack.message.received
+    connector: slack
+    filter:
+      channel_ids: [C123]
+    idempotency_key: "slack:{message_ts}"
+```
+
+Zeta calls `subscribe` once per binding. The request contains `event_type`,
+`filter`, and the last cursor when one exists. Return an `events` array of
+payload objects. Return `cursor` when the connector can resume from that
+position. Zeta stores the cursor only after it stores every event in the batch.
 
 Raise `ProviderError` when a provider must return a stable failure code. Set
 `retryable=True` when the connector can safely retry the same request.

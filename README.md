@@ -29,6 +29,9 @@ The Rust native CLI now has an explicit project lifecycle. It validates,
 activates, starts, inspects, and stops one project revision. See the
 [Native CLI guide](docs/native-cli.md).
 
+Python packages can add model, tool, and connector providers. See the
+[Python provider guide](docs/python-providers.md).
+
 ## Give an agent its first responsibility
 
 Zeta needs Python 3.11+ and Codex. Run `codex login` once before you start.

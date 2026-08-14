@@ -42,6 +42,9 @@ A model or tool receives `request` and `context`. A connector class must define
 `deliver`, `subscribe`, or both. Zeta creates one connector instance per host.
 Raise `ProviderError` to set a stable error code and its retryable state.
 
+A subscription receives an event type, filter, and optional cursor. It returns
+an `events` array of payload objects and an optional replacement cursor.
+
 ## Select a connector
 
 An agent selects an egress connector in its `publishes` declaration:
@@ -63,6 +66,17 @@ Call `publish_event` with the message payload.
 Zeta calls `Slack.deliver` after it persists the published event. The connector
 gets an operation, payload, options, and idempotency key. The host also gives
 the connector the stable effect key in `context`.
+
+For inbound events, select the connector from `accepts`:
+
+```yaml
+accepts:
+  - event: slack.message.received
+    connector: slack
+    filter:
+      channel_ids: [C123]
+    idempotency_key: "slack:{message_ts}"
+```
 
 ## Ship a provider distribution
 

@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import pytest
-
-from zeta_plugin import DeclarationError, ProviderKind, connector, model, provider_registration, tool
+from zeta_plugin import (
+    DeclarationError,
+    ProviderKind,
+    connector,
+    model,
+    provider_registration,
+    tool,
+)
 
 
 def test_tool_declaration_attaches_metadata() -> None:

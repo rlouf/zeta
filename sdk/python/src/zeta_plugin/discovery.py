@@ -2,15 +2,26 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import importlib.util
-from pathlib import Path
 import sys
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
+from importlib import metadata
+from pathlib import Path
 from types import ModuleType
-from typing import Iterable, Mapping
+from typing import Any
 
-from .declarations import ProviderKind, ProviderRegistration, provider_registration
+from .declarations import (
+    DeclarationError,
+    ProviderCollection,
+    ProviderDeclaration,
+    ProviderKind,
+    ProviderRegistration,
+    provider_registration,
+)
+
+ENTRY_POINT_GROUP = "zeta.providers"
 
 
 class DiscoveryError(RuntimeError):
@@ -22,7 +33,18 @@ class ProviderSource:
     """The source module for one discovered provider."""
 
     module: str
-    path: Path
+    path: Path | None
+    distribution: str | None = None
+
+    @property
+    def location(self) -> str:
+        """Get a human-readable source location."""
+
+        if self.path is not None:
+            return str(self.path)
+        if self.distribution is not None:
+            return self.distribution
+        return self.module
 
 
 @dataclass(frozen=True)
@@ -56,9 +78,14 @@ class ProviderCatalog:
         if previous is not None:
             raise DiscoveryError(
                 f"Duplicate {declaration.kind.value} provider {declaration.identifier!r}: "
-                f"{previous.source.path} and {provider.source.path}"
+                f"{previous.source.location} and {provider.source.location}"
             )
         providers[declaration.identifier] = provider
+
+    def contains(self, kind: ProviderKind, identifier: str) -> bool:
+        """Report whether one category contains an identifier."""
+
+        return identifier in self._providers[kind]
 
     @property
     def models(self) -> Mapping[str, LoadedProvider]:
@@ -84,6 +111,62 @@ class ProviderCatalog:
         return self._providers[kind].copy()
 
 
+class _CategoryRegistration:
+    """Registers one category for an explicit setup function."""
+
+    def __init__(
+        self, catalog: ProviderCatalog, source: ProviderSource, kind: ProviderKind
+    ) -> None:
+        self._catalog = catalog
+        self._source = source
+        self._kind = kind
+
+    def register(
+        self,
+        identifier: str,
+        target: Any,
+        *,
+        tool_profile: Mapping[str, str] | None = None,
+        input_schema: Mapping[str, Any] | None = None,
+        output_schema: Mapping[str, Any] | None = None,
+    ) -> Any:
+        """Register one provider from an explicit setup function."""
+
+        if not callable(target):
+            raise DeclarationError("A provider target must be callable")
+        if self._kind is ProviderKind.CONNECTOR:
+            if not isinstance(target, type):
+                raise DeclarationError("A connector target must be a class")
+            if not any(
+                callable(getattr(target, name, None))
+                for name in ("deliver", "subscribe")
+            ):
+                raise DeclarationError(
+                    "A connector class must define deliver or subscribe"
+                )
+        declaration = ProviderDeclaration(
+            kind=self._kind,
+            identifier=identifier,
+            tool_profile=tool_profile,
+            input_schema=input_schema,
+            output_schema=output_schema,
+        )
+        registration = ProviderRegistration(declaration=declaration, target=target)
+        self._catalog.add(
+            LoadedProvider(registration=registration, source=self._source)
+        )
+        return target
+
+
+class ProviderRegistrationApi:
+    """The category-specific API that an advanced setup function receives."""
+
+    def __init__(self, catalog: ProviderCatalog, source: ProviderSource) -> None:
+        self.models = _CategoryRegistration(catalog, source, ProviderKind.MODEL)
+        self.tools = _CategoryRegistration(catalog, source, ProviderKind.TOOL)
+        self.connectors = _CategoryRegistration(catalog, source, ProviderKind.CONNECTOR)
+
+
 _DIRECTORIES: dict[ProviderKind, str] = {
     ProviderKind.MODEL: "models",
     ProviderKind.TOOL: "tools",
@@ -98,7 +181,9 @@ def discover_project(project_root: Path) -> ProviderCatalog:
     if not root.is_dir():
         raise DiscoveryError(f"The project root does not exist: {root}")
 
-    package_name = f"_zeta_project_{hashlib.sha256(str(root).encode()).hexdigest()[:16]}"
+    package_name = (
+        f"_zeta_project_{hashlib.sha256(str(root).encode()).hexdigest()[:16]}"
+    )
     _ensure_package(package_name, root)
     catalog = ProviderCatalog()
 
@@ -110,15 +195,37 @@ def discover_project(project_root: Path) -> ProviderCatalog:
             module_name = _module_name(package_name, root, path)
             module = _load_module(module_name, path)
             source = ProviderSource(module=module_name, path=path)
-            for registration in _module_registrations(module):
-                if registration.declaration.kind is not kind:
-                    raise DiscoveryError(
-                        f"Provider {registration.declaration.identifier!r} in {path} has "
-                        f"category {registration.declaration.kind.value!r}; expected "
-                        f"{kind.value!r}"
-                    )
-                catalog.add(LoadedProvider(registration=registration, source=source))
+            _add_module(catalog, module, source, expected_kind=kind)
 
+    return catalog
+
+
+def discover_entry_points(entry_points: Iterable[Any] | None = None) -> ProviderCatalog:
+    """Load installed provider packages from the standard entry point group."""
+
+    catalog = ProviderCatalog()
+    entry_points = _provider_entry_points() if entry_points is None else entry_points
+    for entry_point in entry_points:
+        source = _entry_point_source(entry_point)
+        try:
+            target = entry_point.load()
+        except Exception as error:
+            raise DiscoveryError(
+                f"Zeta could not import provider entry point {entry_point.name!r}: {error}"
+            ) from error
+        _add_entry_point_target(catalog, target, source)
+    return catalog
+
+
+def resolve_catalog(*scopes: ProviderCatalog) -> ProviderCatalog:
+    """Resolve provider scopes from highest to lowest priority."""
+
+    catalog = ProviderCatalog()
+    for kind in ProviderKind:
+        for scope in scopes:
+            for identifier, provider in scope.providers(kind).items():
+                if not catalog.contains(kind, identifier):
+                    catalog.add(provider)
     return catalog
 
 
@@ -163,7 +270,9 @@ def _load_module(module_name: str, path: Path) -> ModuleType:
     try:
         spec.loader.exec_module(module)
     except Exception as error:
-        raise DiscoveryError(f"Zeta could not import provider module {path}: {error}") from error
+        raise DiscoveryError(
+            f"Zeta could not import provider module {path}: {error}"
+        ) from error
     return module
 
 
@@ -190,3 +299,88 @@ def _module_registrations(module: ModuleType) -> Iterable[ProviderRegistration]:
             continue
         registrations.add(id(registration))
         yield registration
+
+
+def _add_module(
+    catalog: ProviderCatalog,
+    module: ModuleType,
+    source: ProviderSource,
+    *,
+    expected_kind: ProviderKind | None,
+) -> None:
+    for registration in _module_registrations(module):
+        if (
+            expected_kind is not None
+            and registration.declaration.kind is not expected_kind
+        ):
+            raise DiscoveryError(
+                f"Provider {registration.declaration.identifier!r} in {source.location} has "
+                f"category {registration.declaration.kind.value!r}; expected "
+                f"{expected_kind.value!r}"
+            )
+        catalog.add(LoadedProvider(registration=registration, source=source))
+
+
+def _provider_entry_points() -> Iterable[Any]:
+    available = metadata.entry_points()
+    if hasattr(available, "select"):
+        return available.select(group=ENTRY_POINT_GROUP)
+    return available.get(ENTRY_POINT_GROUP, ())
+
+
+def _entry_point_source(entry_point: Any) -> ProviderSource:
+    distribution = getattr(entry_point, "dist", None)
+    name = None
+    if distribution is not None:
+        metadata_fields = getattr(distribution, "metadata", None)
+        name = metadata_fields.get("Name") if metadata_fields is not None else None
+        version = getattr(distribution, "version", None)
+        if name is not None and version is not None:
+            name = f"{name} {version}"
+    value = getattr(entry_point, "value", entry_point.name)
+    module = value.partition(":")[0]
+    return ProviderSource(module=module, path=None, distribution=name)
+
+
+def _add_entry_point_target(
+    catalog: ProviderCatalog, target: object, source: ProviderSource
+) -> None:
+    if isinstance(target, ModuleType):
+        _add_module(catalog, target, source, expected_kind=None)
+        setup = getattr(target, "setup", None)
+        if setup is not None:
+            _run_setup(catalog, setup, source)
+        return
+    if isinstance(target, ProviderCollection):
+        _add_collection(catalog, target, source)
+        return
+    registration = provider_registration(target)
+    if registration is not None:
+        catalog.add(LoadedProvider(registration=registration, source=source))
+        return
+    if callable(target):
+        _run_setup(catalog, target, source)
+        return
+    raise DiscoveryError(
+        f"Provider entry point {source.module!r} must load a module, collection, or setup function"
+    )
+
+
+def _add_collection(
+    catalog: ProviderCatalog, collection: ProviderCollection, source: ProviderSource
+) -> None:
+    for registration in collection.registrations:
+        catalog.add(LoadedProvider(registration=registration, source=source))
+
+
+def _run_setup(catalog: ProviderCatalog, setup: object, source: ProviderSource) -> None:
+    if not callable(setup):
+        raise DiscoveryError(f"Provider setup in {source.module!r} is not callable")
+    try:
+        returned = setup(ProviderRegistrationApi(catalog, source))
+    except Exception as error:
+        raise DiscoveryError(
+            f"Provider setup failed in {source.module!r}: {error}"
+        ) from error
+    if returned is not None:
+        _add_entry_point_target(catalog, returned, source)

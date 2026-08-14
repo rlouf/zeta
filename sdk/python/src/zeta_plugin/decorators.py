@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Mapping, TypeVar
+from collections.abc import Callable, Mapping
+from typing import Any, TypeVar
 
 from .declarations import (
     DeclarationError,
@@ -10,7 +11,6 @@ from .declarations import (
     ProviderKind,
     attach_registration,
 )
-
 
 Target = TypeVar("Target", bound=Callable[..., Any] | type[Any])
 
@@ -58,12 +58,16 @@ def model(
 def connector(identifier: str) -> Callable[[Target], Target]:
     """Declare a class as a Zeta connector provider."""
 
-    declaration = ProviderDeclaration(kind=ProviderKind.CONNECTOR, identifier=identifier)
+    declaration = ProviderDeclaration(
+        kind=ProviderKind.CONNECTOR, identifier=identifier
+    )
 
     def decorate(target: Target) -> Target:
         if not isinstance(target, type):
             raise DeclarationError("A connector target must be a class")
-        if not any(callable(getattr(target, name, None)) for name in ("deliver", "subscribe")):
+        if not any(
+            callable(getattr(target, name, None)) for name in ("deliver", "subscribe")
+        ):
             raise DeclarationError("A connector class must define deliver or subscribe")
         return attach_registration(target, declaration)  # type: ignore[return-value]
 

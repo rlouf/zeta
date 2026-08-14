@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import ModuleType
 
 import pytest
-
-from zeta_plugin import DiscoveryError, ProviderKind, discover_project
+from zeta_plugin import (
+    DiscoveryError,
+    ProviderKind,
+    discover_entry_points,
+    discover_project,
+    resolve_catalog,
+    tool,
+)
 
 
 def test_discovers_project_provider_directories(tmp_path: Path) -> None:
@@ -123,6 +130,91 @@ async def bash(request, context):
     assert catalog.providers(ProviderKind.MODEL) == {}
 
 
+def test_discovers_a_decorated_package_entry_point() -> None:
+    module = ModuleType("example.providers")
+
+    @tool("pi.bash")
+    async def bash(request, context):
+        return None
+
+    bash.__module__ = module.__name__
+    module.bash = bash
+
+    catalog = discover_entry_points([_EntryPoint("example", module)])
+
+    assert list(catalog.tools) == ["pi.bash"]
+    assert catalog.tools["pi.bash"].source.module == "example.providers"
+
+
+def test_discovers_an_advanced_package_setup_function() -> None:
+    async def web_search(request, context):
+        return None
+
+    def setup(zeta):
+        zeta.tools.register("web_search", web_search)
+
+    catalog = discover_entry_points([_EntryPoint("example", setup)])
+
+    assert list(catalog.tools) == ["web_search"]
+
+
+def test_rejects_a_duplicate_package_identifier() -> None:
+    async def first(request, context):
+        return None
+
+    async def second(request, context):
+        return None
+
+    def setup_first(zeta):
+        zeta.tools.register("bash", first)
+
+    def setup_second(zeta):
+        zeta.tools.register("bash", second)
+
+    with pytest.raises(DiscoveryError, match="Duplicate tool provider 'bash'"):
+        discover_entry_points(
+            [_EntryPoint("first", setup_first), _EntryPoint("second", setup_second)]
+        )
+
+
+def test_higher_priority_scope_replaces_a_lower_provider(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "tools" / "local.py",
+        """\
+from zeta_plugin import tool
+
+
+@tool("bash")
+async def bash(request, context):
+    return {"source": "project"}
+""",
+    )
+    local = discover_project(tmp_path)
+
+    async def package_bash(request, context):
+        return {"source": "package"}
+
+    def setup(zeta):
+        zeta.tools.register("bash", package_bash)
+
+    packages = discover_entry_points([_EntryPoint("package", setup)])
+
+    catalog = resolve_catalog(local, packages)
+
+    assert catalog.tools["bash"].source.path == tmp_path / "tools" / "local.py"
+
+
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
+
+
+class _EntryPoint:
+    def __init__(self, name: str, target: object) -> None:
+        self.name = name
+        self.target = target
+        self.value = f"{name}.providers:plugin"
+        self.dist = None
+
+    def load(self) -> object:
+        return self.target

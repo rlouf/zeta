@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import re
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-import re
-from typing import Any, Callable, Mapping
-
+from typing import Any
 
 _IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$")
 _REGISTRATION_ATTRIBUTE = "__zeta_plugin_registration__"
@@ -52,6 +52,25 @@ class ProviderRegistration:
 
     declaration: ProviderDeclaration
     target: Callable[..., Any] | type[Any]
+
+
+@dataclass(frozen=True)
+class ProviderCollection:
+    """An explicit collection for a package entry point."""
+
+    registrations: tuple[ProviderRegistration, ...]
+
+
+def providers(*targets: object) -> ProviderCollection:
+    """Create an explicit provider collection from decorated targets."""
+
+    registrations: list[ProviderRegistration] = []
+    for target in targets:
+        registration = provider_registration(target)
+        if registration is None:
+            raise DeclarationError("A provider collection requires decorated targets")
+        registrations.append(registration)
+    return ProviderCollection(registrations=tuple(registrations))
 
 
 def attach_registration(

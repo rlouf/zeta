@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use super::sse::{decode_stream_event, format_stream_error};
 use super::{DecodedModelStream, ModelInput, Observation};

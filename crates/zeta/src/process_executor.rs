@@ -573,7 +573,7 @@ fn receive_frame(
             Err(TryRecvError::Disconnected) => {
                 return Err(ProcessFailure::Transport(
                     "provider stdout reader stopped".to_owned(),
-                ))
+                ));
             }
         }
         if let Some(reason) = abort.and_then(|signal| signal.reason()) {
@@ -591,7 +591,7 @@ fn receive_frame(
             Err(RecvTimeoutError::Disconnected) => {
                 return Err(ProcessFailure::Transport(
                     "provider stdout reader stopped".to_owned(),
-                ))
+                ));
             }
         }
     }

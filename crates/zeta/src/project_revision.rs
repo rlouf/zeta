@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 use zeta_dispatch::{EventPattern, Route, SessionRule};
-use zeta_manifest::{load_agent, parse_agent, AgentSpec};
+use zeta_manifest::{AgentSpec, load_agent, parse_agent};
 use zeta_substrate::{canonical_json, hash_bytes};
 
 use crate::{PythonProviderCatalog, PythonProviderHost};
@@ -248,7 +248,7 @@ impl ProjectRevision {
                 return Err(ProjectError::new(format!(
                     "cannot read active project '{}': {error}",
                     path.display()
-                )))
+                )));
             }
         };
         let revision: ProjectRevision = serde_json::from_slice(&bytes).map_err(|error| {
@@ -559,7 +559,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ProjectError> {
             return Err(ProjectError::new(format!(
                 "active project path is not a regular file: {}",
                 path.display()
-            )))
+            )));
         }
         Ok(_metadata) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -567,7 +567,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ProjectError> {
             return Err(ProjectError::new(format!(
                 "cannot inspect active project '{}': {error}",
                 path.display()
-            )))
+            )));
         }
     }
 
@@ -595,7 +595,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ProjectError> {
                 return Err(ProjectError::new(format!(
                     "cannot create active project temporary file in '{}': {error}",
                     parent.display()
-                )))
+                )));
             }
         }
     };

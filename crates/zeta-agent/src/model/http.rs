@@ -6,11 +6,11 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde_json::{Map, Value};
 
-use super::chat_completions::{chat_completions_request, ChatStreamDecoder};
-use super::responses::{responses_request, ResponsesStreamDecoder};
+use super::chat_completions::{ChatStreamDecoder, chat_completions_request};
+use super::responses::{ResponsesStreamDecoder, responses_request};
 use super::{
     AbortReason, AbortSignal, AgentObserver, DecodedModelStream, ModelGateway, ModelInput,
     ModelOutput, ModelRequest, Observation, SseByteDecoder,

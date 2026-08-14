@@ -39,6 +39,7 @@ impl PythonProviderHostConfig {
 
 /// Identifies the declaration source selected for one provider.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PythonProviderSource {
     /// Names the Python module that supplied the provider.
     pub module: String,
@@ -50,6 +51,7 @@ pub struct PythonProviderSource {
 
 /// Describes one provider selected by the Python host.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PythonProvider {
     /// Carries the provider identifier.
     pub id: String,
@@ -66,7 +68,8 @@ pub struct PythonProvider {
 }
 
 /// Contains the selected Python providers for one project revision.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PythonProviderCatalog {
     models: BTreeMap<String, PythonProvider>,
     tools: BTreeMap<String, PythonProvider>,

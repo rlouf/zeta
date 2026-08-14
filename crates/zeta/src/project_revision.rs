@@ -14,8 +14,10 @@ use zeta_dispatch::{EventPattern, Route, SessionRule};
 use zeta_manifest::{load_agent, parse_agent, AgentSpec};
 use zeta_substrate::{canonical_json, hash_bytes};
 
+use crate::{PythonProviderCatalog, PythonProviderHost};
+
 const ACTIVE_PROJECT_SCHEMA: &str = "zeta.active_project";
-const ACTIVE_PROJECT_VERSION: u64 = 2;
+const ACTIVE_PROJECT_VERSION: u64 = 3;
 
 static NEXT_TEMPORARY_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -157,6 +159,7 @@ pub struct ProjectRevision {
     project_root: PathBuf,
     revision_id: String,
     agents: BTreeMap<String, AgentSpec>,
+    providers: PythonProviderCatalog,
 }
 
 impl ProjectRevision {
@@ -306,6 +309,11 @@ impl ProjectRevision {
         self.agents.values()
     }
 
+    /// Returns the Python providers selected for this revision.
+    pub fn providers(&self) -> &PythonProviderCatalog {
+        &self.providers
+    }
+
     /// Returns the public active-revision view.
     pub fn status(&self) -> ActiveProjectStatus {
         ActiveProjectStatus {
@@ -353,13 +361,16 @@ impl ProjectRevision {
                 project_root.display()
             ))
         })?;
+        let providers = load_python_providers(&project_root)?;
         let mut revision = Self {
             schema: ACTIVE_PROJECT_SCHEMA.to_owned(),
             version: ACTIVE_PROJECT_VERSION,
             project_root,
             revision_id: String::new(),
             agents,
+            providers,
         };
+        revision.validate_provider_references(&revision.project_root)?;
         revision.revision_id = revision.expected_id()?;
         Ok(revision)
     }
@@ -409,6 +420,7 @@ impl ProjectRevision {
                 )));
             }
         }
+        self.validate_provider_references(path)?;
         let expected = self.expected_id()?;
         if self.revision_id != expected {
             return Err(ProjectError::new(format!(
@@ -425,12 +437,56 @@ impl ProjectRevision {
             "version": self.version,
             "project_root": self.project_root,
             "agents": self.agents,
+            "providers": self.providers,
         });
         let bytes = canonical_json(&value).map_err(|error| {
             ProjectError::new(format!("cannot calculate project revision id: {error}"))
         })?;
         Ok(format!("project:{}", hash_bytes(&bytes)))
     }
+
+    fn validate_provider_references(&self, path: &Path) -> Result<(), ProjectError> {
+        let native = zeta_agent::native_capabilities();
+        for agent in self.agents.values().filter(|agent| agent.enabled) {
+            if agent.tools_inherit {
+                continue;
+            }
+            for tool in &agent.tools {
+                let selected_python = self.providers.tools().contains_key(tool);
+                let selected_native = native.iter().any(|capability| {
+                    capability.id.as_str() == tool || capability.id.model_name() == tool
+                });
+                if !selected_python && !selected_native {
+                    return Err(ProjectError::new(format!(
+                        "active project '{}' has agent {:?} with unavailable tool {tool:?}",
+                        path.display(),
+                        agent.slug
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn load_python_providers(project_root: &Path) -> Result<PythonProviderCatalog, ProjectError> {
+    if !has_python_provider_scope(project_root) {
+        return Ok(PythonProviderCatalog::default());
+    }
+    let host = PythonProviderHost::start(project_root).map_err(|error| {
+        ProjectError::new(format!(
+            "cannot load Python providers for '{}': {error}",
+            project_root.display()
+        ))
+    })?;
+    Ok(host.catalog().clone())
+}
+
+fn has_python_provider_scope(project_root: &Path) -> bool {
+    ["models", "tools", "connectors"]
+        .iter()
+        .any(|directory| project_root.join(directory).is_dir())
+        || project_root.join(".venv").is_dir()
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ProjectError> {
@@ -649,6 +705,22 @@ mod tests {
 
         let error = ProjectRevision::load(temporary.path()).expect_err("project must fail");
         assert!(error.to_string().contains("no enabled agents"));
+    }
+
+    #[test]
+    fn load_rejects_an_unavailable_explicit_tool() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let agents = temporary.path().join("agents");
+        fs::create_dir(&agents).expect("agents directory");
+        fs::write(
+            agents.join("worker.md"),
+            "---\nname: Worker\ndescription: Runs one tool.\ntools: [missing]\n---\nRun.\n",
+        )
+        .expect("agent source");
+
+        let error = ProjectRevision::load(temporary.path()).expect_err("tool must fail");
+
+        assert!(error.to_string().contains("unavailable tool \"missing\""));
     }
 
     #[test]

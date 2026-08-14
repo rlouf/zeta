@@ -90,6 +90,13 @@ pub(crate) async fn check_project(revision: &ProjectRevision) -> Result<Vec<Stri
     let mut warnings = BTreeSet::new();
     let mut selections = BTreeMap::new();
     for agent in revision.agents().filter(|agent| agent.enabled) {
+        if agent
+            .model
+            .as_ref()
+            .is_some_and(|model| revision.providers().models().contains_key(model.profile()))
+        {
+            continue;
+        }
         let resolved =
             resolve(agent.model.as_ref(), revision.project_root(), "zeta-up").map_err(|error| {
                 format!("cannot resolve a model for agent {:?}: {error}", agent.slug)

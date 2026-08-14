@@ -41,6 +41,22 @@ async def generate(request, context):
     return {"message": {"role": "assistant", "content": []}}
 ```
 
+### Model observations
+
+During `generate`, `context["observe"]` accepts one transient model
+observation. Call it before the final result when the provider has new output.
+The runtime sends the observation to active progress subscribers.
+
+```python
+context["observe"]({"kind": "text_delta", "text": "Hello"})
+context["observe"]({"kind": "reasoning_delta", "text": "I will check."})
+context["observe"]({"kind": "status", "status": "working", "text": "Searching"})
+```
+
+Use `text_delta` or `reasoning_delta` with a string `text` value. Use `status`
+with string `status` and `text` values. Observations are live data. They do not
+become journal events or survive a runtime restart.
+
 Tool identifiers can be simple names such as `read`. A package can use its own
 namespace, such as `pi.bash`. Do not use `zeta` as a tool namespace.
 

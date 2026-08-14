@@ -75,6 +75,23 @@ lifecycle events, attempt lifecycle events, and connector delivery events are
 historical facts. They retain their event ids, idempotency keys, causality, and
 append order.
 
+### Agent Step History And Live Progress
+
+The runtime stores each model or tool draft before it permits the next agent
+action. It gives the draft its planned event id and idempotency key. A repeated
+write returns the original journal event id. The event retains its agent,
+session, run, and causal context.
+
+The runtime stores trace objects and derivations before a draft refers to them.
+Dispatch uses their canonical content addresses as their durable identities. It
+accepts a valid duplicate without a second write. `runtime.attempt.completed`
+stores terminal data only. It does not copy the agent step drafts.
+
+`Runtime::subscribe_progress` gives local callers transient model observations.
+Each observation identifies its queue item, agent, session, and run. Progress
+has no journal cursor and no recovery guarantee. Consumers must use journal
+events for replay.
+
 The following tables are projections of the journal and may be deleted and
 rebuilt:
 

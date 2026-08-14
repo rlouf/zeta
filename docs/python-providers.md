@@ -26,8 +26,22 @@ from zeta_plugin import tool
 
 @tool("pi.bash")
 async def bash(request, context):
+    """Run a command in the Pi workspace."""
     return {"output": run_bash(request["command"])}
 ```
+
+Each tool must have a model description. The SDK uses the first docstring
+paragraph by default. Set `description=` to use explicit text instead. An
+undescribed tool fails during provider registration.
+
+```python
+@tool("pi.bash", description="Run one command in the Pi workspace.")
+async def bash(request, context):
+    return {"output": run_bash(request["command"])}
+```
+
+The description is provider catalog data. It is part of the provider
+fingerprint and project revision. Reload after you change it.
 
 Model providers use `@model`. Their optional `tool_profile` maps canonical tool
 identifiers to tool names for that model.
@@ -135,7 +149,7 @@ APIs:
 ```python
 def setup(zeta):
     zeta.models.register("pi", generate, tool_profile={"pi.bash": "bash"})
-    zeta.tools.register("pi.bash", bash)
+    zeta.tools.register("pi.bash", bash, description="Run one command in the Pi workspace.")
     zeta.connectors.register("slack", Slack)
 ```
 

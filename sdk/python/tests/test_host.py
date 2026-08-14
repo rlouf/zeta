@@ -19,6 +19,7 @@ from zeta_plugin import tool
 
 @tool("pi.bash")
 async def bash(request, context):
+    '''Run one shell command.'''
     return {"command": request["command"], "effect_key": context["effect_key"]}
 """,
     )
@@ -54,6 +55,7 @@ from zeta_plugin import ProviderError, tool
 
 @tool("limited")
 async def limited(request, context):
+    '''Call the limited test provider.'''
     raise ProviderError("The provider rate limit is active", code="rate_limited", retryable=True)
 """,
     )
@@ -76,6 +78,7 @@ from zeta_plugin import tool
 
 @tool("web_search", input_schema={"type": "object"})
 async def web_search(request, context):
+    '''Search the web for relevant sources.'''
     return {"results": []}
 """,
     )
@@ -85,6 +88,7 @@ async def web_search(request, context):
 
     descriptor = catalog["tools"][0]
     assert descriptor["id"] == "web_search"
+    assert descriptor["description"] == "Search the web for relevant sources."
     assert descriptor["source"]["path"] == str(tmp_path / "tools" / "search.py")
     assert len(descriptor["fingerprint"]) == 64
 
@@ -206,6 +210,7 @@ from zeta_plugin import tool
 
 @tool("echo")
 async def echo(request, context):
+    '''Return the supplied value.'''
     return {"value": request["value"]}
 """,
     )
@@ -303,6 +308,7 @@ async def fixture(request, context):
 
 def test_host_requires_object_results(tmp_path: Path) -> None:
     async def invalid(request, context):
+        """Return an invalid tool result for this test."""
         return "not an object"
 
     registration = ProviderRegistration(

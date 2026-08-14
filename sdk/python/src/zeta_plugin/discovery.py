@@ -126,6 +126,7 @@ class _CategoryRegistration:
         identifier: str,
         target: Any,
         *,
+        description: str | None = None,
         tool_profile: Mapping[str, str] | None = None,
         input_schema: Mapping[str, Any] | None = None,
         output_schema: Mapping[str, Any] | None = None,
@@ -147,6 +148,7 @@ class _CategoryRegistration:
         declaration = ProviderDeclaration(
             kind=self._kind,
             identifier=identifier,
+            description=description,
             tool_profile=tool_profile,
             input_schema=input_schema,
             output_schema=output_schema,

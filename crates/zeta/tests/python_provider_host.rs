@@ -70,6 +70,7 @@ from zeta_plugin import tool
 
 @tool("echo", input_schema={"type": "object"})
 async def echo(request, context):
+    """Return the supplied value."""
     return {"value": request["value"], "base_dir": context["base_dir"]}
 "#,
     );
@@ -95,6 +96,7 @@ async def echo(request, context):
         provider.input_schema,
         Some(object(json!({"type": "object"})))
     );
+    assert_eq!(provider.description.as_deref(), Some("Return the supplied value."));
     assert_eq!(provider.fingerprint.len(), 64);
 
     let result = host
@@ -124,6 +126,7 @@ from zeta_plugin import tool
 
 @tool("fail")
 async def fail(request, context):
+    """Fail the provider call for this test."""
     raise RuntimeError("fixture failure")
 "#,
     );

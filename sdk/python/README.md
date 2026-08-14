@@ -24,6 +24,7 @@ from zeta_plugin import connector, model, tool
 
 @tool("pi.bash")
 async def bash(request, context):
+    """Run a command in the Pi workspace."""
     return {"output": "ok"}
 
 
@@ -41,6 +42,11 @@ class Slack:
 A model or tool receives `request` and `context`. A connector class must define
 `deliver`, `subscribe`, or both. Zeta creates one connector instance per host.
 Raise `ProviderError` to set a stable error code and its retryable state.
+
+Each tool must have a model description. The SDK uses its first docstring
+paragraph by default. Use `@tool(..., description="...")` or
+`zeta.tools.register(..., description="...")` to override it. An undescribed
+tool fails during provider registration.
 
 A subscription receives an event type, filter, and optional cursor. It returns
 an `events` array of payload objects and an optional replacement cursor.
@@ -92,7 +98,7 @@ The setup object has `models`, `tools`, and `connectors` registration APIs:
 
 ```python
 def setup(zeta):
-    zeta.tools.register("pi.bash", bash)
+    zeta.tools.register("pi.bash", bash, description="Run a command in the Pi workspace.")
     zeta.models.register("pi", generate, tool_profile={"pi.bash": "bash"})
     zeta.connectors.register("slack", Slack)
 ```

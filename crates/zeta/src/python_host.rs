@@ -65,6 +65,9 @@ pub struct PythonProvider {
     pub source: PythonProviderSource,
     /// Identifies the declaration and implementation bytes.
     pub fingerprint: String,
+    /// Carries the model-facing description for a tool provider.
+    #[serde(default)]
+    pub description: Option<String>,
     /// Carries model-specific tool adaptations when the provider is a model.
     pub tool_profile: Option<Map<String, Value>>,
     /// Carries the canonical provider input schema when one was declared.

@@ -875,7 +875,17 @@ fn python_capability(provider: &crate::PythonProvider) -> Result<zeta_agent::Cap
     });
     Ok(zeta_agent::Capability {
         id,
-        description: format!("Run the {} tool.", provider.id),
+        description: provider
+            .description
+            .as_deref()
+            .filter(|description| !description.trim().is_empty())
+            .ok_or_else(|| {
+                format!(
+                    "Python tool provider {:?} has no model description",
+                    provider.id
+                )
+            })?
+            .to_owned(),
         input_schema,
         delivery_semantics: None,
     })
@@ -2808,6 +2818,7 @@ mod tests {
                 "id": "web_search",
                 "source": {"module": "test", "path": null, "distribution": null},
                 "fingerprint": "a".repeat(64),
+                "description": "Search the web for relevant sources.",
                 "tool_profile": null,
                 "input_schema": {"type": "object"},
                 "output_schema": null
@@ -2826,6 +2837,10 @@ mod tests {
         assert_eq!(capabilities.len(), 1);
         assert_eq!(capabilities[0].canonical.id.as_str(), "web_search");
         assert_eq!(capabilities[0].model_name, "search");
+        assert_eq!(
+            capabilities[0].model_description,
+            "Search the web for relevant sources."
+        );
     }
 
     #[test]

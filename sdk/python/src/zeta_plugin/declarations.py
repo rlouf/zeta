@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import inspect
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any
 
@@ -30,6 +31,7 @@ class ProviderDeclaration:
 
     kind: ProviderKind
     identifier: str
+    description: str | None = None
     tool_profile: Mapping[str, str] | None = None
     input_schema: Mapping[str, Any] | None = None
     output_schema: Mapping[str, Any] | None = None
@@ -45,6 +47,12 @@ class ProviderDeclaration:
         if self.kind is not ProviderKind.MODEL and self.tool_profile is not None:
             raise DeclarationError("Only a model can declare a tool profile")
 
+        if self.kind is not ProviderKind.TOOL and self.description is not None:
+            raise DeclarationError("Only a tool can declare a description")
+
+        if self.description is not None and not self.description.strip():
+            raise DeclarationError("A tool description must not be empty")
+
 
 @dataclass(frozen=True)
 class ProviderRegistration:
@@ -52,6 +60,22 @@ class ProviderRegistration:
 
     declaration: ProviderDeclaration
     target: Callable[..., Any] | type[Any]
+
+    def __post_init__(self) -> None:
+        if self.declaration.kind is not ProviderKind.TOOL:
+            return
+        description = self.declaration.description
+        if description is None:
+            description = _first_docstring_paragraph(self.target)
+        if description is None:
+            raise DeclarationError(
+                "A tool requires a description or a non-empty docstring"
+            )
+        object.__setattr__(
+            self,
+            "declaration",
+            replace(self.declaration, description=description.strip()),
+        )
 
 
 @dataclass(frozen=True)
@@ -98,3 +122,12 @@ def provider_registration(target: object) -> ProviderRegistration | None:
     if not isinstance(registration, ProviderRegistration):
         raise DeclarationError("A provider registration has an invalid value")
     return registration
+
+
+def _first_docstring_paragraph(target: object) -> str | None:
+    docstring = inspect.getdoc(target)
+    if docstring is None:
+        return None
+    first_paragraph = re.split(r"\n\s*\n", docstring, maxsplit=1)[0]
+    description = " ".join(first_paragraph.split())
+    return description or None

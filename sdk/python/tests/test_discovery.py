@@ -34,6 +34,7 @@ from zeta_plugin import tool
 
 @tool("web_search")
 async def search(request, context):
+    '''Search the web for relevant sources.'''
     return {"results": []}
 """,
     )
@@ -57,6 +58,7 @@ from zeta_plugin import tool
 
 @tool("not_loaded")
 async def not_loaded(request, context):
+    '''Do not load this internal test provider.'''
     return None
 """,
     )
@@ -98,6 +100,7 @@ from zeta_plugin import tool
 
 @tool("bash")
 async def bash(request, context):
+    '''Run one shell command.'''
     return None
 """,
         )
@@ -120,6 +123,7 @@ from zeta_plugin import tool
 
 @tool("bash")
 async def bash(request, context):
+    '''Run one shell command.'''
     return None
 """,
     )
@@ -135,6 +139,7 @@ def test_discovers_a_decorated_package_entry_point() -> None:
 
     @tool("pi.bash")
     async def bash(request, context):
+        """Run one shell command."""
         return None
 
     bash.__module__ = module.__name__
@@ -148,6 +153,7 @@ def test_discovers_a_decorated_package_entry_point() -> None:
 
 def test_discovers_an_advanced_package_setup_function() -> None:
     async def web_search(request, context):
+        """Search the web for relevant sources."""
         return None
 
     def setup(zeta):
@@ -160,9 +166,11 @@ def test_discovers_an_advanced_package_setup_function() -> None:
 
 def test_rejects_a_duplicate_package_identifier() -> None:
     async def first(request, context):
+        """Run the first shell command provider."""
         return None
 
     async def second(request, context):
+        """Run the second shell command provider."""
         return None
 
     def setup_first(zeta):
@@ -186,12 +194,14 @@ from zeta_plugin import tool
 
 @tool("bash")
 async def bash(request, context):
+    '''Run the project shell command.'''
     return {"source": "project"}
 """,
     )
     local = discover_project(tmp_path)
 
     async def package_bash(request, context):
+        """Run the package shell command."""
         return {"source": "package"}
 
     def setup(zeta):

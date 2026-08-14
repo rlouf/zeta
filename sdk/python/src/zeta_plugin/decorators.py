@@ -18,6 +18,7 @@ Target = TypeVar("Target", bound=Callable[..., Any] | type[Any])
 def tool(
     identifier: str,
     *,
+    description: str | None = None,
     input_schema: Mapping[str, Any] | None = None,
     output_schema: Mapping[str, Any] | None = None,
 ) -> Callable[[Target], Target]:
@@ -26,6 +27,7 @@ def tool(
     declaration = ProviderDeclaration(
         kind=ProviderKind.TOOL,
         identifier=identifier,
+        description=description,
         input_schema=input_schema,
         output_schema=output_schema,
     )

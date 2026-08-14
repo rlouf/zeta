@@ -168,6 +168,7 @@ class ProviderHost:
                         "distribution": provider.source.distribution,
                     },
                     "fingerprint": _fingerprint(provider),
+                    "description": declaration.description,
                     "tool_profile": dict(declaration.tool_profile)
                     if declaration.tool_profile is not None
                     else None,
@@ -374,6 +375,7 @@ def _fingerprint(provider: LoadedProvider) -> str:
     digest.update(
         json.dumps(
             {
+                "description": declaration.description,
                 "tool_profile": declaration.tool_profile,
                 "input_schema": declaration.input_schema,
                 "output_schema": declaration.output_schema,

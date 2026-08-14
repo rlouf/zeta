@@ -14,6 +14,10 @@ from zeta_plugin import (
 def test_tool_declaration_attaches_metadata() -> None:
     @tool("web_search")
     async def web_search() -> None:
+        """Search the web for relevant sources.
+
+        Return trusted source references for the request.
+        """
         return None
 
     registration = provider_registration(web_search)
@@ -22,6 +26,27 @@ def test_tool_declaration_attaches_metadata() -> None:
     assert registration.target is web_search
     assert registration.declaration.kind is ProviderKind.TOOL
     assert registration.declaration.identifier == "web_search"
+    assert registration.declaration.description == "Search the web for relevant sources."
+
+
+def test_tool_description_can_override_the_docstring() -> None:
+    @tool("web_search", description="Search current web sources.")
+    async def web_search() -> None:
+        """Search the web for relevant sources."""
+        return None
+
+    registration = provider_registration(web_search)
+
+    assert registration is not None
+    assert registration.declaration.description == "Search current web sources."
+
+
+def test_tool_requires_a_description_or_docstring() -> None:
+    with pytest.raises(DeclarationError, match="description or a non-empty docstring"):
+
+        @tool("web_search")
+        async def web_search() -> None:
+            return None
 
 
 def test_model_declaration_keeps_its_tool_profile() -> None:

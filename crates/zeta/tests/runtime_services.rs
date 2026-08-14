@@ -531,30 +531,6 @@ fn agent_result_rejects_non_object_usage() {
 }
 
 #[test]
-fn agent_result_rejects_unsupported_content_promotion() {
-    let result = AgentRunResult {
-        proposals: vec![AgentProposal::ContentPromotion {
-            scope: "agent/worker/session".to_owned(),
-            key: "answer".to_owned(),
-            object_id: Some("obj-final".to_owned()),
-            expected_head: None,
-            expected_object_id: None,
-            source_head: "head-run".to_owned(),
-            reason: "selected final answer".to_owned(),
-        }],
-        ..AgentRunResult::default()
-    };
-
-    let error = attempt_completion("2026-08-12T10:00:01Z", &result).unwrap_err();
-
-    assert_eq!(
-        error.kind(),
-        CompletionHandoffErrorKind::UnsupportedContentPromotion
-    );
-    assert_eq!(error.reason(), "unsupported_content_promotion");
-}
-
-#[test]
 fn agent_result_completion_commits_typed_controls_through_dispatch() {
     let mut dispatch = Dispatch::open_in_memory().unwrap();
     let input = Event {

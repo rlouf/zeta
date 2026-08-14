@@ -301,6 +301,11 @@ impl ProjectRevision {
         self.agents.get(slug)
     }
 
+    /// Returns all loaded agent declarations in stable slug order.
+    pub(crate) fn agents(&self) -> impl Iterator<Item = &AgentSpec> {
+        self.agents.values()
+    }
+
     /// Returns the public active-revision view.
     pub fn status(&self) -> ActiveProjectStatus {
         ActiveProjectStatus {

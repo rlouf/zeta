@@ -113,7 +113,7 @@ fn complete_agent_matches_python_declaration_behavior() {
     assert_eq!(session, "shared");
     assert_eq!(
         model,
-        Some(ModelSpec {
+        Some(ModelSpec::Endpoint {
             name: "qwen3.6".to_owned(),
             url: "http://127.0.0.1:8080/v1/chat/completions".to_owned(),
         })

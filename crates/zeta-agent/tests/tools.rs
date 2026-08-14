@@ -4,11 +4,10 @@ use std::collections::VecDeque;
 use std::fs;
 use std::future::Future;
 use std::io;
-use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::pin::pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::Duration;
 
@@ -16,9 +15,7 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use zeta_agent::{
     bounded_output, native_capabilities, AbortReason, AbortSignal, CapabilityExecutor,
-    CapabilityInvocation, CommandOutput, CommandRunner, HttpFuture, HttpResponse, HttpTransport,
-    NativeToolExecutor, SystemCommandRunner, WebSearchFuture, WebSearchProvider, WebSearchResult,
-    WebSearchSource,
+    CapabilityInvocation, CommandOutput, CommandRunner, NativeToolExecutor, SystemCommandRunner,
 };
 
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
@@ -51,8 +48,6 @@ struct ToolCase {
     input: Map<String, Value>,
     expected: Value,
     #[serde(default)]
-    expected_provider_calls: Vec<Value>,
-    #[serde(default)]
     expected_artifact: Option<String>,
     #[serde(default)]
     expected_files: Map<String, Value>,
@@ -68,18 +63,6 @@ struct ToolFixture {
     directories: Vec<String>,
     #[serde(default)]
     files: Map<String, Value>,
-    #[serde(default)]
-    provider_result: Option<Value>,
-    #[serde(default)]
-    resolved_addresses: Vec<IpAddr>,
-    #[serde(default)]
-    response: Option<HttpFixtureResponse>,
-}
-
-#[derive(Clone, Deserialize)]
-struct HttpFixtureResponse {
-    body_utf8: String,
-    content_type: String,
 }
 
 struct TempWorkspace {
@@ -140,71 +123,6 @@ impl CommandRunner for FixtureCommands {
             io::ErrorKind::Unsupported,
             format!("unexpected fixture shell command: {command}"),
         ))
-    }
-}
-
-struct FixtureHttp {
-    addresses: Vec<IpAddr>,
-    response: Option<HttpFixtureResponse>,
-    fetches: Arc<Mutex<Vec<String>>>,
-}
-
-impl HttpTransport for FixtureHttp {
-    fn resolve_host<'a>(
-        &'a mut self,
-        _host: &'a str,
-        _abort: &'a dyn AbortSignal,
-    ) -> HttpFuture<'a, Vec<IpAddr>> {
-        let addresses = self.addresses.clone();
-        Box::pin(async move { Ok(addresses) })
-    }
-
-    fn fetch<'a>(
-        &'a mut self,
-        url: &'a str,
-        _addresses: &'a [IpAddr],
-        _timeout: Duration,
-        _abort: &'a dyn AbortSignal,
-    ) -> HttpFuture<'a, HttpResponse> {
-        self.fetches.lock().unwrap().push(url.to_owned());
-        let response = self.response.clone();
-        Box::pin(async move {
-            let Some(response) = response else {
-                return Err(io::Error::other("unexpected fixture fetch"));
-            };
-            Ok(HttpResponse::new(
-                response.body_utf8.into_bytes(),
-                response.content_type,
-            ))
-        })
-    }
-}
-
-struct FixtureWebSearch {
-    config: Value,
-    result: Option<WebSearchResult>,
-    calls: Arc<Mutex<Vec<Value>>>,
-}
-
-impl WebSearchProvider for FixtureWebSearch {
-    fn search<'a>(
-        &'a mut self,
-        query: &'a str,
-        limit: usize,
-        _abort: &'a dyn AbortSignal,
-    ) -> WebSearchFuture<'a> {
-        self.calls.lock().unwrap().push(json!({
-            "query": query,
-            "config": self.config,
-        }));
-        let result = self.result.clone();
-        Box::pin(async move {
-            let Some(result) = result else {
-                return Err("unexpected fixture search".to_owned());
-            };
-            assert!(limit > 0);
-            Ok(result)
-        })
     }
 }
 
@@ -364,32 +282,6 @@ fn execute_system(capability: &str, params: Map<String, Value>, workspace: &Path
     Value::Object(block_on(executor.execute(&invocation, &ActiveAbort)).unwrap())
 }
 
-fn fixture_search_result(value: Option<&Value>) -> Option<WebSearchResult> {
-    let value = value?.as_object()?;
-    let mut sources = Vec::new();
-    for source in value.get("sources")?.as_array()? {
-        let source = source.as_object()?;
-        sources.push(WebSearchSource {
-            title: source.get("title")?.as_str()?.to_owned(),
-            url: source.get("url")?.as_str()?.to_owned(),
-            snippet: source.get("snippet")?.as_str()?.to_owned(),
-        });
-    }
-    Some(WebSearchResult {
-        answer: value.get("answer")?.as_str()?.to_owned(),
-        sources,
-        request_id: value
-            .get("request_id")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        model: value
-            .get("model")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        usage: value.get("usage").and_then(Value::as_object).cloned(),
-    })
-}
-
 fn normalize_duration(actual: &mut Value) {
     let metadata = actual
         .as_object_mut()
@@ -418,9 +310,30 @@ fn is_local_case(case: &ToolCase) -> bool {
 #[test]
 fn native_capability_declarations_match_python_ground_truth() {
     let vectors = vectors();
+    let mut expected: Vec<Value> = vectors
+        .capabilities
+        .into_iter()
+        .filter(|capability| capability["id"] != "zeta.web_search")
+        .collect();
+    let read = expected
+        .iter_mut()
+        .find(|capability| capability["id"] == "zeta.read")
+        .expect("read capability vector");
+    read["description"] = Value::String(
+        "Read a UTF-8 text file. Returns a [path#tag] snapshot header and numbered lines."
+            .to_owned(),
+    );
+    read["input_schema"]["properties"]["path"]["description"] =
+        Value::String("Local file path.".to_owned());
     assert_eq!(
-        serde_json::to_value(native_capabilities()).unwrap(),
-        Value::Array(vectors.capabilities)
+        Value::Array(
+            native_capabilities()
+                .into_iter()
+                .filter(|capability| capability.id.as_str() != "zeta.web_search")
+                .map(|capability| serde_json::to_value(capability).unwrap())
+                .collect(),
+        ),
+        Value::Array(expected)
     );
 }
 
@@ -466,6 +379,20 @@ fn local_native_tool_vectors_match_python_ground_truth() {
             "ast_grep_structural_match",
         ]
     );
+}
+
+#[test]
+fn url_reads_are_not_supported() {
+    let workspace = TempWorkspace::new();
+    let actual = execute_system(
+        "zeta.read",
+        object(json!({"path": "https://example.com"})),
+        &workspace.path,
+    );
+
+    assert_eq!(actual["ok"], false);
+    assert_eq!(actual["error"]["code"], "read-failed");
+    assert_eq!(actual["error"]["message"], "URL reads are not supported");
 }
 
 #[test]
@@ -587,106 +514,6 @@ fn command_cancellation_kills_the_descendant_process_group() {
     assert_eq!(error.kind(), io::ErrorKind::Interrupted);
     std::thread::sleep(Duration::from_millis(1_100));
     assert!(!workspace.path.join("descendant.txt").exists());
-}
-
-#[test]
-fn public_url_read_vector_matches_python_ground_truth() {
-    let vectors = vectors();
-    let case = vectors
-        .cases
-        .iter()
-        .find(|case| case.name == "read_public_html_url")
-        .unwrap();
-    let workspace = TempWorkspace::new();
-    let fetches = Arc::new(Mutex::new(Vec::new()));
-    let http = FixtureHttp {
-        addresses: case.fixture.resolved_addresses.clone(),
-        response: case.fixture.response.clone(),
-        fetches: Arc::clone(&fetches),
-    };
-    let web = FixtureWebSearch {
-        config: Value::Null,
-        result: None,
-        calls: Arc::new(Mutex::new(Vec::new())),
-    };
-    let mut executor = NativeToolExecutor::with_network(SystemCommandRunner, http, web);
-    let invocation = CapabilityInvocation {
-        capability_id: case.capability.parse().unwrap(),
-        params: case.input.clone(),
-        base_directory: Some(workspace.path.display().to_string()),
-        effect_key: None,
-    };
-    let actual = Value::Object(block_on(executor.execute(&invocation, &ActiveAbort)).unwrap());
-    assert_eq!(actual, case.expected);
-    assert_eq!(
-        fetches.lock().unwrap().as_slice(),
-        ["https://example.com/page"]
-    );
-}
-
-#[test]
-fn private_url_read_is_blocked_before_fetch() {
-    let vectors = vectors();
-    let case = vectors
-        .cases
-        .iter()
-        .find(|case| case.name == "read_blocks_private_url")
-        .unwrap();
-    let workspace = TempWorkspace::new();
-    let fetches = Arc::new(Mutex::new(Vec::new()));
-    let http = FixtureHttp {
-        addresses: case.fixture.resolved_addresses.clone(),
-        response: None,
-        fetches: Arc::clone(&fetches),
-    };
-    let web = FixtureWebSearch {
-        config: Value::Null,
-        result: None,
-        calls: Arc::new(Mutex::new(Vec::new())),
-    };
-    let mut executor = NativeToolExecutor::with_network(SystemCommandRunner, http, web);
-    let invocation = CapabilityInvocation {
-        capability_id: case.capability.parse().unwrap(),
-        params: case.input.clone(),
-        base_directory: Some(workspace.path.display().to_string()),
-        effect_key: None,
-    };
-    let actual = Value::Object(block_on(executor.execute(&invocation, &ActiveAbort)).unwrap());
-    assert_eq!(actual, case.expected);
-    assert!(fetches.lock().unwrap().is_empty());
-}
-
-#[test]
-fn web_search_vector_matches_python_ground_truth() {
-    let vectors = vectors();
-    let case = vectors
-        .cases
-        .iter()
-        .find(|case| case.name == "web_search_formats_provider_result")
-        .unwrap();
-    let workspace = TempWorkspace::new();
-    let calls = Arc::new(Mutex::new(Vec::new()));
-    let config = case.expected_provider_calls[0]["config"].clone();
-    let http = FixtureHttp {
-        addresses: Vec::new(),
-        response: None,
-        fetches: Arc::new(Mutex::new(Vec::new())),
-    };
-    let web = FixtureWebSearch {
-        config,
-        result: fixture_search_result(case.fixture.provider_result.as_ref()),
-        calls: Arc::clone(&calls),
-    };
-    let mut executor = NativeToolExecutor::with_network(SystemCommandRunner, http, web);
-    let invocation = CapabilityInvocation {
-        capability_id: case.capability.parse().unwrap(),
-        params: case.input.clone(),
-        base_directory: Some(workspace.path.display().to_string()),
-        effect_key: None,
-    };
-    let actual = Value::Object(block_on(executor.execute(&invocation, &ActiveAbort)).unwrap());
-    assert_eq!(actual, case.expected);
-    assert_eq!(*calls.lock().unwrap(), case.expected_provider_calls);
 }
 
 fn object(value: Value) -> Map<String, Value> {

@@ -22,6 +22,7 @@ use zeta_ipc::{
 };
 use zeta_journal::Event;
 
+mod host_model;
 pub mod process_executor;
 pub mod project_revision;
 pub mod runtime;
@@ -31,11 +32,7 @@ pub use process_executor::{ProcessExecutor, ProcessExecutorConfig, ProcessLaunch
 pub use project_revision::{
     ActiveAgent, ActiveProjectStatus, Project, ProjectError, ProjectRevision, ProjectRevisionStore,
 };
-pub use runtime::{
-    AgentExecution, AgentExecutionError, AgentExecutor, AgentTask, ConnectorEgress,
-    EgressExecution, EgressExecutor, EgressTask, IngressResult, NativeAgentExecutor, Runtime,
-    RuntimeError, RuntimeStatus, RuntimeWake,
-};
+pub use runtime::{IngressResult, Runtime, RuntimeError, RuntimeStatus, RuntimeWake};
 pub use runtime_services::{
     prepare_agent, CallbackDraftRecorder, CallbackObserver, CancellationToken, ExecutorSelection,
     InvocationInputs, PrepareAgentError, PrepareAgentErrorKind, PreparedAgent, ScheduleStatus,
@@ -753,8 +750,6 @@ fn remove_owned_socket(path: &Path, identity: SocketIdentity) -> Result<(), Loca
 /// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CompletionHandoffErrorKind {
-    /// A content promotion has no atomic Dispatch operation yet.
-    UnsupportedContentPromotion,
     /// A platform-sized request position does not fit Dispatch's durable type.
     ControlPositionOverflow,
     /// Agent telemetry carries a non-object usage value.
@@ -765,9 +760,6 @@ impl CompletionHandoffErrorKind {
     /// Returns a stable machine-readable reason.
     pub fn reason(self) -> &'static str {
         match self {
-            CompletionHandoffErrorKind::UnsupportedContentPromotion => {
-                "unsupported_content_promotion"
-            }
             CompletionHandoffErrorKind::ControlPositionOverflow => "control_position_overflow",
             CompletionHandoffErrorKind::MalformedUsage => "malformed_usage",
         }
@@ -933,20 +925,6 @@ pub fn attempt_completion(
                     source_agent_id,
                     source_session_id,
                     position,
-                ));
-            }
-            AgentProposal::ContentPromotion {
-                scope,
-                key,
-                object_id: _object_id,
-                expected_head: _expected_head,
-                expected_object_id: _expected_object_id,
-                source_head: _source_head,
-                reason: _reason,
-            } => {
-                return Err(CompletionHandoffError::new(
-                    CompletionHandoffErrorKind::UnsupportedContentPromotion,
-                    format!("content promotion {scope}/{key} has no Dispatch commit operation"),
                 ));
             }
         }

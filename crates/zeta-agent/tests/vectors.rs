@@ -13,16 +13,12 @@ use std::task::{Context, Poll, Wake, Waker};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use zeta_agent::{
-    build_prompt, resolve_capabilities, AbortReason, AbortSignal, AddressedDerivation,
-    AddressedObject, AgentErrorKind, AgentInvocation, AgentObserver, AgentProposal, AgentRunError,
-    AgentRunResult, AgentRunner, ArgumentAdapter, Capability, CapabilityExecutor,
-    CapabilityInvocation, Clock, ContentFuture, ContentOperation, ContentPromotion,
-    ContentSelection, ContentService, DeliverySemantics, DraftRecorder, HistoryFuture,
-    HistoryService, IdSource, ModelGateway, ModelInput, ModelOutput, ModelRequest, Observation,
-    PromptComponent, PromptEnvironment, PromptInput, PromptTransform, RunStopReason, StepName,
-    ToolProfile, TraceBatch,
+    build_prompt, resolve_capabilities, AbortReason, AbortSignal, AgentErrorKind, AgentInvocation,
+    AgentObserver, AgentProposal, AgentRunError, AgentRunResult, AgentRunner, ArgumentAdapter,
+    Capability, CapabilityExecutor, CapabilityInvocation, Clock, DeliverySemantics, DraftRecorder,
+    IdSource, ModelGateway, ModelInput, ModelOutput, ModelRequest, Observation, PromptEnvironment,
+    PromptInput, PromptTransform, RunStopReason, StepName, ToolProfile,
 };
-use zeta_substrate::{Derivation, Object};
 
 #[derive(Deserialize)]
 struct PromptVectors {
@@ -56,21 +52,7 @@ struct InvocationCase {
     cancelled: bool,
     #[serde(default)]
     capture_recorded_events: bool,
-    #[serde(default)]
-    content_setup: Option<VectorContentSetup>,
     expected: Value,
-}
-
-#[derive(Clone, Deserialize)]
-struct VectorContentSetup {
-    run_id: String,
-    owner: String,
-    initial: Vec<VectorContentInitial>,
-}
-
-#[derive(Clone, Deserialize)]
-struct VectorContentInitial {
-    params: Map<String, Value>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -317,392 +299,6 @@ impl Clock for FixedClock {
     }
 }
 
-#[derive(Clone)]
-struct VectorContentNode {
-    object_id: String,
-    key: String,
-    kind: String,
-    title: String,
-    content: Value,
-    source_scope: String,
-}
-
-struct VectorContentService {
-    run_id: String,
-    owner: String,
-    head: String,
-    nodes: Vec<VectorContentNode>,
-}
-
-impl VectorContentService {
-    fn from_setup(setup: VectorContentSetup) -> Self {
-        let mut service = VectorContentService {
-            run_id: setup.run_id,
-            owner: setup.owner,
-            head: String::new(),
-            nodes: Vec::new(),
-        };
-        service.head = service.revision_id();
-        for initial in setup.initial {
-            service
-                .apply_literal(&initial.params)
-                .expect("vector content setup must be valid");
-        }
-        service
-    }
-
-    fn object_id(object: &Object) -> String {
-        object.content_address().unwrap().to_string()
-    }
-
-    fn derivation(derivation: Derivation) -> AddressedDerivation {
-        let id = derivation.content_address().unwrap().to_string();
-        AddressedDerivation { id, derivation }
-    }
-
-    fn addressed(object: Object) -> AddressedObject {
-        let id = Self::object_id(&object);
-        AddressedObject { id, object }
-    }
-
-    fn node_object(key: &str, kind: &str, content: Value) -> Object {
-        Object {
-            kind: "content_node".to_owned(),
-            schema: "zeta.content_node.v1".to_owned(),
-            data: json!({
-                "key": key,
-                "kind": kind,
-                "title": "",
-                "content": content,
-                "attributes": {},
-            })
-            .as_object()
-            .unwrap()
-            .clone(),
-            links: Vec::new(),
-        }
-    }
-
-    fn revision_object(&self) -> Object {
-        let mut nodes = Map::new();
-        let mut source_scopes = Map::new();
-        let mut projection_order = Vec::new();
-        let mut links = Vec::new();
-        for node in &self.nodes {
-            nodes.insert(node.key.clone(), Value::String(node.object_id.clone()));
-            source_scopes.insert(node.key.clone(), Value::String(node.source_scope.clone()));
-            projection_order.push(Value::String(node.key.clone()));
-            links.push(node.object_id.clone());
-        }
-        Object {
-            kind: "content_graph_revision".to_owned(),
-            schema: "zeta.content_graph_revision.v1".to_owned(),
-            data: json!({
-                "owner": self.owner,
-                "nodes": nodes,
-                "projection_order": projection_order,
-                "source_scopes": source_scopes,
-            })
-            .as_object()
-            .unwrap()
-            .clone(),
-            links,
-        }
-    }
-
-    fn revision_id(&self) -> String {
-        Self::object_id(&self.revision_object())
-    }
-
-    fn text(value: &Value) -> String {
-        match value {
-            Value::String(value) => value.clone(),
-            _ => serde_json::to_string(value).unwrap(),
-        }
-    }
-
-    fn apply_literal(&mut self, params: &Map<String, Value>) -> Result<ContentOperation, String> {
-        let expected_head = params
-            .get("expected_head")
-            .and_then(Value::as_str)
-            .unwrap_or(self.head.as_str())
-            .to_owned();
-        if expected_head != self.head {
-            return Err("content head changed".to_owned());
-        }
-        let transformation = params
-            .get("transformation")
-            .and_then(Value::as_object)
-            .ok_or_else(|| "content transformation is missing".to_owned())?;
-        if transformation.get("type").and_then(Value::as_str) != Some("literal") {
-            return Err("vector content supports literal transforms only".to_owned());
-        }
-        let content = transformation
-            .get("value")
-            .cloned()
-            .ok_or_else(|| "literal value is missing".to_owned())?;
-        let destination = params
-            .get("destination")
-            .and_then(Value::as_object)
-            .ok_or_else(|| "content destination is missing".to_owned())?;
-        let key = destination
-            .get("key")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "content key is missing".to_owned())?;
-        let kind = destination
-            .get("kind")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "content kind is missing".to_owned())?;
-        let scope = destination
-            .get("scope")
-            .and_then(Value::as_str)
-            .unwrap_or("run");
-        let node_object = Self::node_object(key, kind, content.clone());
-        let node_id = Self::object_id(&node_object);
-        let node = VectorContentNode {
-            object_id: node_id.clone(),
-            key: key.to_owned(),
-            kind: kind.to_owned(),
-            title: String::new(),
-            content,
-            source_scope: "run".to_owned(),
-        };
-        if let Some(existing) = self.nodes.iter_mut().find(|item| item.key == key) {
-            *existing = node;
-        } else {
-            self.nodes.push(node);
-        }
-        let prior_head = self.head.clone();
-        let revision_object = self.revision_object();
-        let revision_id = Self::object_id(&revision_object);
-        self.head.clone_from(&revision_id);
-        let reason = params.get("reason").and_then(Value::as_str).unwrap_or("");
-        let trace = TraceBatch {
-            objects: vec![
-                Self::addressed(node_object),
-                Self::addressed(revision_object),
-            ],
-            derivations: vec![
-                Self::derivation(Derivation {
-                    producer: "ContentLiteral:v1".to_owned(),
-                    output_id: node_id.clone(),
-                    input_ids: Vec::new(),
-                    params: json!({"type": "literal"}).as_object().unwrap().clone(),
-                }),
-                Self::derivation(Derivation {
-                    producer: "ContentAdvance:v1".to_owned(),
-                    output_id: revision_id.clone(),
-                    input_ids: if prior_head.is_empty() {
-                        Vec::new()
-                    } else {
-                        vec![prior_head]
-                    },
-                    params: json!({
-                        "owner": self.owner,
-                        "prior_head": if expected_head.is_empty() {
-                            Value::Null
-                        } else {
-                            Value::String(expected_head.clone())
-                        },
-                        "reason": reason,
-                        "scope": "run",
-                        "scope_id": self.run_id,
-                    })
-                    .as_object()
-                    .unwrap()
-                    .clone(),
-                }),
-            ],
-        };
-        let mut promotions = Vec::new();
-        if scope != "run" {
-            promotions.push(ContentPromotion {
-                scope: scope.to_owned(),
-                key: key.to_owned(),
-                object_id: Some(node_id.clone()),
-                expected_head: None,
-                expected_object_id: destination
-                    .get("expected_object_id")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
-                source_head: revision_id.clone(),
-                reason: reason.to_owned(),
-            });
-        }
-        Ok(ContentOperation {
-            result: json!({
-                "ok": true,
-                "status": "applied",
-                "active_scope": "run",
-                "head": revision_id,
-                "object_ids": [node_id],
-                "promotions": promotions.iter().map(|promotion| json!({
-                    "scope": promotion.scope,
-                    "key": promotion.key,
-                    "status": "requested",
-                })).collect::<Vec<_>>(),
-            })
-            .as_object()
-            .unwrap()
-            .clone(),
-            promotions,
-            final_selection: None,
-            trace,
-        })
-    }
-}
-
-impl ContentService for VectorContentService {
-    fn prompt_components(&mut self) -> Result<Vec<PromptComponent>, zeta_agent::AgentError> {
-        let items = self
-            .nodes
-            .iter()
-            .map(|node| {
-                json!({
-                    "key": node.key,
-                    "kind": node.kind,
-                    "title": node.title,
-                    "source_scope": node.source_scope,
-                    "object_id": node.object_id,
-                    "chars": Self::text(&node.content).chars().count(),
-                })
-            })
-            .collect::<Vec<_>>();
-        let mut lines = vec![
-            format!("Content workspace head: {}", self.head),
-            "Available content:".to_owned(),
-        ];
-        for node in &self.nodes {
-            lines.push(format!(
-                "- {} ({}, {}, {})",
-                node.key, node.kind, node.source_scope, node.object_id
-            ));
-        }
-        Ok(vec![PromptComponent {
-            kind: "content_manifest".to_owned(),
-            data: json!({
-                "head": self.head,
-                "items": items,
-                "total": self.nodes.len(),
-                "projected_keys": [],
-                "omitted_keys": [],
-            })
-            .as_object()
-            .unwrap()
-            .clone(),
-            message: Some(
-                json!({"role": "system", "content": lines.join("\n")})
-                    .as_object()
-                    .unwrap()
-                    .clone(),
-            ),
-            representation: "full".to_owned(),
-            source_object_id: Some(self.head.clone()),
-            links: vec![self.head.clone()],
-            object_id: None,
-        }])
-    }
-
-    fn query<'a>(&'a mut self, params: &'a Map<String, Value>) -> ContentFuture<'a> {
-        Box::pin(async move {
-            let prefix = params.get("key_prefix").and_then(Value::as_str);
-            let kind = params.get("kind").and_then(Value::as_str);
-            let scope = params.get("source_scope").and_then(Value::as_str);
-            let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(20) as usize;
-            let cursor = params.get("cursor").and_then(Value::as_u64).unwrap_or(0) as usize;
-            let filtered = self
-                .nodes
-                .iter()
-                .filter(|node| prefix.is_none_or(|prefix| node.key.starts_with(prefix)))
-                .filter(|node| kind.is_none_or(|kind| node.kind == kind))
-                .filter(|node| scope.is_none_or(|scope| node.source_scope == scope))
-                .collect::<Vec<_>>();
-            let items = filtered
-                .iter()
-                .skip(cursor)
-                .take(limit)
-                .map(|node| {
-                    let rendered = Self::text(&node.content);
-                    json!({
-                        "key": node.key,
-                        "kind": node.kind,
-                        "title": node.title,
-                        "object_id": node.object_id,
-                        "source_scope": node.source_scope,
-                        "chars": rendered.chars().count(),
-                        "preview": rendered.chars().take(500).collect::<String>(),
-                    })
-                })
-                .collect::<Vec<_>>();
-            let next = cursor + items.len();
-            Ok(ContentOperation {
-                result: json!({
-                    "ok": true,
-                    "head": self.head,
-                    "items": items,
-                    "next_cursor": if next < filtered.len() {
-                        Some(next)
-                    } else {
-                        None
-                    },
-                })
-                .as_object()
-                .unwrap()
-                .clone(),
-                ..ContentOperation::default()
-            })
-        })
-    }
-
-    fn transform<'a>(&'a mut self, params: &'a Map<String, Value>) -> ContentFuture<'a> {
-        Box::pin(async move {
-            self.apply_literal(params)
-                .map_err(zeta_agent::AgentError::tool)
-        })
-    }
-
-    fn finish<'a>(&'a mut self, params: &'a Map<String, Value>) -> ContentFuture<'a> {
-        Box::pin(async move {
-            let object_id = params
-                .get("object_id")
-                .and_then(Value::as_str)
-                .ok_or_else(|| zeta_agent::AgentError::tool("content object id is missing"))?;
-            let Some(node) = self.nodes.iter().find(|node| node.object_id == object_id) else {
-                return Err(zeta_agent::AgentError::tool(
-                    "finished object is not reachable from the current content head",
-                ));
-            };
-            Ok(ContentOperation {
-                result: json!({"ok": true, "stop": true, "object_id": object_id})
-                    .as_object()
-                    .unwrap()
-                    .clone(),
-                final_selection: Some(ContentSelection {
-                    object_id: object_id.to_owned(),
-                    content: Self::text(&node.content),
-                }),
-                ..ContentOperation::default()
-            })
-        })
-    }
-}
-
-struct FixedHistory;
-
-impl HistoryService for FixedHistory {
-    fn query<'a>(&'a mut self, _params: &'a Map<String, Value>) -> HistoryFuture<'a> {
-        Box::pin(async {
-            Ok(json!({
-                "ok": true,
-                "runs": [{"run_id": "run-prior", "summary": "parser repaired"}],
-            })
-            .as_object()
-            .unwrap()
-            .clone())
-        })
-    }
-}
-
 struct CrossingDeadlineClock {
     calls: Cell<usize>,
 }
@@ -901,48 +497,6 @@ fn scripted_run(
     }
 }
 
-fn scripted_run_with_history(
-    invocation: &AgentInvocation,
-    capabilities: &[Capability],
-    model_script: Vec<ModelScriptTurn>,
-    event_ids: Vec<&str>,
-    history: &mut dyn HistoryService,
-) -> ScriptedRun {
-    let mut gateway = ScriptedGateway {
-        script: VecDeque::from(model_script),
-        inputs: Vec::new(),
-        cancellation: None,
-    };
-    let mut executor = ScriptedExecutor::default();
-    let mut observer = RecordingObserver::default();
-    let mut drafts = RecordingDrafts::default();
-    executor.recorded_drafts = Rc::clone(&drafts.events);
-    let values = event_ids.into_iter().map(str::to_owned).collect();
-    let mut ids = ScriptedIds { values };
-    let abort = FixedAbort { reason: None };
-    let clock = FixedClock;
-    let capabilities = resolve_capabilities(capabilities, invocation.tool_profile);
-    let runner = AgentRunner::new(
-        &capabilities,
-        &mut gateway,
-        &mut executor,
-        &mut observer,
-        &mut drafts,
-        &mut ids,
-        &abort,
-        &clock,
-    )
-    .with_history(history);
-    let result = block_on(runner.run(invocation));
-    ScriptedRun {
-        result,
-        gateway,
-        executor,
-        drafts,
-        ids,
-    }
-}
-
 #[test]
 fn shared_prompt_vectors_match_python_ground_truth() {
     let vectors: PromptVectors = serde_json::from_value(vectors("prompts.json")).unwrap();
@@ -1062,46 +616,6 @@ fn codex_profile_preserves_builtin_adapter_contracts() {
 }
 
 #[test]
-fn authorized_history_queries_stay_inside_the_runner() {
-    let mut invocation = invocation();
-    invocation.max_model_calls = 2;
-    invocation
-        .allowed_capabilities
-        .push("zeta.query_log".parse().unwrap());
-    let mut query_log = capability(
-        json!({
-            "type": "object",
-            "properties": {},
-            "additionalProperties": false,
-        }),
-        None,
-    );
-    query_log.id = "zeta.query_log".parse().unwrap();
-    let script = vec![
-        model_turn(json!({
-            "tool_calls": [tool_call("call-history", "query_log", "{}")],
-        })),
-        model_turn(json!({"content": "history recovered"})),
-    ];
-    let mut history = FixedHistory;
-
-    let run = scripted_run_with_history(
-        &invocation,
-        &[query_log],
-        script,
-        vec!["model-1", "result-1", "model-2"],
-        &mut history,
-    );
-
-    let result = run.result.unwrap();
-    assert_eq!(result.final_answer, "history recovered");
-    assert!(run.executor.calls.is_empty());
-    assert!(serde_json::to_string(&run.gateway.inputs[1].messages)
-        .unwrap()
-        .contains("parser repaired"));
-}
-
-#[test]
 fn context_budget_uses_latest_provider_telemetry() {
     let mut invocation = invocation();
     invocation.max_model_calls = 2;
@@ -1160,7 +674,14 @@ fn context_budget_uses_latest_provider_telemetry() {
 fn shared_invocation_vectors_match_python_ground_truth() {
     let vectors: InvocationVectors = serde_json::from_value(vectors("invocations.json")).unwrap();
     assert_eq!(vectors.version, 2);
-    for case in vectors.cases {
+    for case in vectors.cases.into_iter().filter(|case| {
+        !case.capabilities.iter().any(|capability| {
+            matches!(
+                capability.id.as_str(),
+                "zeta.query_content" | "zeta.transform_content" | "zeta.finish" | "zeta.query_log"
+            )
+        })
+    }) {
         let InvocationCase {
             name,
             mut invocation,
@@ -1170,7 +691,6 @@ fn shared_invocation_vectors_match_python_ground_truth() {
             event_ids,
             cancelled,
             capture_recorded_events,
-            content_setup,
             expected,
         } = case;
         invocation["environment"] = serde_json::to_value(&vectors.environment).unwrap();
@@ -1201,7 +721,6 @@ fn shared_invocation_vectors_match_python_ground_truth() {
         };
         let clock = FixedClock;
         let capabilities = resolve_capabilities(&capabilities, invocation.tool_profile);
-        let mut content = content_setup.map(VectorContentService::from_setup);
         let runner = AgentRunner::new(
             &capabilities,
             &mut gateway,
@@ -1212,10 +731,6 @@ fn shared_invocation_vectors_match_python_ground_truth() {
             &abort,
             &clock,
         );
-        let runner = match &mut content {
-            Some(content) => runner.with_content(content),
-            None => runner,
-        };
         let (aborted, abort_reason, result) = match block_on(runner.run(&invocation)) {
             Ok(result) => (false, Value::Null, result),
             Err(AgentRunError::Aborted(aborted)) => (
@@ -1499,15 +1014,15 @@ fn control_positions_increase_across_model_turns() {
     assert_eq!(result.proposals.len(), 2);
     match &result.proposals[0] {
         AgentProposal::Publish { position, .. } => assert_eq!(*position, 0),
-        AgentProposal::Wait { .. }
-        | AgentProposal::Cancel { .. }
-        | AgentProposal::ContentPromotion { .. } => panic!("expected publish proposal"),
+        AgentProposal::Wait { .. } | AgentProposal::Cancel { .. } => {
+            panic!("expected publish proposal")
+        }
     }
     match &result.proposals[1] {
         AgentProposal::Wait { position, .. } => assert_eq!(*position, 1),
-        AgentProposal::Publish { .. }
-        | AgentProposal::Cancel { .. }
-        | AgentProposal::ContentPromotion { .. } => panic!("expected wait proposal"),
+        AgentProposal::Publish { .. } | AgentProposal::Cancel { .. } => {
+            panic!("expected wait proposal")
+        }
     }
 }
 

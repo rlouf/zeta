@@ -469,6 +469,9 @@ fn append_assistant_items(items: &mut Vec<Value>, message: &Map<String, Value>) 
 }
 
 fn responses_tool(tool: &Value) -> Value {
+    if tool.get("type").and_then(Value::as_str) == Some("web_search") {
+        return tool.clone();
+    }
     let function = tool
         .as_object()
         .and_then(|tool| tool.get("function"))

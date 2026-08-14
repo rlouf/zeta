@@ -115,24 +115,36 @@ pub struct ScheduleEntry {
     pub catchup: Option<String>,
 }
 
-/// Selects one concrete model endpoint.
+/// Selects a named model profile for an authored agent.
 ///
 /// # Examples
 ///
 /// ```
-/// let model = zeta_manifest::ModelSpec {
-///     name: "qwen3.6".to_owned(),
-///     url: "http://127.0.0.1:8080/v1/chat/completions".to_owned(),
-/// };
-/// assert_eq!(model.name, "qwen3.6");
+/// let model = zeta_manifest::ModelSpec::Profile("fast-local".to_owned());
+/// assert_eq!(model.profile(), Some("fast-local"));
 /// ```
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ModelSpec {
-    /// Names the model served by the endpoint.
-    pub name: String,
-    /// Carries the model endpoint URL.
-    pub url: String,
+#[serde(untagged)]
+pub enum ModelSpec {
+    /// Names the profile that the host resolves before execution.
+    Profile(String),
+    /// Selects a concrete endpoint from the legacy frontmatter shape.
+    Endpoint {
+        /// Names the model served by the endpoint.
+        name: String,
+        /// Carries the model endpoint URL.
+        url: String,
+    },
+}
+
+impl ModelSpec {
+    /// Returns the authored profile name when this declaration uses one.
+    pub fn profile(&self) -> Option<&str> {
+        match self {
+            Self::Profile(profile) => Some(profile),
+            Self::Endpoint { .. } => None,
+        }
+    }
 }
 
 /// Overrides the retry policy for one agent.

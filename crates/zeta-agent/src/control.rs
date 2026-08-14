@@ -46,21 +46,4 @@ pub enum AgentProposal {
         /// Preserves global tool-call order.
         position: usize,
     },
-    /// Proposes promoting a traced content object.
-    ContentPromotion {
-        /// Selects the durable content scope.
-        scope: String,
-        /// Names the content entry within that scope.
-        key: String,
-        /// Identifies the object to make active, or removes the entry when absent.
-        object_id: Option<String>,
-        /// Protects the destination head from a concurrent move.
-        expected_head: Option<String>,
-        /// Protects the destination entry from a concurrent replacement.
-        expected_object_id: Option<String>,
-        /// Identifies the run head that produced the proposal.
-        source_head: String,
-        /// Records why the content should become durable.
-        reason: String,
-    },
 }

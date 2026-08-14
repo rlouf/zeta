@@ -23,8 +23,8 @@ use zeta::runtime_services::{
     RuntimePhase,
 };
 use zeta::{
-    ActiveProjectStatus, LocalSocketConfig, LocalSocketServer, NativeAgentExecutor, Project,
-    ProjectRevision, Runtime, RuntimeStatus,
+    ActiveProjectStatus, LocalSocketConfig, LocalSocketServer, Project, ProjectRevision, Runtime,
+    RuntimeStatus,
 };
 use zeta_ipc::{
     Action, ErrorObject, InitializeParams, Message, PeerIdentity, Request, RequestId, Retryability,
@@ -1357,12 +1357,8 @@ async fn run_owner(
     if revision.project_root() != project_root.as_path() {
         return Err("the active project revision belongs to a different project root".to_owned());
     }
-    let runtime = Runtime::start_with_agent_executor(
-        paths.dispatch(),
-        revision.clone(),
-        Arc::new(NativeAgentExecutor),
-    )
-    .map_err(|error| error.to_string())?;
+    let runtime =
+        Runtime::start(paths.dispatch(), revision.clone()).map_err(|error| error.to_string())?;
     let application_state = Arc::new(ApplicationState::new(
         project_root.clone(),
         paths.active_project().to_path_buf(),

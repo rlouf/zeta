@@ -5,7 +5,6 @@ mod declarations;
 mod edit;
 mod files;
 mod search;
-mod web;
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -18,11 +17,7 @@ use zeta_substrate::hash_bytes;
 use crate::{AbortSignal, AgentError, CapabilityExecutor, CapabilityFuture, CapabilityInvocation};
 
 pub use declarations::native_capabilities;
-pub use files::{HttpFuture, HttpResponse, HttpTransport, UnavailableHttpTransport};
 pub use search::{CommandOutput, CommandRunner, SystemCommandRunner};
-pub use web::{
-    UnavailableWebSearch, WebSearchFuture, WebSearchProvider, WebSearchResult, WebSearchSource,
-};
 
 static NEXT_ARTIFACT_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -34,25 +29,17 @@ static NEXT_ARTIFACT_ID: AtomicU64 = AtomicU64::new(0);
 /// let executor = zeta_agent::NativeToolExecutor::default();
 /// drop(executor);
 /// ```
-pub struct NativeToolExecutor<
-    C = SystemCommandRunner,
-    H = UnavailableHttpTransport,
-    W = UnavailableWebSearch,
-> {
+pub struct NativeToolExecutor<C = SystemCommandRunner> {
     commands: C,
-    http: H,
-    web_search: W,
 }
 
-impl Default
-    for NativeToolExecutor<SystemCommandRunner, UnavailableHttpTransport, UnavailableWebSearch>
-{
+impl Default for NativeToolExecutor<SystemCommandRunner> {
     fn default() -> Self {
         NativeToolExecutor::new(SystemCommandRunner)
     }
 }
 
-impl<C> NativeToolExecutor<C, UnavailableHttpTransport, UnavailableWebSearch> {
+impl<C> NativeToolExecutor<C> {
     /// Creates an executor with one explicit subprocess boundary.
     ///
     /// # Examples
@@ -64,41 +51,13 @@ impl<C> NativeToolExecutor<C, UnavailableHttpTransport, UnavailableWebSearch> {
     /// drop(executor);
     /// ```
     pub fn new(commands: C) -> Self {
-        NativeToolExecutor {
-            commands,
-            http: UnavailableHttpTransport,
-            web_search: UnavailableWebSearch,
-        }
+        NativeToolExecutor { commands }
     }
 }
 
-impl<C, H, W> NativeToolExecutor<C, H, W> {
-    /// Creates an executor with explicit subprocess and network boundaries.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// let executor = zeta_agent::NativeToolExecutor::with_network(
-    ///     zeta_agent::SystemCommandRunner,
-    ///     zeta_agent::UnavailableHttpTransport,
-    ///     zeta_agent::UnavailableWebSearch,
-    /// );
-    /// drop(executor);
-    /// ```
-    pub fn with_network(commands: C, http: H, web_search: W) -> Self {
-        NativeToolExecutor {
-            commands,
-            http,
-            web_search,
-        }
-    }
-}
-
-impl<C, H, W> CapabilityExecutor for NativeToolExecutor<C, H, W>
+impl<C> CapabilityExecutor for NativeToolExecutor<C>
 where
     C: CommandRunner,
-    H: HttpTransport,
-    W: WebSearchProvider,
 {
     fn execute<'a>(
         &'a mut self,
@@ -109,11 +68,9 @@ where
     }
 }
 
-impl<C, H, W> NativeToolExecutor<C, H, W>
+impl<C> NativeToolExecutor<C>
 where
     C: CommandRunner,
-    H: HttpTransport,
-    W: WebSearchProvider,
 {
     async fn execute_now(
         &mut self,
@@ -128,10 +85,7 @@ where
             .unwrap_or_else(|| PathBuf::from("."));
         let id = invocation.capability_id.as_str();
         if id == "zeta.read" {
-            let result =
-                files::read(&invocation.params, &base_directory, &mut self.http, abort).await;
-            check_abort(abort)?;
-            return Ok(result);
+            return Ok(files::read(&invocation.params, &base_directory));
         }
         if id == "zeta.write" {
             return Ok(files::write(&invocation.params, &base_directory));
@@ -168,11 +122,6 @@ where
                 &mut self.commands,
                 abort,
             );
-        }
-        if id == "zeta.web_search" {
-            let result = web::web_search(&invocation.params, &mut self.web_search, abort).await;
-            check_abort(abort)?;
-            return Ok(result);
         }
         Ok(error_result(
             "unknown-native-tool",

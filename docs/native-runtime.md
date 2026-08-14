@@ -15,12 +15,12 @@ agent outside the Dispatch actor, renews its lease, and commits its terminal
 proposal before it wakes more work. Queue items retain their archived agent
 revision across reload and restart.
 
-The initial native executor supports direct model declarations and durable
-internal controls. It does not grant native tools yet. Those tools need their
-own durable effect boundary. The egress lane stores connector effects,
-claims them separately from agent work, and retries safe delivery. A host
-supplies its connector executor and event-to-connector map. The connector
-process host and schedules remain future work.
+The native executor supports direct model declarations, durable controls, and
+selected native tools. Each Codex Responses request also includes hosted web
+search. Web search has no Zeta capability or effect record. The egress lane
+stores connector effects, claims them separately from agent work, and retries
+safe delivery. The native command does not start connector processes yet.
+Connector process support remains future work.
 
 ## Decision
 

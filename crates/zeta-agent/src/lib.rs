@@ -1,10 +1,8 @@
 //! Executes one resolved agent invocation through injected model and tool boundaries.
 
 mod capability;
-mod content;
 mod control;
 mod error;
-mod history;
 mod invocation;
 mod model;
 mod prompt;
@@ -18,12 +16,8 @@ pub use capability::{
     CapabilityId, CapabilityInvocation, DeliverySemantics, DraftRecorder, IdSource,
     ResolvedCapability, ToolProfile,
 };
-pub use content::{
-    ContentFuture, ContentOperation, ContentPromotion, ContentSelection, ContentService,
-};
 pub use control::AgentProposal;
 pub use error::{AgentError, AgentErrorKind, AgentRunAborted, AgentRunError};
-pub use history::{HistoryFuture, HistoryService};
 pub use invocation::{AgentInvocation, PromptEnvironment};
 pub use model::{
     chat_completions_request, codex_request_headers, decode_chat_completions_stream,
@@ -37,8 +31,7 @@ pub use prompt::{build_prompt, PromptBuild, PromptComponent, PromptInput, Prompt
 pub use result::{AgentRunResult, RunStopReason, StepName};
 pub use runner::AgentRunner;
 pub use tools::{
-    bounded_output, native_capabilities, CommandOutput, CommandRunner, HttpFuture, HttpResponse,
-    HttpTransport, NativeToolExecutor, SystemCommandRunner, UnavailableHttpTransport,
-    UnavailableWebSearch, WebSearchFuture, WebSearchProvider, WebSearchResult, WebSearchSource,
+    bounded_output, native_capabilities, CommandOutput, CommandRunner, NativeToolExecutor,
+    SystemCommandRunner,
 };
 pub use trace::{AddressedDerivation, AddressedObject, PromptTrace, TraceBatch};

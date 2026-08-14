@@ -12,7 +12,7 @@ use crate::event::{validate_schema, EventRegistry};
 use crate::parse::{validate_prompt, SkillResource, SkillSpec};
 use crate::spec::{
     AgentSpec, CapabilityId, CapabilitySpec, ExecutorProviderSpec, ImplementationFingerprint,
-    ModelSelectionSpec,
+    ModelSelectionSpec, ModelSpec,
 };
 
 const RESERVED_TOOL_NAMES: [&str; 6] = [
@@ -406,12 +406,22 @@ fn validate_agent_declaration(spec: &AgentSpec) -> Result<(), ManifestError> {
         ));
     }
     if let Some(model) = &spec.model {
-        if model.name.is_empty() || model.url.is_empty() {
-            return Err(invalid_agent(
-                spec,
-                Some("model"),
-                "agent model name and URL must be non-empty",
-            ));
+        match model {
+            ModelSpec::Profile(profile) if profile.trim().is_empty() => {
+                return Err(invalid_agent(
+                    spec,
+                    Some("model"),
+                    "agent model profile must be non-empty",
+                ))
+            }
+            ModelSpec::Endpoint { name, url } if name.is_empty() || url.is_empty() => {
+                return Err(invalid_agent(
+                    spec,
+                    Some("model"),
+                    "agent model name and URL must be non-empty",
+                ))
+            }
+            ModelSpec::Profile(_) | ModelSpec::Endpoint { .. } => {}
         }
     }
     if spec.executor.provider.is_empty() {

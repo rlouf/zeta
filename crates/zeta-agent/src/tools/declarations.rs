@@ -146,7 +146,7 @@ pub fn native_capabilities() -> Vec<Capability> {
         ),
         capability(
             "zeta.read",
-            "Read a UTF-8 text file or public HTTP(S) URL. Returns a [path#tag] snapshot header and numbered lines.",
+            "Read a UTF-8 text file. Returns a [path#tag] snapshot header and numbered lines.",
             object(json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -154,7 +154,7 @@ pub fn native_capabilities() -> Vec<Capability> {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Local file path or public HTTP(S) URL.",
+                        "description": "Local file path.",
                     },
                     "offset": {
                         "type": "integer",
@@ -165,28 +165,6 @@ pub fn native_capabilities() -> Vec<Capability> {
                         "type": "integer",
                         "minimum": 1,
                         "description": "Maximum number of lines to return.",
-                    },
-                },
-            })),
-            None,
-        ),
-        capability(
-            "zeta.web_search",
-            "Search public web pages using Codex hosted web search. Provide one self-contained query; use read for URLs returned by the search.",
-            object(json!({
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["query"],
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Self-contained public web search query.",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 20,
-                        "description": "Maximum number of source URLs to return.",
                     },
                 },
             })),

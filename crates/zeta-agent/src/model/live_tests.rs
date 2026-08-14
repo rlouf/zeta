@@ -233,6 +233,7 @@ async fn http_gateway_streams_byte_fragmented_chat_completion() {
     let body = request.split("\r\n\r\n").nth(1).unwrap();
     let body: Value = serde_json::from_str(body).unwrap();
     assert_eq!(body["stream"], true);
+    assert!(body.get("tools").is_none());
 }
 
 #[tokio::test]
@@ -282,6 +283,9 @@ async fn http_gateway_selects_responses_and_normalizes_usage() {
     let body: Value = serde_json::from_str(body).unwrap();
     assert_eq!(body["stream"], true);
     assert_eq!(body["store"], false);
+    assert_eq!(body["tools"], json!([{"type": "web_search"}]));
+    assert_eq!(body["tool_choice"], "auto");
+    assert_eq!(body["parallel_tool_calls"], true);
 }
 
 #[tokio::test]

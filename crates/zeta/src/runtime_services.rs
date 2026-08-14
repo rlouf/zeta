@@ -26,7 +26,7 @@ use zeta_agent::{
 use zeta_dispatch::{Dispatch, DispatchError};
 use zeta_journal::{DraftEvent, Event, EventFilter};
 use zeta_manifest::{
-    scheduled_event_type, verify_execution_manifest, verify_project_manifest,
+    scheduled_event_type, verify_execution_manifest, verify_project_manifest, AgentSpec,
     DeliverySemantics as AuthoredDeliverySemantics, ExecutionManifest, ExecutionManifestId,
     ImplementationFingerprint, ProjectManifest, ProjectRevisionId, ScheduleEntry,
 };
@@ -925,8 +925,18 @@ impl Scheduler {
         verify_project_manifest(project).map_err(|error| {
             SchedulerError::new(SchedulerErrorKind::InvalidManifest, error.to_string())
         })?;
+        Self::from_agents(project.agents.values())
+    }
+
+    /// Compiles direct agent declarations for the native Markdown host.
+    ///
+    /// The host retains these declarations in an immutable project revision.
+    /// It has no authored project manifest file.
+    pub(crate) fn from_agents<'a>(
+        agents: impl IntoIterator<Item = &'a AgentSpec>,
+    ) -> Result<Self, SchedulerError> {
         let mut schedules = Vec::new();
-        for spec in project.agents.values() {
+        for spec in agents {
             if !spec.enabled {
                 continue;
             }
@@ -2000,11 +2010,17 @@ fn resolved_model_endpoint(execution: &ExecutionManifest) -> (Option<String>, Op
     let agent = &execution.agent.model;
     let project = &execution.model;
     let model_name = match agent {
-        Some(agent) => Some(agent.name.clone()),
+        Some(zeta_manifest::ModelSpec::Endpoint { name, .. }) => Some(name.clone()),
+        Some(zeta_manifest::ModelSpec::Profile(_)) => {
+            project.as_ref().map(|project| project.model.clone())
+        }
         None => project.as_ref().map(|project| project.model.clone()),
     };
     let model_url = match agent {
-        Some(agent) => Some(agent.url.clone()),
+        Some(zeta_manifest::ModelSpec::Endpoint { url, .. }) => Some(url.clone()),
+        Some(zeta_manifest::ModelSpec::Profile(_)) => {
+            project.as_ref().map(|project| project.url.clone())
+        }
         None => project.as_ref().map(|project| project.url.clone()),
     };
     (model_name, model_url)

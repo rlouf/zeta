@@ -707,13 +707,23 @@ fn take_model(values: &mut Map<String, Value>) -> Result<Option<ModelSpec>, Agen
     if value == Value::Null {
         return Ok(None);
     }
-    let Value::Object(mut value) = value else {
-        return Err(invalid_field("model", "expected an object"));
-    };
-    reject_unknown_fields(&value, &["name", "url"], "model")?;
-    let name = take_nested_required_string(&mut value, "name", "model")?;
-    let url = take_nested_required_string(&mut value, "url", "model")?;
-    Ok(Some(ModelSpec { name, url }))
+    match value {
+        Value::String(profile) => {
+            if profile.trim().is_empty() {
+                return Err(invalid_field("model", "must not be empty"));
+            }
+            Ok(Some(ModelSpec::Profile(profile)))
+        }
+        Value::Object(mut value) => {
+            reject_unknown_fields(&value, &["name", "url"], "model")?;
+            let name = take_nested_required_string(&mut value, "name", "model")?;
+            let url = take_nested_required_string(&mut value, "url", "model")?;
+            Ok(Some(ModelSpec::Endpoint { name, url }))
+        }
+        Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Null => {
+            Err(invalid_field("model", "expected a profile name string"))
+        }
+    }
 }
 
 fn take_executor(values: &mut Map<String, Value>) -> Result<ExecutorSpec, AgentSpecError> {

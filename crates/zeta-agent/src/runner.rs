@@ -13,10 +13,8 @@ use crate::capability::{
     ArgumentAdapter, Capability, CapabilityExecutor, CapabilityId, CapabilityInvocation,
     DeliverySemantics, DraftRecorder, IdSource, ResolvedCapability,
 };
-use crate::content::{ContentOperation, ContentService};
 use crate::control::AgentProposal;
 use crate::error::{AgentError, AgentRunAborted, AgentRunError};
-use crate::history::HistoryService;
 use crate::invocation::AgentInvocation;
 use crate::model::{AbortReason, AbortSignal, AgentObserver, Clock, ModelGateway, ModelRequest};
 use crate::prompt::{build_prompt, PromptBuild, PromptInput, PromptTransform};
@@ -33,8 +31,6 @@ pub struct AgentRunner<'a> {
     id_source: &'a mut dyn IdSource,
     abort: &'a dyn AbortSignal,
     clock: &'a dyn Clock,
-    content: Option<&'a mut dyn ContentService>,
-    history: Option<&'a mut dyn HistoryService>,
 }
 
 impl<'a> AgentRunner<'a> {
@@ -59,21 +55,7 @@ impl<'a> AgentRunner<'a> {
             id_source,
             abort,
             clock,
-            content: None,
-            history: None,
         }
-    }
-
-    /// Authorizes the runner to use caller-owned content state.
-    pub fn with_content(mut self, content: &'a mut dyn ContentService) -> Self {
-        self.content = Some(content);
-        self
-    }
-
-    /// Authorizes the runner to query caller-owned invocation history.
-    pub fn with_history(mut self, history: &'a mut dyn HistoryService) -> Self {
-        self.history = Some(history);
-        self
     }
 
     /// Executes one resolved invocation.
@@ -85,12 +67,7 @@ impl<'a> AgentRunner<'a> {
         mut self,
         invocation: &AgentInvocation,
     ) -> Result<AgentRunResult, AgentRunError> {
-        let capabilities = CapabilitySet::new(
-            invocation,
-            self.capabilities,
-            self.content.is_some(),
-            self.history.is_some(),
-        )?;
+        let capabilities = CapabilitySet::new(invocation, self.capabilities)?;
         let mut result = AgentRunResult::default();
         let mut state = RunState {
             next_model_caused_by: invocation.caused_by.clone(),
@@ -203,10 +180,6 @@ impl<'a> AgentRunner<'a> {
     ) -> Result<RunLoopControl, AgentRunError> {
         result.steps.push(StepName::BuildPrompt);
         let current_events = current_event_views(&result.events, &state.projection);
-        let content_components = match self.content.as_deref_mut() {
-            Some(content) => content.prompt_components()?,
-            None => Vec::new(),
-        };
         let prompt = build_prompt(
             &PromptInput {
                 objective: invocation.objective.clone(),
@@ -220,7 +193,7 @@ impl<'a> AgentRunner<'a> {
                 selected_model: invocation.model_name.clone(),
                 thinking: invocation.thinking.clone(),
                 current_events,
-                content_components,
+                content_components: Vec::new(),
                 transform: invocation.prompt_transform.clone(),
             },
             &invocation.environment,
@@ -695,34 +668,6 @@ impl<'a> AgentRunner<'a> {
                     false,
                 ))
             }
-            RouteKind::QueryContent => {
-                let Some(content) = self.content.as_deref_mut() else {
-                    return Err(AgentError::invocation("content service is unavailable").into());
-                };
-                let operation = content.query(canonical_params).await?;
-                apply_content_operation(result, &route.id, operation)
-            }
-            RouteKind::TransformContent => {
-                let Some(content) = self.content.as_deref_mut() else {
-                    return Err(AgentError::invocation("content service is unavailable").into());
-                };
-                let operation = content.transform(canonical_params).await?;
-                apply_content_operation(result, &route.id, operation)
-            }
-            RouteKind::FinishContent => {
-                let Some(content) = self.content.as_deref_mut() else {
-                    return Err(AgentError::invocation("content service is unavailable").into());
-                };
-                let operation = content.finish(canonical_params).await?;
-                apply_content_operation(result, &route.id, operation)
-            }
-            RouteKind::QueryHistory => {
-                let Some(history) = self.history.as_deref_mut() else {
-                    return Err(AgentError::invocation("history service is unavailable").into());
-                };
-                let tool_result = history.query(canonical_params).await?;
-                Ok(ToolExecution::control(&route.id, tool_result, false))
-            }
             RouteKind::QueryContextBudget => Ok(ToolExecution::control(
                 &route.id,
                 context_budget_result(invocation, result)?,
@@ -882,10 +827,6 @@ enum RouteKind {
     Publish,
     Wait,
     Cancel,
-    QueryContent,
-    TransformContent,
-    FinishContent,
-    QueryHistory,
     QueryContextBudget,
 }
 
@@ -893,8 +834,6 @@ impl CapabilitySet {
     fn new(
         invocation: &AgentInvocation,
         declarations: &[ResolvedCapability],
-        content_available: bool,
-        history_available: bool,
     ) -> Result<Self, AgentError> {
         let mut by_id = HashMap::new();
         let mut declared_names = HashMap::new();
@@ -928,34 +867,17 @@ impl CapabilitySet {
                 )));
             };
             let kind = match declaration.canonical.id.as_str() {
-                "zeta.query_content" => RouteKind::QueryContent,
-                "zeta.transform_content" => RouteKind::TransformContent,
-                "zeta.finish" => RouteKind::FinishContent,
-                "zeta.query_log" => RouteKind::QueryHistory,
+                "zeta.query_content"
+                | "zeta.transform_content"
+                | "zeta.finish"
+                | "zeta.query_log" => {
+                    return Err(AgentError::invocation(format!(
+                        "unsupported capability grant: {id}"
+                    )));
+                }
                 "zeta.query_context_budget" => RouteKind::QueryContextBudget,
                 _ => RouteKind::External(Box::new((*declaration).clone())),
             };
-            let content_kind = match &kind {
-                RouteKind::QueryContent
-                | RouteKind::TransformContent
-                | RouteKind::FinishContent => true,
-                RouteKind::External(_)
-                | RouteKind::Publish
-                | RouteKind::Wait
-                | RouteKind::Cancel
-                | RouteKind::QueryHistory
-                | RouteKind::QueryContextBudget => false,
-            };
-            if content_kind && !content_available {
-                return Err(AgentError::invocation(format!(
-                    "content capability requires an authorized content service: {id}"
-                )));
-            }
-            if matches!(&kind, RouteKind::QueryHistory) && !history_available {
-                return Err(AgentError::invocation(format!(
-                    "history capability requires an authorized history service: {id}"
-                )));
-            }
             set.add_route(
                 declaration.model_name.as_str(),
                 Route {
@@ -1288,38 +1210,6 @@ fn estimated_latest_prompt_tokens(result: &AgentRunResult) -> Option<u64> {
         }
     }
     Some(tokens)
-}
-
-fn apply_content_operation(
-    result: &mut AgentRunResult,
-    capability_id: &CapabilityId,
-    operation: ContentOperation,
-) -> Result<ToolExecution, AgentRunError> {
-    let ContentOperation {
-        result: tool_result,
-        promotions,
-        final_selection,
-        trace,
-    } = operation;
-    for promotion in promotions {
-        result.proposals.push(AgentProposal::ContentPromotion {
-            scope: promotion.scope,
-            key: promotion.key,
-            object_id: promotion.object_id,
-            expected_head: promotion.expected_head,
-            expected_object_id: promotion.expected_object_id,
-            source_head: promotion.source_head,
-            reason: promotion.reason,
-        });
-    }
-    result.trace.merge(trace)?;
-    if let Some(selection) = final_selection {
-        result.final_object_id = Some(selection.object_id);
-        result.final_answer = selection.content;
-    }
-    let stop = tool_result.get("ok") == Some(&Value::Bool(true))
-        && tool_result.get("stop") == Some(&Value::Bool(true));
-    Ok(ToolExecution::control(capability_id, tool_result, stop))
 }
 
 impl ToolExecution {

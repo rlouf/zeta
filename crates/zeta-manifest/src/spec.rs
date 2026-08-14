@@ -205,7 +205,7 @@ pub struct IngressBinding {
     /// Names the accepted event.
     pub event: String,
     /// Selects the connector that supplies this external event.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connector: Option<String>,
     /// Carries connector-specific filter values.
     pub filter: Map<String, Value>,
@@ -232,7 +232,7 @@ pub struct EgressBinding {
     /// Names the published event.
     pub event: String,
     /// Selects the connector that receives this external event.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connector: Option<String>,
     /// Carries connector-specific delivery options.
     pub options: Map<String, Value>,

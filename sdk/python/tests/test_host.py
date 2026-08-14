@@ -129,6 +129,37 @@ class Slack:
     }
 
 
+def test_subscribes_to_a_decorated_connector(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "connectors" / "slack.py",
+        """\
+from zeta_plugin import connector
+
+
+@connector("slack")
+class Slack:
+    async def subscribe(self, request, context):
+        return {
+            "cursor": request["cursor"],
+            "event_type": request["event_type"],
+        }
+""",
+    )
+    host = ProviderHost(tmp_path, entry_points=[])
+
+    result = host.call(
+        "subscribe",
+        {
+            "input": {
+                "connector": "slack",
+                "request": {"cursor": "cursor-1", "event_type": "slack.message"},
+            }
+        },
+    )
+
+    assert result == {"cursor": "cursor-1", "event_type": "slack.message"}
+
+
 def test_serves_the_private_json_rpc_protocol(tmp_path: Path) -> None:
     _write(
         tmp_path / "tools" / "echo.py",

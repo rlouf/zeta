@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 use zeta_dispatch::{
     AttemptCompletion, AttemptFailure, AttemptFailureCode, ClaimToken, Dispatch, Effect,
@@ -22,10 +22,9 @@ use zeta_journal::{DraftEvent, Event, EventFilter};
 use zeta_manifest::AgentSpec;
 
 use crate::{
-    CallbackDraftRecorder, CallbackObserver, CancellationToken, ProjectRevision,
-    ProjectRevisionStore, PythonModelGateway, PythonProviderCatalog, PythonProviderHost,
-    PythonToolExecutor, Scheduler, SharedPythonProviderHost, SystemClock, UuidIdSource,
-    attempt_completion, host_model,
+    CancellationToken, ProjectRevision, ProjectRevisionStore, PythonModelGateway,
+    PythonProviderCatalog, PythonProviderHost, PythonToolExecutor, Scheduler,
+    SharedPythonProviderHost, SystemClock, UuidIdSource, attempt_completion, host_model,
 };
 use zeta_substrate::{canonical_json, hash_bytes};
 
@@ -85,6 +84,108 @@ struct AgentTask {
     pub run_id: String,
     /// Selects the retry policy for this exact agent revision.
     pub retry_policy: RetryPolicy,
+    /// Sends durable agent steps and live observations to the runtime actor.
+    pub event_sink: Option<AgentEventSink>,
+}
+
+/// Reports one transient observation from an active agent run.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct AgentProgress {
+    /// Identifies the durable queue item that owns this run.
+    pub queue_item_id: String,
+    /// Identifies the active agent.
+    pub agent_slug: String,
+    /// Identifies the resolved session.
+    pub session_id: String,
+    /// Identifies the active run.
+    pub run_id: String,
+    /// Carries the transient model observation.
+    pub observation: zeta_agent::Observation,
+}
+
+/// Sends one agent worker's facts and observations to the runtime actor.
+#[derive(Clone, Debug)]
+struct AgentEventSink {
+    sender: mpsc::Sender<RuntimeCommand>,
+}
+
+impl AgentEventSink {
+    fn record(&self, event_id: &str, draft: &DraftEvent) -> Result<String, zeta_agent::AgentError> {
+        let (reply, receiver) = mpsc::channel();
+        self.sender
+            .send(RuntimeCommand::RecordAgentDraft {
+                event_id: event_id.to_owned(),
+                draft: draft.clone(),
+                reply,
+            })
+            .map_err(|_error| zeta_agent::AgentError::durability("the runtime actor is not running"))?;
+        receiver
+            .recv()
+            .map_err(|_error| zeta_agent::AgentError::durability("the runtime actor stopped before it stored an agent draft"))?
+            .map_err(zeta_agent::AgentError::durability)
+    }
+
+    fn observe(&self, progress: AgentProgress) {
+        let _sent = self.sender.send(RuntimeCommand::AgentProgress { progress });
+    }
+}
+
+struct RuntimeDraftRecorder {
+    sink: Option<AgentEventSink>,
+}
+
+impl RuntimeDraftRecorder {
+    fn new(sink: Option<AgentEventSink>) -> Self {
+        Self { sink }
+    }
+}
+
+impl zeta_agent::DraftRecorder for RuntimeDraftRecorder {
+    fn record(
+        &mut self,
+        event_id: &str,
+        draft: &DraftEvent,
+    ) -> Result<String, zeta_agent::AgentError> {
+        match &self.sink {
+            Some(sink) => sink.record(event_id, draft),
+            None => Ok(event_id.to_owned()),
+        }
+    }
+}
+
+struct RuntimeAgentObserver {
+    sink: Option<AgentEventSink>,
+    queue_item_id: String,
+    agent_slug: String,
+    session_id: String,
+    run_id: String,
+}
+
+impl RuntimeAgentObserver {
+    fn new(task: &AgentTask) -> Self {
+        Self {
+            sink: task.event_sink.clone(),
+            queue_item_id: task.queue_item_id.clone(),
+            agent_slug: task.agent.slug.clone(),
+            session_id: task.session_id.clone(),
+            run_id: task.run_id.clone(),
+        }
+    }
+}
+
+impl zeta_agent::AgentObserver for RuntimeAgentObserver {
+    fn observe(&mut self, observation: zeta_agent::Observation) {
+        let Some(sink) = &self.sink else {
+            return;
+        };
+        sink.observe(AgentProgress {
+            queue_item_id: self.queue_item_id.clone(),
+            agent_slug: self.agent_slug.clone(),
+            session_id: self.session_id.clone(),
+            run_id: self.run_id.clone(),
+            observation,
+        });
+    }
 }
 
 /// Reports one agent-execution failure before Dispatch selects a retry.
@@ -465,8 +566,8 @@ impl AgentExecutor {
             },
             None => executor,
         };
-        let mut observer = CallbackObserver::new(|_observation: zeta_agent::Observation| {});
-        let mut recorder = CallbackDraftRecorder::new(|_draft: &DraftEvent| Ok::<(), String>(()));
+        let mut observer = RuntimeAgentObserver::new(&task);
+        let mut recorder = RuntimeDraftRecorder::new(task.event_sink.clone());
         let mut ids = UuidIdSource::new("agent");
         let clock = SystemClock;
         let result = match provider_host.filter(|_host| !task.providers.tools().is_empty()) {
@@ -614,8 +715,8 @@ impl AgentExecutor {
         let native = zeta_agent::NativeToolExecutor::new(zeta_agent::SystemCommandRunner);
         let mut gateway = PythonModelGateway::new(Arc::clone(&host), model);
         let mut executor = PythonToolExecutor::new(host, native);
-        let mut observer = CallbackObserver::new(|_observation: zeta_agent::Observation| {});
-        let mut recorder = CallbackDraftRecorder::new(|_draft: &DraftEvent| Ok::<(), String>(()));
+        let mut observer = RuntimeAgentObserver::new(&task);
+        let mut recorder = RuntimeDraftRecorder::new(task.event_sink.clone());
         let mut ids = UuidIdSource::new("agent");
         let clock = SystemClock;
         let result = runtime.block_on(
@@ -856,6 +957,7 @@ impl RuntimeWake {
 pub struct Runtime {
     sender: mpsc::Sender<RuntimeCommand>,
     wake: RuntimeWake,
+    progress: broadcast::Sender<AgentProgress>,
     thread: Mutex<Option<thread::JoinHandle<()>>>,
 }
 
@@ -904,8 +1006,10 @@ impl Runtime {
         }
         let (sender, receiver) = mpsc::channel();
         let (wake, _initial_receiver) = RuntimeWake::new();
+        let (progress, _initial_progress_receiver) = broadcast::channel(256);
         let actor_wake = wake.clone();
         let actor_sender = sender.clone();
+        let actor_progress = progress.clone();
         let thread = thread::Builder::new()
             .name("zeta-dispatch".to_owned())
             .spawn(move || {
@@ -918,6 +1022,7 @@ impl Runtime {
                     receiver,
                     actor_sender,
                     actor_wake,
+                    actor_progress,
                     agent_runner,
                     egress,
                     subscriptions,
@@ -927,6 +1032,7 @@ impl Runtime {
         Ok(Self {
             sender,
             wake,
+            progress,
             thread: Mutex::new(Some(thread)),
         })
     }
@@ -977,6 +1083,11 @@ impl Runtime {
     /// Returns a receiver for every post-commit work notification.
     pub fn subscribe(&self) -> watch::Receiver<u64> {
         self.wake.subscribe()
+    }
+
+    /// Returns a receiver for transient agent progress updates.
+    pub fn subscribe_progress(&self) -> broadcast::Receiver<AgentProgress> {
+        self.progress.subscribe()
     }
 
     /// Durably stores and immediately routes one external event.
@@ -1056,6 +1167,14 @@ enum RuntimeCommand {
     },
     Shutdown {
         reply: mpsc::Sender<Result<(), RuntimeError>>,
+    },
+    RecordAgentDraft {
+        event_id: String,
+        draft: DraftEvent,
+        reply: mpsc::Sender<Result<String, String>>,
+    },
+    AgentProgress {
+        progress: AgentProgress,
     },
     AgentFinished {
         claim: QueueClaim,
@@ -1270,6 +1389,7 @@ fn run_actor(
     receiver: mpsc::Receiver<RuntimeCommand>,
     sender: mpsc::Sender<RuntimeCommand>,
     wake: RuntimeWake,
+    progress: broadcast::Sender<AgentProgress>,
     agent_runner: Option<Arc<AgentRunner>>,
     egress: Option<EgressServices>,
     subscriptions: Option<SubscriptionServices>,
@@ -1358,6 +1478,20 @@ fn run_actor(
                 }
                 let _sent = reply.send(Ok(()));
                 return;
+            }
+            Received::Command(RuntimeCommand::RecordAgentDraft {
+                event_id,
+                draft,
+                reply,
+            }) => {
+                let result = record_agent_draft(&mut dispatch, &event_id, draft);
+                if result.is_ok() {
+                    wake.signal();
+                }
+                let _sent = reply.send(result);
+            }
+            Received::Command(RuntimeCommand::AgentProgress { progress: update }) => {
+                let _sent = progress.send(update);
             }
             Received::Command(RuntimeCommand::AgentFinished {
                 claim,
@@ -1778,6 +1912,19 @@ fn ingest_and_route(
     })
 }
 
+fn record_agent_draft(
+    dispatch: &mut Dispatch,
+    event_id: &str,
+    draft: DraftEvent,
+) -> Result<String, String> {
+    let timestamp_ms = current_time_ms().map_err(|error| error.to_string())?;
+    let event = Event::from_draft(event_id, timestamp_ms, draft);
+    let outcome = dispatch
+        .append_trusted_event(event)
+        .map_err(|error| error.to_string())?;
+    Ok(outcome.event.id)
+}
+
 fn refresh_actor_state(
     dispatch: &mut Dispatch,
     state: &mut ActorState,
@@ -1844,7 +1991,7 @@ fn fill_agent_lane(
                 return Err(RuntimeError::new(error.to_string()));
             }
         };
-        let task = match build_agent_task(dispatch, state, &claim, started.attempt()) {
+        let mut task = match build_agent_task(dispatch, state, &claim, started.attempt()) {
             Ok(task) => task,
             Err(error) => {
                 let _failed = fail_claimed_agent(
@@ -1856,6 +2003,9 @@ fn fill_agent_lane(
                 continue;
             }
         };
+        task.event_sink = Some(AgentEventSink {
+            sender: sender.clone(),
+        });
         let cancellation = CancellationToken::new();
         let worker_cancellation = cancellation.clone();
         let worker_runner = Arc::clone(agent_runner);
@@ -2333,6 +2483,7 @@ fn build_agent_task(
         session_id,
         run_id,
         retry_policy,
+        event_sink: None,
     })
 }
 
@@ -2709,6 +2860,88 @@ mod tests {
     }
 
     #[test]
+    fn agent_steps_receive_journal_identity_and_live_progress() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let database = temporary.path().join("zeta.sqlite3");
+        let (recorded_sender, recorded_receiver) = mpsc::channel();
+        let runtime = Runtime::start_with_test_agent_runner(
+            &database,
+            project(temporary.path()),
+            Arc::new(move |task, _cancellation| {
+                let sink = task.event_sink.expect("the runtime injects an agent event sink");
+                sink.observe(AgentProgress {
+                    queue_item_id: task.queue_item_id.clone(),
+                    agent_slug: task.agent.slug.clone(),
+                    session_id: task.session_id.clone(),
+                    run_id: task.run_id.clone(),
+                    observation: zeta_agent::Observation::TextDelta {
+                        text: "Hello".to_owned(),
+                    },
+                });
+                let event_id = sink
+                    .record(
+                        "agent-model-1",
+                        &DraftEvent {
+                            event_type: "zeta.model_call.completed".to_owned(),
+                            source: format!("agent:{}", task.agent.slug),
+                            payload: Map::new(),
+                            idempotency_key: Some("model:1".to_owned()),
+                            caused_by: Some(task.event.id),
+                            session_id: Some(task.session_id),
+                            run_id: Some(task.run_id),
+                            turn_id: None,
+                        },
+                    )
+                    .expect("the actor stores the agent step");
+                let _sent = recorded_sender.send(event_id);
+                completed_agent_execution()
+            }),
+        )
+        .expect("reactive runtime");
+        let mut progress = runtime.subscribe_progress();
+
+        runtime.ingest(draft(1)).expect("ingress");
+        assert_eq!(
+            recorded_receiver
+                .recv_timeout(Duration::from_secs(5))
+                .expect("recorded agent step"),
+            "agent-model-1"
+        );
+        let update = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("progress runtime")
+            .block_on(async {
+                tokio::time::timeout(Duration::from_secs(5), progress.recv())
+                    .await
+                    .expect("agent progress arrives")
+                    .expect("agent progress channel remains open")
+            });
+        assert_eq!(update.observation, zeta_agent::Observation::TextDelta {
+            text: "Hello".to_owned()
+        });
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while runtime.status().expect("runtime status").active_agents != 0 {
+            assert!(std::time::Instant::now() < deadline, "agent completion timed out");
+            thread::sleep(Duration::from_millis(10));
+        }
+        runtime.shutdown().expect("runtime shutdown");
+
+        let dispatch = Dispatch::open(&database).expect("read dispatch journal");
+        let events = dispatch
+            .list_events(&EventFilter {
+                event_type: Some("zeta.model_call.completed".to_owned()),
+                ..EventFilter::default()
+            })
+            .expect("agent step events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].id, "agent-model-1");
+        assert!(events[0].cursor.is_some());
+        assert_eq!(events[0].idempotency_key.as_deref(), Some("model:1"));
+    }
+
+    #[test]
     fn agent_lane_runs_four_independent_agents_in_parallel() {
         let temporary = TempDir::new().expect("temporary directory");
         let barrier = Arc::new(Barrier::new(5));
@@ -2978,6 +3211,7 @@ mod tests {
             session_id: "agent/worker/event-1".to_owned(),
             run_id: "run-1".to_owned(),
             retry_policy: RetryPolicy::default(),
+            event_sink: None,
         };
         let execution = AgentExecutor::default().execute(task, CancellationToken::new());
         let AgentExecution::Completed(completion) = execution else {

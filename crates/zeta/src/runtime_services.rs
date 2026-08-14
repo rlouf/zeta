@@ -2278,9 +2278,9 @@ impl<F> CallbackDraftRecorder<F> {
 
 impl<F> DraftRecorder for CallbackDraftRecorder<F>
 where
-    F: FnMut(&DraftEvent) -> Result<(), String>,
+    F: FnMut(&str, &DraftEvent) -> Result<String, String>,
 {
-    fn record(&mut self, draft: &DraftEvent) -> Result<(), AgentError> {
-        (self.callback)(draft).map_err(|error| AgentError::durability(error.to_string()))
+    fn record(&mut self, event_id: &str, draft: &DraftEvent) -> Result<String, AgentError> {
+        (self.callback)(event_id, draft).map_err(|error| AgentError::durability(error.to_string()))
     }
 }

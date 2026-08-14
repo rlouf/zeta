@@ -397,12 +397,12 @@ async fn runner_streams_http_reads_native_file_and_finishes() {
     });
     let drafts = Arc::new(Mutex::new(Vec::new()));
     let captured_drafts = Arc::clone(&drafts);
-    let mut recorder = CallbackDraftRecorder::new(move |draft: &DraftEvent| {
+    let mut recorder = CallbackDraftRecorder::new(move |event_id: &str, draft: &DraftEvent| {
         captured_drafts
             .lock()
             .expect("the draft lock must be available")
             .push(draft.clone());
-        Ok::<(), String>(())
+        Ok::<String, String>(event_id.to_owned())
     });
     let mut ids = UuidIdSource::new("event");
     let abort = CancellationToken::new();
@@ -491,12 +491,12 @@ async fn runner_records_effect_barriers_around_native_write() {
     let recorded_states = Arc::new(Mutex::new(Vec::new()));
     let captured_states = Arc::clone(&recorded_states);
     let inspected_target = target.clone();
-    let mut recorder = CallbackDraftRecorder::new(move |draft: &DraftEvent| {
+    let mut recorder = CallbackDraftRecorder::new(move |event_id: &str, draft: &DraftEvent| {
         captured_states
             .lock()
             .expect("the state lock must be available")
             .push((draft.event_type.clone(), inspected_target.exists()));
-        Ok::<(), String>(())
+        Ok::<String, String>(event_id.to_owned())
     });
     let mut ids = UuidIdSource::new("event");
     let abort = CancellationToken::new();
@@ -596,7 +596,9 @@ async fn runner_calls_fake_ipc_provider_and_returns_result_to_model() {
     let mut gateway = model_gateway(url);
     let mut executor = ProcessExecutor::new(launch).expect("the process launch must be valid");
     let mut observer = CallbackObserver::new(|_observation: Observation| {});
-    let mut recorder = CallbackDraftRecorder::new(|_draft: &DraftEvent| Ok::<(), String>(()));
+    let mut recorder = CallbackDraftRecorder::new(|event_id: &str, _draft: &DraftEvent| {
+        Ok::<String, String>(event_id.to_owned())
+    });
     let mut ids = UuidIdSource::new("event");
     let abort = CancellationToken::new();
     let clock = SystemClock;
@@ -755,7 +757,9 @@ async fn compiled_authored_agent_routes_an_alias_to_the_canonical_executor_capab
     let mut gateway = model_gateway(url);
     let mut executor = ProcessExecutor::new(launch).expect("the process launch must be valid");
     let mut observer = CallbackObserver::new(|_observation: Observation| {});
-    let mut recorder = CallbackDraftRecorder::new(|_draft: &DraftEvent| Ok::<(), String>(()));
+    let mut recorder = CallbackDraftRecorder::new(|event_id: &str, _draft: &DraftEvent| {
+        Ok::<String, String>(event_id.to_owned())
+    });
     let mut ids = UuidIdSource::new("event");
     let abort = CancellationToken::new();
     let clock = SystemClock;

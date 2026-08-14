@@ -219,13 +219,17 @@ struct RejectingDrafts {
 }
 
 impl DraftRecorder for RejectingDrafts {
-    fn record(&mut self, event: &zeta_journal::DraftEvent) -> Result<(), zeta_agent::AgentError> {
+    fn record(
+        &mut self,
+        event_id: &str,
+        event: &zeta_journal::DraftEvent,
+    ) -> Result<String, zeta_agent::AgentError> {
         if event.event_type == self.event_type {
             return Err(zeta_agent::AgentError::durability(
                 "durable event sink rejected the draft",
             ));
         }
-        Ok(())
+        Ok(event_id.to_owned())
     }
 }
 
@@ -238,9 +242,13 @@ impl Default for RecordingDrafts {
 }
 
 impl DraftRecorder for RecordingDrafts {
-    fn record(&mut self, event: &zeta_journal::DraftEvent) -> Result<(), zeta_agent::AgentError> {
+    fn record(
+        &mut self,
+        event_id: &str,
+        event: &zeta_journal::DraftEvent,
+    ) -> Result<String, zeta_agent::AgentError> {
         self.events.borrow_mut().push(event.clone());
-        Ok(())
+        Ok(event_id.to_owned())
     }
 }
 

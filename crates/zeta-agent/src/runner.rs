@@ -267,7 +267,7 @@ impl<'a> AgentRunner<'a> {
             &event_id,
             state.next_model_caused_by.clone(),
         );
-        self.record_durable_draft(result, draft)?;
+        let event_id = self.record_durable_draft(result, &event_id, draft)?;
         let assistant_object_id =
             record_model_trace(&mut result.trace, &prompt_object_id, &model_payload)?;
         state.projection.models.insert(
@@ -342,14 +342,15 @@ impl<'a> AgentRunner<'a> {
                 Value::String(validated.route.id.to_string()),
             );
         }
+        let call_event_id = parsed.call_id.clone();
         let call_draft = tool_draft(
             invocation,
             "zeta.tool_call.started",
             call_payload.clone(),
-            &parsed.call_id,
+            &call_event_id,
             assistant_event_id,
         );
-        self.record_durable_draft(result, call_draft)?;
+        let call_event_id = self.record_durable_draft(result, &call_event_id, call_draft)?;
         let call_object_id = record_tool_call_trace(
             &mut result.trace,
             &call_payload,
@@ -367,6 +368,7 @@ impl<'a> AgentRunner<'a> {
                     &parsed,
                     &validated.canonical_params,
                     position,
+                    &call_event_id,
                     result,
                 )
                 .await?
@@ -417,7 +419,7 @@ impl<'a> AgentRunner<'a> {
             &event_id,
             assistant_event_id,
         );
-        self.record_durable_draft(result, result_draft)?;
+        let event_id = self.record_durable_draft(result, &event_id, result_draft)?;
         let result_object_id =
             record_tool_result_trace(&mut result.trace, &result_payload, &call_object_id)?;
         projection
@@ -437,7 +439,7 @@ impl<'a> AgentRunner<'a> {
                     status,
                     identity: &effect.identity,
                     capability: &effect.capability,
-                    caused_by: &parsed.call_id,
+                    caused_by: &call_event_id,
                     params: &effect.params,
                     result: Some(tool_result),
                 },
@@ -456,6 +458,7 @@ impl<'a> AgentRunner<'a> {
         parsed: &ParsedToolCall,
         canonical_params: &Map<String, Value>,
         position: usize,
+        call_event_id: &str,
         result: &mut AgentRunResult,
     ) -> Result<ToolExecution, AgentRunError> {
         match &route.kind {
@@ -470,7 +473,7 @@ impl<'a> AgentRunner<'a> {
                             status: "planned",
                             identity: effect,
                             capability,
-                            caused_by: &parsed.call_id,
+                            caused_by: call_event_id,
                             params: canonical_params,
                             result: None,
                         },
@@ -482,7 +485,7 @@ impl<'a> AgentRunner<'a> {
                             status: "started",
                             identity: effect,
                             capability,
-                            caused_by: &parsed.call_id,
+                            caused_by: call_event_id,
                             params: canonical_params,
                             result: None,
                         },
@@ -707,6 +710,7 @@ impl<'a> AgentRunner<'a> {
             payload.insert("result".to_owned(), Value::Object(result));
         }
         let event_type = format!("runtime.effect.{status}");
+        let event_id = format!("{event_type}:{}", identity.key);
         let draft = draft_with_invocation_context(
             invocation,
             event_type.clone(),
@@ -715,19 +719,22 @@ impl<'a> AgentRunner<'a> {
             Some(format!("{event_type}:{}", identity.key)),
             Some(caused_by.to_owned()),
         );
-        self.record_durable_draft(run_result, draft)
+        self.record_durable_draft(run_result, &event_id, draft)?;
+        Ok(())
     }
 
     fn record_durable_draft(
         &mut self,
         result: &mut AgentRunResult,
+        event_id: &str,
         draft: DraftEvent,
-    ) -> Result<(), AgentRunError> {
-        self.draft_recorder
-            .record(&draft)
+    ) -> Result<String, AgentRunError> {
+        let retained_id = self
+            .draft_recorder
+            .record(event_id, &draft)
             .map_err(AgentRunError::Failed)?;
         result.events.push(draft);
-        Ok(())
+        Ok(retained_id)
     }
 
     fn abort_run(
@@ -750,7 +757,11 @@ impl<'a> AgentRunner<'a> {
             None,
             caused_by,
         );
-        self.record_durable_draft(&mut result, draft)?;
+        let event_id = format!(
+            "zeta.turn.failed:{}",
+            invocation.run_id.as_deref().unwrap_or("agent")
+        );
+        self.record_durable_draft(&mut result, &event_id, draft)?;
         Err(AgentRunError::Aborted(Box::new(AgentRunAborted {
             reason,
             result,

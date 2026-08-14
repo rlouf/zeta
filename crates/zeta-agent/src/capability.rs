@@ -298,8 +298,12 @@ pub trait CapabilityExecutor {
 
 /// Persists complete journal drafts at the moment they become true.
 pub trait DraftRecorder {
-    /// Records one draft before execution crosses its durability boundary.
-    fn record(&mut self, draft: &DraftEvent) -> Result<(), AgentError>;
+    /// Records one draft under its causal event identity before execution
+    /// crosses its durability boundary.
+    ///
+    /// Returns the retained event identity. A durable sink can resolve an
+    /// idempotency duplicate to an earlier event identity.
+    fn record(&mut self, event_id: &str, draft: &DraftEvent) -> Result<String, AgentError>;
 }
 
 /// Supplies deterministic identities without reading process-global randomness.

@@ -71,9 +71,8 @@ async def echo(request, context):
     assert_eq!(
         provider.source.path.as_deref(),
         Some(
-            project
-                .path()
-                .join("tools/echo.py")
+            fs::canonicalize(project.path().join("tools/echo.py"))
+                .expect("provider source path")
                 .to_str()
                 .expect("UTF-8 path")
         )

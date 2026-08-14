@@ -1431,6 +1431,7 @@ fn run_actor(
                     .filter(|now_ms| *now_ms >= state.next_subscription_tick_ms)
                     .map(|now_ms| poll_subscriptions(&mut dispatch, &mut state, now_ms))
                     .transpose()
+                    .unwrap_or(Some(false))
                     .unwrap_or(false);
                 let scheduled = current_time_ms()
                     .ok()
@@ -2603,16 +2604,16 @@ mod tests {
         )
         .expect("agent source");
         let providers: PythonProviderCatalog = serde_json::from_value(serde_json::json!({
-            "models": [],
-            "tools": [{
+            "models": {},
+            "tools": {"web_search": {
                 "id": "web_search",
                 "source": {"module": "test", "path": null, "distribution": null},
                 "fingerprint": "a".repeat(64),
                 "tool_profile": null,
                 "input_schema": {"type": "object"},
                 "output_schema": null
-            }],
-            "connectors": []
+            }},
+            "connectors": {}
         }))
         .expect("provider catalog");
         let profile = serde_json::json!({"web_search": "search"})

@@ -67,6 +67,46 @@ async def web_search(request, context):
     assert len(descriptor["fingerprint"]) == 64
 
 
+def test_delivers_to_a_decorated_connector_with_effect_context(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "connectors" / "slack.py",
+        """\
+from zeta_plugin import connector
+
+
+@connector("slack")
+class Slack:
+    async def deliver(self, request, context):
+        return {
+            "operation": request["operation"],
+            "idempotency_key": request["idempotency_key"],
+            "effect_key": context["effect_key"],
+        }
+""",
+    )
+    host = ProviderHost(tmp_path, entry_points=[])
+
+    result = host.call(
+        "deliver",
+        {
+            "input": {
+                "connector": "slack",
+                "request": {
+                    "operation": "slack.message.post",
+                    "idempotency_key": "message-1",
+                },
+            },
+            "effect_key": "effect-1",
+        },
+    )
+
+    assert result == {
+        "operation": "slack.message.post",
+        "idempotency_key": "message-1",
+        "effect_key": "effect-1",
+    }
+
+
 def test_serves_the_private_json_rpc_protocol(tmp_path: Path) -> None:
     _write(
         tmp_path / "tools" / "echo.py",

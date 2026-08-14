@@ -216,6 +216,7 @@ pub struct IngressBinding {
 /// ```
 /// let binding = zeta_manifest::EgressBinding {
 ///     event: "message.send".to_owned(),
+///     connector: Some("slack".to_owned()),
 ///     options: serde_json::Map::new(),
 ///     idempotency_key: None,
 /// };
@@ -226,6 +227,9 @@ pub struct IngressBinding {
 pub struct EgressBinding {
     /// Names the published event.
     pub event: String,
+    /// Selects the connector that receives this external event.
+    #[serde(default)]
+    pub connector: Option<String>,
     /// Carries connector-specific delivery options.
     pub options: Map<String, Value>,
     /// Defines a caller-authored idempotency identity when present.

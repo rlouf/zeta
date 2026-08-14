@@ -448,6 +448,18 @@ impl ProjectRevision {
     fn validate_provider_references(&self, path: &Path) -> Result<(), ProjectError> {
         let native = zeta_agent::native_capabilities();
         for agent in self.agents.values().filter(|agent| agent.enabled) {
+            for binding in &agent.egress {
+                let Some(connector) = &binding.connector else {
+                    continue;
+                };
+                if !self.providers.connectors().contains_key(connector) {
+                    return Err(ProjectError::new(format!(
+                        "active project '{}' has agent {:?} with unavailable connector {connector:?}",
+                        path.display(),
+                        agent.slug
+                    )));
+                }
+            }
             if agent.tools_inherit {
                 continue;
             }

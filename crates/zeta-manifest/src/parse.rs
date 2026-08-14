@@ -844,14 +844,20 @@ fn take_publishes(
                         "published event options use 'with'",
                     ));
                 }
-                reject_unknown_fields(&entry, &["event", "with", "idempotency_key"], "publishes")?;
+                reject_unknown_fields(
+                    &entry,
+                    &["event", "connector", "with", "idempotency_key"],
+                    "publishes",
+                )?;
                 let event = take_nested_required_string(&mut entry, "event", "publishes")?;
+                let connector = take_optional_string(&mut entry, "connector", "publishes")?;
                 let options = take_object(&mut entry, "with", "publishes")?;
                 let idempotency_key =
                     take_optional_string(&mut entry, "idempotency_key", "publishes")?;
                 events.push(event.clone());
                 bindings.push(EgressBinding {
                     event,
+                    connector,
                     options,
                     idempotency_key,
                 });

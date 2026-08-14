@@ -1,19 +1,86 @@
 # Zeta Plugin SDK
 
 The Zeta Plugin SDK declares Python model, tool, and connector providers.
+The Zeta host loads declarations and calls providers through a private protocol.
+The SDK does not run agents.
 
-The SDK does not run agents. The Zeta host loads the declarations and invokes
-the provider through its private host protocol.
+## Declare project providers
+
+A project does not need to be a Python package. Put provider modules in these
+directories at the project root:
+
+```text
+agents/
+models/
+connectors/
+tools/
+```
+
+Use decorators to declare providers:
 
 ```python
-from zeta_plugin import tool
+from zeta_plugin import connector, model, tool
 
 
 @tool("pi.bash")
 async def bash(request, context):
     return {"output": "ok"}
+
+
+@model("codex", tool_profile={"pi.bash": "bash"})
+async def generate(request, context):
+    return {"message": {"role": "assistant", "content": []}}
+
+
+@connector("slack")
+class Slack:
+    async def deliver(self, request, context):
+        return {"delivery_id": "123"}
 ```
 
-A project can put modules in `models/`, `tools/`, and `connectors/`.
-Zeta loads those modules during provider discovery. A distribution can later
-expose the same declarations through the `zeta.providers` entry point group.
+A model or tool receives `request` and `context`. A connector class must define
+`deliver`, `subscribe`, or both. Zeta creates one connector instance per host.
+
+## Select a connector
+
+An agent selects an egress connector in its `publishes` declaration:
+
+```markdown
+---
+name: Announcer
+description: Sends one Slack message.
+accepts: [release.ready]
+publishes:
+  - event: slack.message.post
+    connector: slack
+    with:
+      channel: C123
+---
+Call `publish_event` with the message payload.
+```
+
+Zeta calls `Slack.deliver` after it persists the published event. The connector
+gets an operation, payload, options, and idempotency key. The host also gives
+the connector the stable effect key in `context`.
+
+## Ship a provider distribution
+
+A Python distribution can expose an entry point in the `zeta.providers` group:
+
+```toml
+[project.entry-points."zeta.providers"]
+pi = "pi_zeta.providers:setup"
+```
+
+The entry point can export decorated providers or a `setup(zeta)` function.
+The setup object has `models`, `tools`, and `connectors` registration APIs:
+
+```python
+def setup(zeta):
+    zeta.tools.register("pi.bash", bash)
+    zeta.models.register("pi", generate, tool_profile={"pi.bash": "bash"})
+    zeta.connectors.register("slack", Slack)
+```
+
+Project providers take priority over distribution providers with the same
+category and identifier.

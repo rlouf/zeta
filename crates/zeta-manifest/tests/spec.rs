@@ -32,6 +32,7 @@ accepts:
     idempotency_key: slack:{team_id}:{message_ts}
 publishes:
   - event: slack.message.post
+    connector: slack
     with:
       channel_ids: [C123]
 returns:
@@ -161,6 +162,7 @@ fn complete_agent_matches_python_declaration_behavior() {
         egress,
         vec![EgressBinding {
             event: "slack.message.post".to_owned(),
+            connector: Some("slack".to_owned()),
             options: object(json!({"channel_ids": ["C123"]})),
             idempotency_key: None,
         }]

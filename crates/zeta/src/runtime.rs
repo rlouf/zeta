@@ -158,6 +158,12 @@ impl EgressTarget {
 struct EgressTask {
     /// Identifies the retry-stable external effect.
     effect_key: String,
+    /// Identifies the project revision that selected this connector.
+    project_revision_id: String,
+    /// Supplies the project directory for the selected revision.
+    project_root: PathBuf,
+    /// Carries the selected Python provider catalog for this delivery.
+    providers: PythonProviderCatalog,
     /// Identifies the connector child.
     connector_id: String,
     /// Names the connector method.
@@ -198,9 +204,22 @@ struct ProviderHosts {
 
 impl ProviderHosts {
     fn host_for(&self, task: &AgentTask) -> Result<Option<SharedPythonProviderHost>, String> {
-        if task.providers.models().is_empty()
-            && task.providers.tools().is_empty()
-            && task.providers.connectors().is_empty()
+        self.host_for_revision(
+            &task.project_root,
+            &task.project_revision_id,
+            &task.providers,
+        )
+    }
+
+    fn host_for_revision(
+        &self,
+        project_root: &Path,
+        project_revision_id: &str,
+        providers: &PythonProviderCatalog,
+    ) -> Result<Option<SharedPythonProviderHost>, String> {
+        if providers.models().is_empty()
+            && providers.tools().is_empty()
+            && providers.connectors().is_empty()
         {
             return Ok(None);
         }
@@ -208,19 +227,18 @@ impl ProviderHosts {
             .hosts
             .lock()
             .map_err(|_error| "the Python provider host registry is unavailable".to_owned())?;
-        if let Some(host) = hosts.get(&task.project_revision_id) {
+        if let Some(host) = hosts.get(project_revision_id) {
             return Ok(Some(Arc::clone(host)));
         }
-        let host =
-            PythonProviderHost::start(&task.project_root).map_err(|error| error.to_string())?;
-        if host.catalog() != &task.providers {
+        let host = PythonProviderHost::start(project_root).map_err(|error| error.to_string())?;
+        if host.catalog() != providers {
             return Err(format!(
                 "Python provider catalog changed after revision {}",
-                task.project_revision_id
+                project_revision_id
             ));
         }
         let host = Arc::new(Mutex::new(host));
-        hosts.insert(task.project_revision_id.clone(), Arc::clone(&host));
+        hosts.insert(project_revision_id.to_owned(), Arc::clone(&host));
         Ok(Some(host))
     }
 }
@@ -740,8 +758,8 @@ fn agent_base_directory(agent: &AgentSpec, project_root: &Path) -> PathBuf {
     }
 }
 
-fn built_in_agent_runner() -> Arc<AgentRunner> {
-    let executor = AgentExecutor::default();
+fn built_in_agent_runner(provider_hosts: ProviderHosts) -> Arc<AgentRunner> {
+    let executor = AgentExecutor { provider_hosts };
     Arc::new(move |task, cancellation| executor.execute(task, cancellation))
 }
 
@@ -822,11 +840,14 @@ impl Runtime {
         database_path: impl AsRef<Path>,
         revision: ProjectRevision,
     ) -> Result<Self, RuntimeError> {
+        let provider_hosts = ProviderHosts::default();
+        let agent_runner = built_in_agent_runner(provider_hosts.clone());
+        let egress = built_in_egress_services(&revision, provider_hosts)?;
         Self::start_inner(
             database_path.as_ref(),
             revision,
-            Some(built_in_agent_runner()),
-            None,
+            Some(agent_runner),
+            Some(egress),
         )
     }
 
@@ -1031,6 +1052,92 @@ struct ActiveAgent {
 struct EgressServices {
     runner: Arc<EgressRunner>,
     targets: BTreeMap<String, EgressTarget>,
+}
+
+fn built_in_egress_services(
+    revision: &ProjectRevision,
+    provider_hosts: ProviderHosts,
+) -> Result<EgressServices, RuntimeError> {
+    let runner = Arc::new(move |task: EgressTask, cancellation: CancellationToken| {
+        let host = match provider_hosts.host_for_revision(
+            &task.project_root,
+            &task.project_revision_id,
+            &task.providers,
+        ) {
+            Ok(Some(host)) => host,
+            Ok(None) => {
+                return EgressExecution::Failed(
+                    "the connector provider host is unavailable".to_owned(),
+                );
+            }
+            Err(error) => return EgressExecution::Failed(error),
+        };
+        let mut request = Map::new();
+        request.insert("operation".to_owned(), Value::String(task.operation));
+        request.insert("payload".to_owned(), Value::Object(task.payload));
+        request.insert("options".to_owned(), Value::Object(task.options));
+        request.insert(
+            "idempotency_key".to_owned(),
+            Value::String(task.idempotency_key),
+        );
+        let mut host = match host.lock() {
+            Ok(host) => host,
+            Err(_error) => {
+                return EgressExecution::Failed(
+                    "the Python connector host is unavailable".to_owned(),
+                );
+            }
+        };
+        match host.deliver(
+            &task.connector_id,
+            request,
+            Some(task.effect_key),
+            &cancellation,
+        ) {
+            Ok(result) => EgressExecution::Completed(result),
+            Err(error) => EgressExecution::Failed(error.to_string()),
+        }
+    });
+    Ok(EgressServices {
+        runner,
+        targets: egress_targets(revision)?,
+    })
+}
+
+fn egress_targets(
+    revision: &ProjectRevision,
+) -> Result<BTreeMap<String, EgressTarget>, RuntimeError> {
+    let mut targets = BTreeMap::new();
+    for agent in revision.active_agents() {
+        let Some(spec) = revision.agent(&agent.slug) else {
+            continue;
+        };
+        for binding in &spec.egress {
+            let Some(connector_id) = &binding.connector else {
+                continue;
+            };
+            if !revision.providers().connectors().contains_key(connector_id) {
+                return Err(RuntimeError::new(format!(
+                    "agent {:?} selects unavailable connector {connector_id:?}",
+                    spec.slug
+                )));
+            }
+            let target = EgressTarget::new(
+                connector_id.clone(),
+                binding.event.clone(),
+                EffectDeliverySemantics::IdempotentWithKey,
+            )?;
+            if let Some(previous) = targets.insert(binding.event.clone(), target.clone()) {
+                if previous != target {
+                    return Err(RuntimeError::new(format!(
+                        "published event {:?} selects multiple connectors",
+                        binding.event
+                    )));
+                }
+            }
+        }
+    }
+    Ok(targets)
 }
 
 struct ActiveEgress {
@@ -1298,6 +1405,9 @@ fn reload_actor(state: &mut ActorState, revision: ProjectRevision) -> Result<(),
         .archive
         .record(&revision)
         .map_err(|error| RuntimeError::new(error.to_string()))?;
+    if let Some(egress) = state.egress.as_mut() {
+        egress.targets = egress_targets(&revision)?;
+    }
     state.revision = revision;
     state.routes = routes;
     state.scheduler = scheduler;
@@ -1672,7 +1782,7 @@ fn fill_egress_lane(
             Ok(effect) => effect,
             Err(error) => return Err(RuntimeError::new(error.to_string())),
         };
-        let task = match build_egress_task(&effect) {
+        let task = match build_egress_task(&effect, &state.revision, &state.archive) {
             Ok(task) => task,
             Err(error) => {
                 commit_egress_execution(
@@ -1737,7 +1847,11 @@ fn fill_egress_lane(
     Ok(claimed)
 }
 
-fn build_egress_task(effect: &Effect) -> Result<EgressTask, RuntimeError> {
+fn build_egress_task(
+    effect: &Effect,
+    active_revision: &ProjectRevision,
+    archive: &ProjectRevisionStore,
+) -> Result<EgressTask, RuntimeError> {
     let value = |field: &'static str| {
         effect
             .params()
@@ -1755,8 +1869,24 @@ fn build_egress_task(effect: &Effect) -> Result<EgressTask, RuntimeError> {
             .cloned()
             .ok_or_else(|| RuntimeError::new(format!("egress effect lacks {field}")))
     };
+    let project_revision_id = value("project_revision")?;
+    let revision = if project_revision_id == active_revision.revision_id() {
+        active_revision.clone()
+    } else {
+        archive
+            .load(&project_revision_id)
+            .map_err(|error| RuntimeError::new(error.to_string()))?
+            .ok_or_else(|| {
+                RuntimeError::new(format!(
+                    "the egress project revision is unavailable: {project_revision_id}"
+                ))
+            })?
+    };
     Ok(EgressTask {
         effect_key: effect.key().to_owned(),
+        project_revision_id,
+        project_root: revision.project_root().to_path_buf(),
+        providers: revision.providers().clone(),
         connector_id: value("connector_id")?,
         operation: value("connector_operation")?,
         payload: object("payload")?,

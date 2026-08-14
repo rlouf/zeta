@@ -9,17 +9,17 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 use zeta_substrate::Hash;
 
-pub use crate::connector::{parse_connector, ConnectorOperation, ConnectorSpec};
+pub use crate::connector::{ConnectorOperation, ConnectorSpec, parse_connector};
 use crate::error::{ManifestError, ManifestErrorKind};
-pub use crate::event::{derive_returns_schema, scheduled_event_type, EventRegistry};
+pub use crate::event::{EventRegistry, derive_returns_schema, scheduled_event_type};
 pub use crate::manifest::{
+    EXECUTION_MANIFEST_SCHEMA, EXECUTION_MANIFEST_VERSION, ExecutionManifest, ExecutionManifestId,
+    PROJECT_MANIFEST_SCHEMA, PROJECT_MANIFEST_VERSION, ProjectManifest, ProjectRevisionId,
     execution_manifest, project_manifest, restore_execution_manifest, restore_project_manifest,
-    verify_execution_manifest, verify_project_manifest, ExecutionManifest, ExecutionManifestId,
-    ProjectManifest, ProjectRevisionId, EXECUTION_MANIFEST_SCHEMA, EXECUTION_MANIFEST_VERSION,
-    PROJECT_MANIFEST_SCHEMA, PROJECT_MANIFEST_VERSION,
+    verify_execution_manifest, verify_project_manifest,
 };
 pub use crate::project::{
-    compile_project, validate_agent, AgentProject, AgentProjectInput, AgentValidationContext,
+    AgentProject, AgentProjectInput, AgentValidationContext, compile_project, validate_agent,
 };
 
 /// Identifies the exact implementation behind one host-supplied declaration.
@@ -120,30 +120,22 @@ pub struct ScheduleEntry {
 /// # Examples
 ///
 /// ```
-/// let model = zeta_manifest::ModelSpec::Profile("fast-local".to_owned());
-/// assert_eq!(model.profile(), Some("fast-local"));
+/// let model = zeta_manifest::ModelSpec::new("fast-local");
+/// assert_eq!(model.profile(), "fast-local");
 /// ```
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(untagged)]
-pub enum ModelSpec {
-    /// Names the profile that the host resolves before execution.
-    Profile(String),
-    /// Selects a concrete endpoint from the legacy frontmatter shape.
-    Endpoint {
-        /// Names the model served by the endpoint.
-        name: String,
-        /// Carries the model endpoint URL.
-        url: String,
-    },
-}
+#[serde(transparent)]
+pub struct ModelSpec(String);
 
 impl ModelSpec {
-    /// Returns the authored profile name when this declaration uses one.
-    pub fn profile(&self) -> Option<&str> {
-        match self {
-            Self::Profile(profile) => Some(profile),
-            Self::Endpoint { .. } => None,
-        }
+    /// Creates a named model profile reference.
+    pub fn new(profile: impl Into<String>) -> Self {
+        Self(profile.into())
+    }
+
+    /// Returns the authored profile name.
+    pub fn profile(&self) -> &str {
+        &self.0
     }
 }
 

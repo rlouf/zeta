@@ -9606,9 +9606,7 @@ def test_zeta_worker_agent_runner_uses_agent_model_config(
         """---
 name: Ping
 description: Reacts to pings.
-model:
-  name: qwen3.6-27b-q8-local
-  url: http://127.0.0.1:8080/v1/chat/completions
+model: qwen3.6-27b-q8-local
 accepts:
   - agent.ping
 ---
@@ -9617,10 +9615,9 @@ Ping.
         encoding="utf-8",
     )
     runtime_selection = ModelSelection(
-        profile="codex",
-        model="gpt-5.5",
-        url="https://chatgpt.com/backend-api",
-        api="codex-responses",
+        profile="qwen3.6-27b-q8-local",
+        model="qwen3.6-27b-q8-local",
+        url="http://127.0.0.1:8080/v1/chat/completions",
     )
     monkeypatch.setattr(harness_worker, "run_agent", fake_run_agent)
     runtime = harness_worker.build_worker_services(project_root=tmp_path)
@@ -9658,10 +9655,10 @@ Ping.
             runner.run(runtime.aclose())
 
     config = captured["request"].config
-    assert config.model_profile is None
+    assert config.model_profile == "qwen3.6-27b-q8-local"
     assert config.model_name == "qwen3.6-27b-q8-local"
     assert config.model_url == "http://127.0.0.1:8080/v1/chat/completions"
-    assert config.model_api is None
+    assert config.model_api == "chat-completions"
 
 
 def test_zeta_local_runtime_heartbeats_running_locks(

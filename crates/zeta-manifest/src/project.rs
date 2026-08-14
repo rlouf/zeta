@@ -6,13 +6,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use zeta_substrate::hash_bytes;
 
-use crate::connector::{validate_connector_spec, ConnectorSpec};
+use crate::connector::{ConnectorSpec, validate_connector_spec};
 use crate::error::{ManifestError, ManifestErrorKind};
-use crate::event::{validate_schema, EventRegistry};
-use crate::parse::{validate_prompt, SkillResource, SkillSpec};
+use crate::event::{EventRegistry, validate_schema};
+use crate::parse::{SkillResource, SkillSpec, validate_prompt};
 use crate::spec::{
     AgentSpec, CapabilityId, CapabilitySpec, ExecutorProviderSpec, ImplementationFingerprint,
-    ModelSelectionSpec, ModelSpec,
+    ModelSelectionSpec,
 };
 
 const RESERVED_TOOL_NAMES: [&str; 6] = [
@@ -406,22 +406,12 @@ fn validate_agent_declaration(spec: &AgentSpec) -> Result<(), ManifestError> {
         ));
     }
     if let Some(model) = &spec.model {
-        match model {
-            ModelSpec::Profile(profile) if profile.trim().is_empty() => {
-                return Err(invalid_agent(
-                    spec,
-                    Some("model"),
-                    "agent model profile must be non-empty",
-                ))
-            }
-            ModelSpec::Endpoint { name, url } if name.is_empty() || url.is_empty() => {
-                return Err(invalid_agent(
-                    spec,
-                    Some("model"),
-                    "agent model name and URL must be non-empty",
-                ))
-            }
-            ModelSpec::Profile(_) | ModelSpec::Endpoint { .. } => {}
+        if model.profile().trim().is_empty() {
+            return Err(invalid_agent(
+                spec,
+                Some("model"),
+                "agent model profile must be non-empty",
+            ));
         }
     }
     if spec.executor.provider.is_empty() {

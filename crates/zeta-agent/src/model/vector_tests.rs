@@ -2,12 +2,12 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 use super::{
-    chat_completions_request, decode_chat_completions_stream, decode_responses_stream,
-    http_error_detail, model_stream_timeout, parse_sse_lines, responses_request, CodexCredentials,
-    ModelInput, ModelStreamTimeout, Observation,
+    CodexCredentials, ModelInput, ModelStreamTimeout, Observation, chat_completions_request,
+    decode_chat_completions_stream, decode_responses_stream, http_error_detail,
+    model_stream_timeout, parse_sse_lines, responses_request,
 };
 
 fn vectors() -> Value {
@@ -77,6 +77,12 @@ fn observed_deltas(observations: &[Observation]) -> (Vec<String>, Vec<String>) {
         }
     }
     (content, reasoning)
+}
+
+fn with_max_output_tokens(mut request: Value, max_tokens: u64) -> Value {
+    let request = request.as_object_mut().unwrap();
+    request.insert("max_output_tokens".to_owned(), json!(max_tokens));
+    Value::Object(request.clone())
 }
 
 #[test]
@@ -162,7 +168,12 @@ fn responses_requests_match_python_vectors() {
     for case in vectors["responses"]["requests"].as_array().unwrap() {
         let input = model_input(&case["input"]);
         let request = responses_request(&input).unwrap();
-        assert_eq!(Value::Object(request), case["expected"], "{}", case["name"]);
+        assert_eq!(
+            Value::Object(request),
+            with_max_output_tokens(case["expected"].clone(), input.max_tokens),
+            "{}",
+            case["name"]
+        );
     }
 }
 

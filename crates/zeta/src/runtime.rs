@@ -190,8 +190,12 @@ struct AgentExecutor;
 
 impl AgentExecutor {
     fn execute(&self, task: AgentTask, cancellation: CancellationToken) -> AgentExecution {
-        let model = match host_model::resolve(task.agent.model.as_ref(), &task.session_id) {
-            Ok(model) => model,
+        let model = match host_model::resolve(
+            task.agent.model.as_ref(),
+            &task.project_root,
+            &task.session_id,
+        ) {
+            Ok(model) => model.selection,
             Err(error) => {
                 return AgentExecution::Failed(AgentExecutionError::new(
                     format!(
@@ -2078,11 +2082,16 @@ mod tests {
         fs::create_dir(&agents).expect("agents directory");
         fs::write(
             agents.join("worker.md"),
-            format!(
-                "---\nname: Worker\ndescription: Routes events.\naccepts: [example.created]\nmodel:\n  name: unit-model\n  url: http://{address}/v1/chat/completions\n---\nWork.\n"
-            ),
+            "---\nname: Worker\ndescription: Routes events.\naccepts: [example.created]\nmodel: unit-model\n---\nWork.\n",
         )
         .expect("agent source");
+        fs::write(
+            temporary.path().join("zeta.toml"),
+            format!(
+                "[[models]]\nname = \"unit-model\"\nmodel = \"unit-model\"\nurl = \"http://{address}/v1/chat/completions\"\n"
+            ),
+        )
+        .expect("project model configuration");
         let revision = ProjectRevision::load(temporary.path()).expect("project revision");
         let task = AgentTask {
             queue_item_id: "queue-1".to_owned(),

@@ -10,12 +10,12 @@ use minijinja::{AutoEscape, Environment};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value};
 use yaml_serde::Value as YamlValue;
-use zeta_substrate::{hash_bytes, Hash, Object};
+use zeta_substrate::{Hash, Object, hash_bytes};
 
 use crate::error::{AgentSpecError, ManifestError, ManifestErrorKind, SpecErrorKind};
 use crate::spec::{
-    scheduled_event_type, AgentSpec, EgressBinding, ExecutorSpec, IngressBinding, ModelSpec,
-    RetrySpec, ScheduleEntry,
+    AgentSpec, EgressBinding, ExecutorSpec, IngressBinding, ModelSpec, RetrySpec, ScheduleEntry,
+    scheduled_event_type,
 };
 
 /// Loads one authored agent from a Markdown file.
@@ -712,15 +712,9 @@ fn take_model(values: &mut Map<String, Value>) -> Result<Option<ModelSpec>, Agen
             if profile.trim().is_empty() {
                 return Err(invalid_field("model", "must not be empty"));
             }
-            Ok(Some(ModelSpec::Profile(profile)))
+            Ok(Some(ModelSpec::new(profile)))
         }
-        Value::Object(mut value) => {
-            reject_unknown_fields(&value, &["name", "url"], "model")?;
-            let name = take_nested_required_string(&mut value, "name", "model")?;
-            let url = take_nested_required_string(&mut value, "url", "model")?;
-            Ok(Some(ModelSpec::Endpoint { name, url }))
-        }
-        Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Null => {
+        Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_) | Value::Null => {
             Err(invalid_field("model", "expected a profile name string"))
         }
     }

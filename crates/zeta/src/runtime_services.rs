@@ -14,7 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use chrono::{DateTime, LocalResult, SecondsFormat, TimeZone, Timelike, Utc};
 use chrono_tz::Tz;
 use croner::Cron;
-use rustix::fs::{flock, open, FlockOperation, Mode, OFlags};
+use rustix::fs::{FlockOperation, Mode, OFlags, flock, open};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use uuid::Uuid;
@@ -26,9 +26,9 @@ use zeta_agent::{
 use zeta_dispatch::{Dispatch, DispatchError};
 use zeta_journal::{DraftEvent, Event, EventFilter};
 use zeta_manifest::{
-    scheduled_event_type, verify_execution_manifest, verify_project_manifest, AgentSpec,
-    DeliverySemantics as AuthoredDeliverySemantics, ExecutionManifest, ExecutionManifestId,
-    ImplementationFingerprint, ProjectManifest, ProjectRevisionId, ScheduleEntry,
+    AgentSpec, DeliverySemantics as AuthoredDeliverySemantics, ExecutionManifest,
+    ExecutionManifestId, ImplementationFingerprint, ProjectManifest, ProjectRevisionId,
+    ScheduleEntry, scheduled_event_type, verify_execution_manifest, verify_project_manifest,
 };
 
 const SCHEDULER_SOURCE: &str = "zeta:scheduler";
@@ -2007,22 +2007,9 @@ pub fn prepare_agent(
 }
 
 fn resolved_model_endpoint(execution: &ExecutionManifest) -> (Option<String>, Option<String>) {
-    let agent = &execution.agent.model;
     let project = &execution.model;
-    let model_name = match agent {
-        Some(zeta_manifest::ModelSpec::Endpoint { name, .. }) => Some(name.clone()),
-        Some(zeta_manifest::ModelSpec::Profile(_)) => {
-            project.as_ref().map(|project| project.model.clone())
-        }
-        None => project.as_ref().map(|project| project.model.clone()),
-    };
-    let model_url = match agent {
-        Some(zeta_manifest::ModelSpec::Endpoint { url, .. }) => Some(url.clone()),
-        Some(zeta_manifest::ModelSpec::Profile(_)) => {
-            project.as_ref().map(|project| project.url.clone())
-        }
-        None => project.as_ref().map(|project| project.url.clone()),
-    };
+    let model_name = project.as_ref().map(|project| project.model.clone());
+    let model_url = project.as_ref().map(|project| project.url.clone());
     (model_name, model_url)
 }
 
@@ -2039,7 +2026,7 @@ fn resolved_model_contract(
             return Err(PrepareAgentError::new(
                 PrepareAgentErrorKind::InvalidManifest,
                 format!("unsupported verified tool profile {value:?}"),
-            ))
+            ));
         }
     };
     Ok((model.api.clone(), model.thinking.clone(), profile))

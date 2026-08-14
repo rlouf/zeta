@@ -136,10 +136,9 @@ class ScheduleEntry:
 
 @dataclass(frozen=True)
 class ModelSpec:
-    """Concrete model endpoint for one authored agent."""
+    """Named model profile for one authored agent."""
 
-    name: str
-    url: str
+    profile: str
 
 
 @dataclass(frozen=True)
@@ -313,17 +312,9 @@ def required_string(frontmatter: Mapping[str, Any], field: str, path: Path) -> s
 def model_spec(value: Any, path: Path) -> ModelSpec | None:
     if value is None:
         return None
-    if not isinstance(value, Mapping):
-        raise SpecError(f"invalid value for 'model' in {path}: expected object")
-    unknown = sorted(set(value) - {"name", "url"})
-    if unknown:
-        raise SpecError(
-            f"invalid value for 'model' in {path}: unsupported field {unknown[0]!r}"
-        )
-    return ModelSpec(
-        name=required_model_string(value, "name", path),
-        url=required_model_string(value, "url", path),
-    )
+    if not isinstance(value, str) or value == "":
+        raise SpecError(f"invalid value for 'model' in {path}: expected profile name")
+    return ModelSpec(profile=value)
 
 
 def executor_spec(value: Any, path: Path) -> ExecutorSpec:
@@ -453,15 +444,6 @@ def optional_nonnegative_number(value: Any, field: str, path: Path) -> float | N
             "must be a non-negative number"
         )
     return float(value)
-
-
-def required_model_string(value: Mapping[str, Any], field: str, path: Path) -> str:
-    item = value.get(field)
-    if not isinstance(item, str) or item == "":
-        raise SpecError(
-            f"invalid value for 'model' in {path}: {field} must be a non-empty string"
-        )
-    return item
 
 
 def bool_field(value: Any, field: str, path: Path) -> bool:

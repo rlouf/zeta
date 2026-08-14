@@ -58,7 +58,11 @@ from zeta.loop.config import AgentConfig
 from zeta.loop.outcomes import AgentRunResult
 from zeta.loop.runtime import AgentRunRequest, run_agent
 from zeta.loop.runtime_context import RuntimeContext
-from zeta.models.profiles import ModelSelection, active_model_selection
+from zeta.models.profiles import (
+    ModelSelection,
+    active_model_selection,
+    resolve_model_profile,
+)
 from zeta.substrate import SqliteObjectStore
 
 logger = logging.getLogger(__name__)
@@ -449,6 +453,12 @@ def config_with_model_selection(
 ) -> AgentConfig:
     if config.model_name is not None or config.model_url is not None:
         return config
+    if config.model_profile is not None:
+        resolved = resolve_model_profile(config.model_profile)
+        if resolved is not None:
+            selection = resolved
+        elif selection is None or selection.profile != config.model_profile:
+            return config
     if selection is None:
         return config
     return replace(

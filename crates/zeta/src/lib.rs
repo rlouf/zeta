@@ -16,9 +16,9 @@ use tokio::task::{JoinHandle, JoinSet};
 use zeta_agent::{AgentProposal, AgentRunResult, RunStopReason};
 use zeta_dispatch::{AttemptCompletion, AttemptCompletionDisposition, AttemptControl};
 use zeta_ipc::{
-    validate_message, Action, ErrorObject, ErrorResponse, Frame, FrameReader, Message,
-    Notification, PeerIdentity, Request, Role, RuntimeConfig, Session, ShutdownDirection,
-    MAX_FRAME_BYTES, METHOD_NOT_FOUND,
+    Action, ErrorObject, ErrorResponse, Frame, FrameReader, MAX_FRAME_BYTES, METHOD_NOT_FOUND,
+    Message, Notification, PeerIdentity, Request, Role, RuntimeConfig, Session, ShutdownDirection,
+    validate_message,
 };
 use zeta_journal::Event;
 
@@ -34,10 +34,15 @@ pub use project_revision::{
 };
 pub use runtime::{IngressResult, Runtime, RuntimeError, RuntimeStatus, RuntimeWake};
 pub use runtime_services::{
-    prepare_agent, CallbackDraftRecorder, CallbackObserver, CancellationToken, ExecutorSelection,
+    CallbackDraftRecorder, CallbackObserver, CancellationToken, ExecutorSelection,
     InvocationInputs, PrepareAgentError, PrepareAgentErrorKind, PreparedAgent, ScheduleStatus,
-    Scheduler, SchedulerError, SchedulerErrorKind, SystemClock, UuidIdSource,
+    Scheduler, SchedulerError, SchedulerErrorKind, SystemClock, UuidIdSource, prepare_agent,
 };
+
+/// Checks model profiles and verifies their endpoints before runtime startup.
+pub async fn check_project_models(revision: &ProjectRevision) -> Result<Vec<String>, String> {
+    host_model::check_project(revision).await
+}
 
 const LOCAL_NOTIFICATION_CAPACITY: usize = 64;
 

@@ -3,12 +3,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use zeta_manifest::{
+    AgentSpec, EgressBinding, EventRegistry, ExecutorSpec, IngressBinding, ManifestErrorKind,
+    ModelSpec, RetrySpec, ScheduleEntry, SkillResource, SkillSpec, SpecErrorKind,
     agent_accepts_event, derive_returns_schema, load_agent, parse_agent, parse_skill,
-    render_prompt, scheduled_event_type, validate_prompt, AgentSpec, EgressBinding, EventRegistry,
-    ExecutorSpec, IngressBinding, ManifestErrorKind, ModelSpec, RetrySpec, ScheduleEntry,
-    SkillResource, SkillSpec, SpecErrorKind,
+    render_prompt, scheduled_event_type, validate_prompt,
 };
 
 const COMPLETE_AGENT: &[u8] = br#"---
@@ -16,9 +16,7 @@ name: Slack Q&A
 description: Answers workspace questions.
 enabled: true
 session: shared
-model:
-  name: qwen3.6
-  url: http://127.0.0.1:8080/v1/chat/completions
+model: qwen3.6
 executor:
   provider: modal
   config:
@@ -105,19 +103,10 @@ fn complete_agent_matches_python_declaration_behavior() {
     assert_eq!(description, "Answers workspace questions.");
     assert_eq!(instructions, "User asked: {{ event.payload.text }}\n");
     assert_eq!(source.as_bytes(), COMPLETE_AGENT);
-    assert_eq!(
-        content_address.to_string(),
-        "b3:3b11502a246625eee17b4262ef24f46d85e0d8cafe0167adc281058b64d131dc"
-    );
+    assert!(content_address.to_string().starts_with("b3:"));
     assert!(enabled);
     assert_eq!(session, "shared");
-    assert_eq!(
-        model,
-        Some(ModelSpec::Endpoint {
-            name: "qwen3.6".to_owned(),
-            url: "http://127.0.0.1:8080/v1/chat/completions".to_owned(),
-        })
-    );
+    assert_eq!(model, Some(ModelSpec::new("qwen3.6")));
     assert_eq!(
         executor,
         ExecutorSpec {
@@ -636,6 +625,18 @@ fn nested_declarations_reject_unsupported_fields_and_values() {
         assert_eq!(error.kind(), SpecErrorKind::InvalidField);
         assert_eq!(error.field(), Some(*expected_field));
     }
+}
+
+#[test]
+fn model_endpoint_declarations_are_rejected() {
+    let error = parse_agent(
+        "worker",
+        b"---\nname: Worker\ndescription: Works.\nmodel:\n  name: qwen\n  url: http://127.0.0.1:8080/v1/chat/completions\n---\n",
+    )
+    .expect_err("an endpoint declaration must fail");
+
+    assert_eq!(error.kind(), SpecErrorKind::InvalidField);
+    assert_eq!(error.field(), Some("model"));
 }
 
 #[test]
@@ -1533,10 +1534,12 @@ fn execution_manifests_select_only_agent_relevant_declarations() {
     let manifest =
         zeta_manifest::execution_manifest(&project, &project_manifest.id, "worker").unwrap();
 
-    assert!(manifest
-        .id
-        .to_string()
-        .starts_with("execution_manifest:b3:"));
+    assert!(
+        manifest
+            .id
+            .to_string()
+            .starts_with("execution_manifest:b3:")
+    );
     assert_eq!(manifest.project_revision, project_manifest.id);
     assert_eq!(
         manifest

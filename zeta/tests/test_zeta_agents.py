@@ -152,11 +152,7 @@ def _agent_vector_value(spec: AgentSpec, source: str) -> dict[str, Any]:
         "content_address": spec.content_address,
         "enabled": spec.enabled,
         "session": spec.session,
-        "model": (
-            None
-            if spec.model is None
-            else {"name": spec.model.name, "url": spec.model.url}
-        ),
+        "model": (None if spec.model is None else spec.model.profile),
         "executor": {
             "provider": spec.executor.provider,
             "config": spec.executor.config,
@@ -466,9 +462,7 @@ name: Slack Q&A
 description: Answers workspace questions in Slack.
 enabled: true
 session: shared
-model:
-  name: qwen3.6-27b-q8-local
-  url: http://127.0.0.1:8080/v1/chat/completions
+model: qwen3.6-27b-q8-local
 accepts:
   - slack.message.received
 publishes:
@@ -492,10 +486,7 @@ User asked: {{ event.payload.text }}
     assert spec.description == "Answers workspace questions in Slack."
     assert spec.enabled is True
     assert spec.session == "shared"
-    assert spec.model == zeta_agents.ModelSpec(
-        name="qwen3.6-27b-q8-local",
-        url="http://127.0.0.1:8080/v1/chat/completions",
-    )
+    assert spec.model == zeta_agents.ModelSpec(profile="qwen3.6-27b-q8-local")
     assert spec.accepts == ("slack.message.received", "agent.slack-qa.scheduled")
     assert spec.publishes == ("message.delivery.requested",)
     assert spec.tools == ("read",)
@@ -819,9 +810,7 @@ def test_zeta_authored_agent_config_sets_tools(tmp_path: Path) -> None:
             """---
 name: Worker
 description: Runs directly.
-model:
-  name: qwen3.6-27b-q8-local
-  url: http://127.0.0.1:8080/v1/chat/completions
+model: qwen3.6-27b-q8-local
 tools:
   - bash
 ---
@@ -832,8 +821,9 @@ Run.
 
     config = zeta_agents.config_for_spec(spec, None)
 
-    assert config.model_name == "qwen3.6-27b-q8-local"
-    assert config.model_url == "http://127.0.0.1:8080/v1/chat/completions"
+    assert config.model_profile == "qwen3.6-27b-q8-local"
+    assert config.model_name is None
+    assert config.model_url is None
     assert config.system_prompt == "Runs directly."
     assert config.allowed_capabilities == ("bash",)
 

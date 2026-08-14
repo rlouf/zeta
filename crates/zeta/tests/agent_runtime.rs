@@ -1,14 +1,15 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{BufRead as _, BufReader as StdBufReader, Read as _};
-use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
+use std::io::{BufRead as _, BufReader as StdBufReader, Read as _, Write as _};
+use std::net::TcpListener as StdTcpListener;
+use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use std::os::unix::net::UnixListener as StdUnixListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as StdCommand, Stdio};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::Duration;
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
@@ -18,26 +19,26 @@ use zeta::runtime_services::{
     RuntimeLease, RuntimeMetadata, RuntimeOwnerMode, RuntimePaths, RuntimePhase,
 };
 use zeta::{
-    prepare_agent, CallbackDraftRecorder, CallbackObserver, CancellationToken, ExecutorSelection,
+    CallbackDraftRecorder, CallbackObserver, CancellationToken, ExecutorSelection,
     InvocationInputs, LocalSocketConfig, LocalSocketServer, ProcessExecutor, ProcessLaunch,
-    Project, Scheduler, SystemClock, UuidIdSource,
+    Project, Scheduler, SystemClock, UuidIdSource, prepare_agent,
 };
 use zeta_agent::{
-    native_capabilities, resolve_capabilities, AgentInvocation, AgentRunResult, AgentRunner,
-    Capability, HttpModelGateway, HttpModelGatewayConfig, ModelHttpEndpoint,
-    ModelTransportTimeouts, NativeToolExecutor, Observation, PromptEnvironment, PromptTransform,
-    RunStopReason, ToolProfile,
+    AgentInvocation, AgentRunResult, AgentRunner, Capability, HttpModelGateway,
+    HttpModelGatewayConfig, ModelHttpEndpoint, ModelTransportTimeouts, NativeToolExecutor,
+    Observation, PromptEnvironment, PromptTransform, RunStopReason, ToolProfile,
+    native_capabilities, resolve_capabilities,
 };
-use zeta_dispatch::{route_event, Dispatch, QueueItemStatus, RuntimeEventIdentity};
+use zeta_dispatch::{Dispatch, QueueItemStatus, RuntimeEventIdentity, route_event};
 use zeta_ipc::{
-    ErrorObject, ErrorResponse, Message, Notification, Request, SuccessResponse, INVALID_PARAMS,
-    MAX_FRAME_BYTES, METHOD_NOT_FOUND, PARSE_ERROR, SERVER_ERROR,
+    ErrorObject, ErrorResponse, INVALID_PARAMS, MAX_FRAME_BYTES, METHOD_NOT_FOUND, Message,
+    Notification, PARSE_ERROR, Request, SERVER_ERROR, SuccessResponse,
 };
 use zeta_journal::{DraftEvent, Event, EventFilter};
 use zeta_manifest::{
-    compile_project, execution_manifest, parse_agent, project_manifest, verify_execution_manifest,
     AgentProjectInput, CapabilitySpec, EventRegistry, ExecutorProviderSpec,
-    ImplementationFingerprint, ModelSelectionSpec,
+    ImplementationFingerprint, ModelSelectionSpec, compile_project, execution_manifest,
+    parse_agent, project_manifest, verify_execution_manifest,
 };
 
 struct SocketClient {
@@ -443,10 +444,12 @@ async fn runner_streams_http_reads_native_file_and_finishes() {
     assert_eq!(requests[0]["tools"][0]["function"]["name"], "read");
     let tool_result = tool_result_from_request(&requests[1]);
     assert_eq!(tool_result["ok"], true);
-    assert!(tool_result["content"][0]["text"]
-        .as_str()
-        .expect("the native read must return text")
-        .contains("1:ready\n"));
+    assert!(
+        tool_result["content"][0]["text"]
+            .as_str()
+            .expect("the native read must return text")
+            .contains("1:ready\n")
+    );
     assert_eq!(
         event_types(&result),
         [
@@ -1019,9 +1022,11 @@ async fn local_socket_binds_owner_only_and_reports_invalid_paths() {
     )
     .await
     .expect_err("an overlong local socket path must be rejected");
-    assert!(error
-        .to_string()
-        .contains(&path.to_string_lossy().to_string()));
+    assert!(
+        error
+            .to_string()
+            .contains(&path.to_string_lossy().to_string())
+    );
 }
 
 #[tokio::test]
@@ -1594,9 +1599,11 @@ async fn lifecycle_application_socket_is_ready_without_shutdown_authority() {
     let Message::Success(SuccessResponse { id: _, result }) = client.receive().await else {
         panic!("the lifecycle application seam must accept native ingress")
     };
-    assert!(result["inserted"]
-        .as_bool()
-        .expect("ingress inserted state"));
+    assert!(
+        result["inserted"]
+            .as_bool()
+            .expect("ingress inserted state")
+    );
     assert_eq!(result["route_count"], 0);
 
     client
@@ -1721,6 +1728,18 @@ impl Drop for ForegroundRuntime {
 
 fn activate_lifecycle_project(project: &Path, state: &Path) {
     write_lifecycle_agent(project, "worker");
+    let url = lifecycle_model_url();
+    fs::write(
+        project.join("zeta.toml"),
+        format!(
+            "[[models]]\nname = \"test\"\nmodel = \"test-model\"\nurl = {url:?}\ndefault = true\n"
+        ),
+    )
+    .expect("project model configuration must write");
+    activate_project_revision(project, state);
+}
+
+fn activate_project_revision(project: &Path, state: &Path) {
     let revision = Project::open(project)
         .expect("project must open")
         .revision()
@@ -1733,6 +1752,35 @@ fn activate_lifecycle_project(project: &Path, state: &Path) {
     drop(lease);
 }
 
+fn lifecycle_model_url() -> &'static str {
+    static URL: OnceLock<String> = OnceLock::new();
+    URL.get_or_init(|| {
+        let listener =
+            StdTcpListener::bind("127.0.0.1:0").expect("the lifecycle model fixture must bind");
+        let address = listener
+            .local_addr()
+            .expect("the lifecycle model fixture must have an address");
+        std::thread::spawn(move || {
+            for accepted in listener.incoming() {
+                let Ok(mut socket) = accepted else {
+                    continue;
+                };
+                let mut request = [0_u8; 4096];
+                let _read = socket.read(&mut request);
+                let response = answer_stream(&["ready"]);
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    response.len(),
+                );
+                let _headers = socket.write_all(headers.as_bytes());
+                let _response = socket.write_all(response.as_bytes());
+            }
+        });
+        format!("http://{address}/v1/chat/completions")
+    })
+    .as_str()
+}
+
 fn write_lifecycle_agent(project: &Path, slug: &str) {
     let agents = project.join("agents");
     fs::create_dir_all(&agents).expect("agent directory must exist");
@@ -1741,6 +1789,86 @@ fn write_lifecycle_agent(project: &Path, slug: &str) {
         format!("---\nname: {slug}\ndescription: Lifecycle fixture.\n---\nReport.\n"),
     )
     .expect("agent source must write");
+}
+
+fn write_profile_lifecycle_agent(project: &Path, slug: &str, profile: &str) {
+    let agents = project.join("agents");
+    fs::create_dir_all(&agents).expect("agent directory must exist");
+    fs::write(
+        agents.join(format!("{slug}.md")),
+        format!(
+            "---\nname: {slug}\ndescription: Lifecycle fixture.\nmodel: {profile}\n---\nReport.\n"
+        ),
+    )
+    .expect("agent source must write");
+}
+
+#[test]
+fn lifecycle_cli_rejects_a_missing_default_model_profile() {
+    let directory = TempDir::new().expect("the lifecycle directory must exist");
+    let project = directory.path().join("project");
+    let state = directory.path().join("state");
+    let home = directory.path().join("home");
+    fs::create_dir(&project).expect("the lifecycle project must exist");
+    fs::create_dir(&home).expect("the test home must exist");
+    write_lifecycle_agent(&project, "worker");
+    activate_project_revision(&project, &state);
+
+    let result = StdCommand::new(env!("CARGO_BIN_EXE_zeta"))
+        .args(["up", "--project-root"])
+        .arg(&project)
+        .arg("--state-dir")
+        .arg(&state)
+        .env("HOME", &home)
+        .output()
+        .expect("up must execute");
+
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("no default model profile"));
+}
+
+#[test]
+fn lifecycle_cli_warns_when_an_agent_profile_uses_the_local_configuration() {
+    let directory = TempDir::new().expect("the lifecycle directory must exist");
+    let project = directory.path().join("project");
+    let state = directory.path().join("state");
+    let home = directory.path().join("home");
+    fs::create_dir(&project).expect("the lifecycle project must exist");
+    fs::create_dir_all(home.join(".zeta")).expect("the local configuration directory must exist");
+    write_profile_lifecycle_agent(&project, "worker", "local-test");
+    let url = lifecycle_model_url();
+    fs::write(
+        home.join(".zeta/models.toml"),
+        format!("[[models]]\nname = \"local-test\"\nmodel = \"test-model\"\nurl = {url:?}\n"),
+    )
+    .expect("the local model configuration must write");
+    activate_project_revision(&project, &state);
+
+    let started = StdCommand::new(env!("CARGO_BIN_EXE_zeta"))
+        .args(["up", "--detach", "--project-root"])
+        .arg(&project)
+        .arg("--state-dir")
+        .arg(&state)
+        .env("HOME", &home)
+        .output()
+        .expect("detached up must execute");
+    assert!(
+        started.status.success(),
+        "{}",
+        String::from_utf8_lossy(&started.stderr)
+    );
+    assert!(String::from_utf8_lossy(&started.stderr).contains("uses local model profile"));
+
+    let stopped = StdCommand::new(env!("CARGO_BIN_EXE_zeta"))
+        .args(["down", "--state-dir"])
+        .arg(&state)
+        .output()
+        .expect("down must execute");
+    assert!(
+        stopped.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stopped.stderr)
+    );
 }
 
 #[test]

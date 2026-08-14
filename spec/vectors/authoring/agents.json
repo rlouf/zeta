@@ -40,20 +40,17 @@
     {
       "name": "complete declaration",
       "path": "agents/slack-qa.md",
-      "source_utf8": "---\nname: Slack Q&A\ndescription: Answers workspace questions.\nenabled: true\nsession: shared\nmodel:\n  name: qwen3.6\n  url: http://127.0.0.1:8080/v1/chat/completions\nexecutor:\n  provider: modal\n  config:\n    retries: 3\n    timeout: 1.5\n    enabled: true\n    regions: [eu-west, us-east]\n    fallback: null\naccepts:\n  - event: slack.message.received\n    filter:\n      channel_ids: [C123]\n    idempotency_key: \"slack:{team_id}:{message_ts}\"\npublishes:\n  - event: slack.message.post\n    with:\n      channel_ids: [C123]\n    idempotency_key: \"post:{message_id}\"\nreturns:\n  - support.completed\nskills:\n  - code-review\ntools:\n  - read\nschedules:\n  - cron: \"0 18 * * 0\"\n    timezone: Europe/Paris\n    catchup: latest\nretry:\n  max_attempts: 3\n  backoff_seconds: 1.5\nbase_dir: /srv/zeta\nwrites:\n  paths: [docs/**.md]\n---\nUser asked: {{ event.payload.text }}\n",
+      "source_utf8": "---\nname: Slack Q&A\ndescription: Answers workspace questions.\nenabled: true\nsession: shared\nmodel: qwen3.6\nexecutor:\n  provider: modal\n  config:\n    retries: 3\n    timeout: 1.5\n    enabled: true\n    regions: [eu-west, us-east]\n    fallback: null\naccepts:\n  - event: slack.message.received\n    filter:\n      channel_ids: [C123]\n    idempotency_key: \"slack:{team_id}:{message_ts}\"\npublishes:\n  - event: slack.message.post\n    with:\n      channel_ids: [C123]\n    idempotency_key: \"post:{message_id}\"\nreturns:\n  - support.completed\nskills:\n  - code-review\ntools:\n  - read\nschedules:\n  - cron: \"0 18 * * 0\"\n    timezone: Europe/Paris\n    catchup: latest\nretry:\n  max_attempts: 3\n  backoff_seconds: 1.5\nbase_dir: /srv/zeta\nwrites:\n  paths: [docs/**.md]\n---\nUser asked: {{ event.payload.text }}\n",
       "expected": {
         "slug": "slack-qa",
         "name": "Slack Q&A",
         "description": "Answers workspace questions.",
         "instructions": "User asked: {{ event.payload.text }}\n",
-        "source": "---\nname: Slack Q&A\ndescription: Answers workspace questions.\nenabled: true\nsession: shared\nmodel:\n  name: qwen3.6\n  url: http://127.0.0.1:8080/v1/chat/completions\nexecutor:\n  provider: modal\n  config:\n    retries: 3\n    timeout: 1.5\n    enabled: true\n    regions: [eu-west, us-east]\n    fallback: null\naccepts:\n  - event: slack.message.received\n    filter:\n      channel_ids: [C123]\n    idempotency_key: \"slack:{team_id}:{message_ts}\"\npublishes:\n  - event: slack.message.post\n    with:\n      channel_ids: [C123]\n    idempotency_key: \"post:{message_id}\"\nreturns:\n  - support.completed\nskills:\n  - code-review\ntools:\n  - read\nschedules:\n  - cron: \"0 18 * * 0\"\n    timezone: Europe/Paris\n    catchup: latest\nretry:\n  max_attempts: 3\n  backoff_seconds: 1.5\nbase_dir: /srv/zeta\nwrites:\n  paths: [docs/**.md]\n---\nUser asked: {{ event.payload.text }}\n",
-        "content_address": "b3:998166c0a4d954c44b77123ed9b27f1a47e60757b2df2899baaa106759a4235b",
+        "source": "---\nname: Slack Q&A\ndescription: Answers workspace questions.\nenabled: true\nsession: shared\nmodel: qwen3.6\nexecutor:\n  provider: modal\n  config:\n    retries: 3\n    timeout: 1.5\n    enabled: true\n    regions: [eu-west, us-east]\n    fallback: null\naccepts:\n  - event: slack.message.received\n    filter:\n      channel_ids: [C123]\n    idempotency_key: \"slack:{team_id}:{message_ts}\"\npublishes:\n  - event: slack.message.post\n    with:\n      channel_ids: [C123]\n    idempotency_key: \"post:{message_id}\"\nreturns:\n  - support.completed\nskills:\n  - code-review\ntools:\n  - read\nschedules:\n  - cron: \"0 18 * * 0\"\n    timezone: Europe/Paris\n    catchup: latest\nretry:\n  max_attempts: 3\n  backoff_seconds: 1.5\nbase_dir: /srv/zeta\nwrites:\n  paths: [docs/**.md]\n---\nUser asked: {{ event.payload.text }}\n",
+        "content_address": "b3:2efc26da5bfb9b38532136005d11d0614d8b489444aadabdbd0308a099722f71",
         "enabled": true,
         "session": "shared",
-        "model": {
-          "name": "qwen3.6",
-          "url": "http://127.0.0.1:8080/v1/chat/completions"
-        },
+        "model": "qwen3.6",
         "executor": {
           "provider": "modal",
           "config": {

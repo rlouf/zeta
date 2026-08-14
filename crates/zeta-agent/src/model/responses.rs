@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use super::sse::{decode_stream_event, format_stream_error};
 use super::{DecodedModelStream, ModelInput, Observation};
@@ -74,6 +74,7 @@ pub fn responses_request(input: &ModelInput) -> Result<Map<String, Value>, Agent
     body.insert("model".to_owned(), Value::String(model.clone()));
     body.insert("stream".to_owned(), Value::Bool(true));
     body.insert("store".to_owned(), Value::Bool(false));
+    body.insert("max_output_tokens".to_owned(), json!(input.max_tokens));
     body.insert(
         "input".to_owned(),
         Value::Array(responses_input_items(&input.messages)),
@@ -96,10 +97,7 @@ pub fn responses_request(input: &ModelInput) -> Result<Map<String, Value>, Agent
         }
     }
     if !input.tools.is_empty() {
-        let mut tools = Vec::new();
-        for tool in &input.tools {
-            tools.push(responses_tool(tool));
-        }
+        let tools: Vec<Value> = input.tools.iter().map(responses_tool).collect();
         body.insert("tools".to_owned(), Value::Array(tools));
         let tool_choice = input
             .tool_choice
@@ -469,9 +467,6 @@ fn append_assistant_items(items: &mut Vec<Value>, message: &Map<String, Value>) 
 }
 
 fn responses_tool(tool: &Value) -> Value {
-    if tool.get("type").and_then(Value::as_str) == Some("web_search") {
-        return tool.clone();
-    }
     let function = tool
         .as_object()
         .and_then(|tool| tool.get("function"))

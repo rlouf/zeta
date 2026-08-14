@@ -477,11 +477,7 @@ def agent_from_manifest(value: Any) -> AgentSpec:
     if not isinstance(value, Mapping):
         raise ProjectRevisionUnavailable("project revision has invalid agent")
     raw_model = value.get("model")
-    model = (
-        ModelSpec(name=str(raw_model["name"]), url=str(raw_model["url"]))
-        if isinstance(raw_model, Mapping)
-        else None
-    )
+    model = ModelSpec(profile=raw_model) if isinstance(raw_model, str) else None
     raw_retry = value.get("retry")
     retry = (
         RetrySpec(
@@ -575,11 +571,7 @@ def agent_manifest(spec: AgentSpec) -> dict[str, Any]:
         "content_address": spec.content_address,
         "enabled": spec.enabled,
         "session": spec.session,
-        "model": (
-            {"name": spec.model.name, "url": spec.model.url}
-            if spec.model is not None
-            else None
-        ),
+        "model": spec.model.profile if spec.model is not None else None,
         "executor": {
             "provider": spec.executor.provider,
             "config": executor_config(spec.executor.config),

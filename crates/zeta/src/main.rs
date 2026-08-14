@@ -6,30 +6,30 @@ use std::io::{self, BufRead, BufReader as StdBufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command as ProcessCommand, ExitCode, Stdio};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[cfg(test)]
 use clap::CommandFactory;
 use clap::{Args, Parser, Subcommand};
-use rustix::fs::{flock, open, FlockOperation, Mode, OFlags};
+use rustix::fs::{FlockOperation, Mode, OFlags, flock, open};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::UnixStream;
+use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use zeta::runtime_services::{
     RuntimeLease, RuntimeLifecycleErrorKind, RuntimeMetadata, RuntimeOwnerMode, RuntimePaths,
     RuntimePhase,
 };
 use zeta::{
     ActiveProjectStatus, LocalSocketConfig, LocalSocketServer, Project, ProjectRevision, Runtime,
-    RuntimeStatus,
+    RuntimeStatus, check_project_models,
 };
 use zeta_ipc::{
-    Action, ErrorObject, InitializeParams, Message, PeerIdentity, Request, RequestId, Retryability,
-    Role, Session, ShutdownDirection, INVALID_PARAMS, MAX_FRAME_BYTES, METHOD_NOT_FOUND,
-    PROTOCOL_VERSION, SERVER_ERROR,
+    Action, ErrorObject, INVALID_PARAMS, InitializeParams, MAX_FRAME_BYTES, METHOD_NOT_FOUND,
+    Message, PROTOCOL_VERSION, PeerIdentity, Request, RequestId, Retryability, Role, SERVER_ERROR,
+    Session, ShutdownDirection,
 };
 use zeta_journal::DraftEvent;
 
@@ -694,6 +694,8 @@ struct DaemonHandshake {
     pid: Option<u32>,
     instance_id: Option<String>,
     detail: Option<String>,
+    #[serde(default)]
+    warnings: Vec<String>,
 }
 
 enum Readiness {
@@ -1003,7 +1005,7 @@ fn probe_lease(paths: &RuntimePaths) -> Result<LeaseProbe, String> {
             return Err(format!(
                 "cannot inspect '{}': {error}",
                 paths.lock().display()
-            ))
+            ));
         }
     };
     if !metadata.file_type().is_file() {
@@ -1357,6 +1359,7 @@ async fn run_owner(
     if revision.project_root() != project_root.as_path() {
         return Err("the active project revision belongs to a different project root".to_owned());
     }
+    let model_warnings = check_project_models(&revision).await?;
     let runtime =
         Runtime::start(paths.dispatch(), revision.clone()).map_err(|error| error.to_string())?;
     let application_state = Arc::new(ApplicationState::new(
@@ -1432,7 +1435,7 @@ async fn run_owner(
         }
         return Err(error.to_string());
     }
-    if let Err(error) = announce_ready(&readiness, metadata.pid, &instance_id) {
+    if let Err(error) = announce_ready(&readiness, metadata.pid, &instance_id, &model_warnings) {
         let control_cleanup = control.shutdown().await;
         let application_cleanup = application.shutdown().await;
         let metadata_cleanup = lease.remove_metadata(&instance_id);
@@ -1541,9 +1544,17 @@ impl ShutdownSignals {
     }
 }
 
-fn announce_ready(readiness: &Readiness, pid: u32, instance_id: &str) -> Result<(), String> {
+fn announce_ready(
+    readiness: &Readiness,
+    pid: u32,
+    instance_id: &str,
+    warnings: &[String],
+) -> Result<(), String> {
     match readiness {
         Readiness::Foreground => {
+            for warning in warnings {
+                eprintln!("warning: {warning}");
+            }
             println!("Runtime is running.");
             println!("PID: {pid}");
             println!("Press Ctrl-C to stop.");
@@ -1555,6 +1566,7 @@ fn announce_ready(readiness: &Readiness, pid: u32, instance_id: &str) -> Result<
             pid: Some(pid),
             instance_id: Some(instance_id.to_owned()),
             detail: None,
+            warnings: warnings.to_vec(),
         })?,
     }
     Ok(())
@@ -1577,6 +1589,7 @@ fn announce_already_running(
             pid: Some(pid),
             instance_id: instance_id.map(str::to_owned),
             detail: None,
+            warnings: Vec::new(),
         })?,
     }
     Ok(())
@@ -1661,6 +1674,9 @@ async fn start_detached(project_root: PathBuf, state_dir: PathBuf) -> Result<Exi
             println!("Runtime started.");
             println!("PID: {pid}");
             println!("Use 'zeta status' to inspect the runtime.");
+            for warning in handshake.warnings {
+                eprintln!("warning: {warning}");
+            }
             Ok(ExitCode::SUCCESS)
         }
         DaemonHandshakeStatus::AlreadyRunning => {
@@ -1697,6 +1713,7 @@ async fn run_daemon_child(arguments: &[OsString]) -> ExitCode {
                 pid: None,
                 instance_id: None,
                 detail: Some(error),
+                warnings: Vec::new(),
             });
             return ExitCode::from(1);
         }
@@ -1708,6 +1725,7 @@ async fn run_daemon_child(arguments: &[OsString]) -> ExitCode {
             pid: None,
             instance_id: None,
             detail: Some(error.to_string()),
+            warnings: Vec::new(),
         });
         return ExitCode::from(1);
     }
@@ -1729,6 +1747,7 @@ async fn run_daemon_child(arguments: &[OsString]) -> ExitCode {
                 pid: None,
                 instance_id: None,
                 detail: Some(error),
+                warnings: Vec::new(),
             });
             ExitCode::from(1)
         }
@@ -2338,9 +2357,11 @@ mod tests {
                 temp.path(),
             )
             .expect_err("the marker must be rejected");
-            assert!(error
-                .to_string()
-                .starts_with("runtime state marker is not a directory:"));
+            assert!(
+                error
+                    .to_string()
+                    .starts_with("runtime state marker is not a directory:")
+            );
         }
     }
 
@@ -2387,9 +2408,11 @@ mod tests {
                 temp.path(),
             )
             .expect_err("the project root must be rejected");
-            assert!(error
-                .to_string()
-                .starts_with("project root is not a directory:"));
+            assert!(
+                error
+                    .to_string()
+                    .starts_with("project root is not a directory:")
+            );
         }
     }
 }

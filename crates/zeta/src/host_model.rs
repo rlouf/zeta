@@ -1,19 +1,28 @@
 //! Resolves the host-owned model selection for native agent runs.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use base64::Engine as _;
-use serde_json::Value;
-use zeta_agent::ToolProfile;
+use serde_json::{Map, Value, json};
+use zeta_agent::{
+    AbortSignal, AgentObserver, HttpModelGateway, HttpModelGatewayConfig, ModelGateway,
+    ModelHttpEndpoint, ModelInput, ModelRequest, ModelTransportTimeouts, Observation, ToolProfile,
+};
 use zeta_manifest::ModelSpec;
+
+use crate::ProjectRevision;
 
 const CODEX_API: &str = "codex-responses";
 const CHAT_API: &str = "chat-completions";
 const DEFAULT_CODEX_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
-const DEFAULT_CODEX_MODEL: &str = "gpt-5.6-sol";
+const PROJECT_CONFIG_FILE: &str = "zeta.toml";
+const VERIFY_FIRST_OUTPUT_TIMEOUT: Duration = Duration::from_secs(10);
+const VERIFY_IDLE_TIMEOUT: Duration = Duration::from_secs(5);
+const VERIFY_TOTAL_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Carries one host-resolved model request selection.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -37,35 +46,237 @@ struct ModelProfile {
     tool_profile: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProfileSource {
+    Project,
+    Local,
+}
+
+#[derive(Clone, Debug)]
+struct ResolvedProfile {
+    profile: ModelProfile,
+    source: ProfileSource,
+}
+
+/// Carries a selected model and the profile source that supplied it.
+#[derive(Clone, Debug)]
+pub(crate) struct ResolvedModel {
+    pub selection: ModelSelection,
+    source: ProfileSource,
+}
+
 /// Resolves an agent model profile or the host default profile.
-pub(crate) fn resolve(agent: Option<&ModelSpec>, session: &str) -> Result<ModelSelection, String> {
-    let mut selected = match agent {
-        Some(ModelSpec::Endpoint { name, url }) => ModelSelection {
-            name: name.clone(),
-            url: url.clone(),
-            api: CHAT_API.to_owned(),
-            thinking: None,
-            tool_profile: ToolProfile::Native,
-            headers: BTreeMap::new(),
-        },
-        Some(ModelSpec::Profile(name)) => {
-            let profiles = configured_profiles()?;
-            selection_for_profile(&profiles, name)?
-        }
-        None => {
-            let profiles = configured_profiles()?;
-            let profile = profiles.iter().find(|profile| profile.default);
-            selection_from_profile(profile)?
-        }
+pub(crate) fn resolve(
+    agent: Option<&ModelSpec>,
+    project_root: &Path,
+    session: &str,
+) -> Result<ResolvedModel, String> {
+    let resolved = match agent {
+        Some(profile) => named_profile(profile.profile(), project_root)?,
+        None => default_profile(project_root)?,
     };
+    let mut selected = selection_from_profile(&resolved.profile)?;
     if selected.api == CODEX_API {
         selected.headers = codex_headers(session)?;
     }
-    Ok(selected)
+    Ok(ResolvedModel {
+        selection: selected,
+        source: resolved.source,
+    })
 }
 
-fn configured_profiles() -> Result<Vec<ModelProfile>, String> {
-    let path = model_config_path()?;
+/// Validates every enabled agent model before the runtime starts.
+pub(crate) async fn check_project(revision: &ProjectRevision) -> Result<Vec<String>, String> {
+    let mut warnings = BTreeSet::new();
+    let mut selections = BTreeMap::new();
+    for agent in revision.agents().filter(|agent| agent.enabled) {
+        let resolved =
+            resolve(agent.model.as_ref(), revision.project_root(), "zeta-up").map_err(|error| {
+                format!("cannot resolve a model for agent {:?}: {error}", agent.slug)
+            })?;
+        let selection = resolved.selection;
+        selections
+            .entry(selection_key(&selection))
+            .or_insert(selection);
+        if agent.model.is_some() && resolved.source == ProfileSource::Local {
+            warnings.insert(format!(
+                "agent {:?} uses local model profile {:?}; add it to {}",
+                agent.slug,
+                agent
+                    .model
+                    .as_ref()
+                    .map(ModelSpec::profile)
+                    .unwrap_or_default(),
+                project_config_path(revision.project_root()).display(),
+            ));
+        }
+    }
+    for selection in selections.values() {
+        verify(selection).await?;
+    }
+    Ok(warnings.into_iter().collect())
+}
+
+fn selection_key(selection: &ModelSelection) -> String {
+    format!(
+        "{}\u{0}{}\u{0}{}\u{0}{}\u{0}{:?}",
+        selection.name,
+        selection.url,
+        selection.api,
+        selection.thinking.as_deref().unwrap_or_default(),
+        selection.tool_profile,
+    )
+}
+
+async fn verify(selection: &ModelSelection) -> Result<(), String> {
+    let endpoint = selection.headers.iter().fold(
+        ModelHttpEndpoint::new(&selection.url),
+        |endpoint, (name, value)| endpoint.with_header(name.clone(), value.clone()),
+    );
+    let (chat_completions, responses) = match selection.api.as_str() {
+        CHAT_API => (Some(endpoint), None),
+        CODEX_API => (None, Some(endpoint)),
+        _ => return Err(format!("model {:?} has an unsupported API", selection.name)),
+    };
+    let config = HttpModelGatewayConfig::new(chat_completions, responses).with_timeouts(
+        ModelTransportTimeouts::new(
+            VERIFY_FIRST_OUTPUT_TIMEOUT,
+            VERIFY_IDLE_TIMEOUT,
+            VERIFY_TOTAL_TIMEOUT,
+        ),
+    );
+    let mut gateway = HttpModelGateway::new(config)
+        .map_err(|error| format!("cannot prepare model {:?}: {error}", selection.name))?;
+    let input = ModelInput {
+        messages: vec![model_message("Reply with ready.")],
+        tools: Vec::new(),
+        tool_choice: json!("none"),
+        max_tokens: 16,
+        selected_model: Some(selection.name.clone()),
+        session_id: Some("zeta-up".to_owned()),
+        thinking: selection.thinking.clone(),
+    };
+    let request = ModelRequest {
+        api: Some(selection.api.clone()),
+        model: Some(selection.name.clone()),
+        url: Some(selection.url.clone()),
+        thinking: selection.thinking.clone(),
+        session_id: Some("zeta-up".to_owned()),
+    };
+    let mut observer = VerificationObserver;
+    let abort = VerificationAbort;
+    gateway
+        .generate(&input, &request, &mut observer, &abort)
+        .await
+        .map_err(|error| format!("model {:?} verification failed: {error}", selection.name))?;
+    Ok(())
+}
+
+fn model_message(content: &str) -> Map<String, Value> {
+    json!({"role": "user", "content": content})
+        .as_object()
+        .expect("model verification message must be an object")
+        .clone()
+}
+
+struct VerificationObserver;
+
+impl AgentObserver for VerificationObserver {
+    fn observe(&mut self, _observation: Observation) {}
+}
+
+struct VerificationAbort;
+
+impl AbortSignal for VerificationAbort {
+    fn reason(&self) -> Option<zeta_agent::AbortReason> {
+        None
+    }
+}
+
+fn named_profile(name: &str, project_root: &Path) -> Result<ResolvedProfile, String> {
+    let project_path = project_config_path(project_root);
+    let project = configured_profiles(&project_path)?;
+    if let Some(profile) = find_profile(project, Some(name)) {
+        return Ok(ResolvedProfile {
+            profile,
+            source: ProfileSource::Project,
+        });
+    }
+    let local_path = model_config_path()?;
+    let local = configured_profiles(&local_path)?;
+    if let Some(profile) = find_profile(local, Some(name)) {
+        return Ok(ResolvedProfile {
+            profile,
+            source: ProfileSource::Local,
+        });
+    }
+    Err(format!(
+        "model profile {name:?} is not configured in {} or {}",
+        project_path.display(),
+        local_path.display(),
+    ))
+}
+
+fn default_profile(project_root: &Path) -> Result<ResolvedProfile, String> {
+    let project_path = project_config_path(project_root);
+    let project = configured_profiles(&project_path)?;
+    if let Some(profile) = find_profile(project, None) {
+        return Ok(ResolvedProfile {
+            profile,
+            source: ProfileSource::Project,
+        });
+    }
+    let local_path = model_config_path()?;
+    let local = configured_profiles(&local_path)?;
+    if let Some(profile) = find_profile(local, None) {
+        return Ok(ResolvedProfile {
+            profile,
+            source: ProfileSource::Local,
+        });
+    }
+    Err("no default model profile is configured; model setup is not available yet".to_owned())
+}
+
+fn find_profile(profiles: Vec<ModelProfile>, requested: Option<&str>) -> Option<ModelProfile> {
+    profiles.into_iter().find(|profile| match requested {
+        Some(name) => profile.name.as_deref() == Some(name),
+        None => profile.default,
+    })
+}
+
+#[cfg(test)]
+fn select_profile(
+    requested: Option<&str>,
+    project: Vec<ModelProfile>,
+    local: Vec<ModelProfile>,
+    project_path: &Path,
+    local_path: &Path,
+) -> Result<ResolvedProfile, String> {
+    if let Some(profile) = find_profile(project, requested) {
+        return Ok(ResolvedProfile {
+            profile,
+            source: ProfileSource::Project,
+        });
+    }
+    if let Some(profile) = find_profile(local, requested) {
+        return Ok(ResolvedProfile {
+            profile,
+            source: ProfileSource::Local,
+        });
+    }
+    match requested {
+        Some(name) => Err(format!(
+            "model profile {name:?} is not configured in {} or {}",
+            project_path.display(),
+            local_path.display(),
+        )),
+        None => Err(
+            "no default model profile is configured; model setup is not available yet".to_owned(),
+        ),
+    }
+}
+
+fn configured_profiles(path: &Path) -> Result<Vec<ModelProfile>, String> {
     let profiles = match fs::read_to_string(&path) {
         Ok(source) => parse_profiles(&source)
             .map_err(|error| format!("could not read {}: {error}", path.display()))?,
@@ -75,32 +286,18 @@ fn configured_profiles() -> Result<Vec<ModelProfile>, String> {
     Ok(profiles)
 }
 
-fn model_config_path() -> Result<std::path::PathBuf, String> {
+fn project_config_path(project_root: &Path) -> PathBuf {
+    project_root.join(PROJECT_CONFIG_FILE)
+}
+
+fn model_config_path() -> Result<PathBuf, String> {
     let Some(home) = env::var_os("HOME") else {
         return Err("HOME is not set".to_owned());
     };
     Ok(Path::new(&home).join(".zeta/models.toml"))
 }
 
-fn selection_for_profile(profiles: &[ModelProfile], name: &str) -> Result<ModelSelection, String> {
-    let profile = profiles
-        .iter()
-        .find(|profile| profile.name.as_deref() == Some(name))
-        .ok_or_else(|| format!("model profile {name:?} is not configured"))?;
-    selection_from_profile(Some(profile))
-}
-
-fn selection_from_profile(profile: Option<&ModelProfile>) -> Result<ModelSelection, String> {
-    let Some(profile) = profile else {
-        return Ok(ModelSelection {
-            name: DEFAULT_CODEX_MODEL.to_owned(),
-            url: DEFAULT_CODEX_URL.to_owned(),
-            api: CODEX_API.to_owned(),
-            thinking: None,
-            tool_profile: ToolProfile::Codex,
-            headers: BTreeMap::new(),
-        });
-    };
+fn selection_from_profile(profile: &ModelProfile) -> Result<ModelSelection, String> {
     let name = required_profile_field(profile.name.as_deref(), "name")?;
     let model = required_profile_field(profile.model.as_deref(), "model")?;
     let api = profile.api.as_deref().unwrap_or(CHAT_API);
@@ -121,7 +318,7 @@ fn selection_from_profile(profile: Option<&ModelProfile>) -> Result<ModelSelecti
         value => {
             return Err(format!(
                 "model profile {name:?} has unknown tool profile {value:?}"
-            ))
+            ));
         }
     };
     Ok(ModelSelection {
@@ -244,7 +441,7 @@ fn parse_profiles(source: &str) -> Result<Vec<ModelProfile>, String> {
                         return Err(format!(
                             "models[{}].default must be true or false",
                             index + 1
-                        ))
+                        ));
                     }
                 }
             }
@@ -290,7 +487,9 @@ fn parse_value(value: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_profiles, selection_for_profile, selection_from_profile, CODEX_API};
+    use std::path::Path;
+
+    use super::{ProfileSource, parse_profiles, select_profile, selection_from_profile};
 
     #[test]
     fn parses_the_python_model_profile_shape() {
@@ -298,25 +497,48 @@ mod tests {
             "[[models]]\nname = \"local\"\nmodel = \"qwen\"\nurl = \"http://127.0.0.1/v1/chat/completions\"\ndefault = true\n",
         )
         .expect("profiles");
-        let selection = selection_from_profile(profiles.first()).expect("selection");
+        let selection =
+            selection_from_profile(profiles.first().expect("profile")).expect("selection");
         assert_eq!(selection.name, "qwen");
         assert_eq!(selection.api, "chat-completions");
     }
 
     #[test]
-    fn uses_the_codex_defaults_without_a_profile() {
-        let selection = selection_from_profile(None).expect("selection");
-        assert_eq!(selection.api, CODEX_API);
-        assert_eq!(selection.name, "gpt-5.6-sol");
+    fn selects_the_project_profile_before_the_local_profile() {
+        let project = parse_profiles(
+            "[[models]]\nname = \"fast\"\nmodel = \"project-model\"\nurl = \"http://project/v1/chat/completions\"\n",
+        )
+        .expect("project profiles");
+        let local = parse_profiles(
+            "[[models]]\nname = \"fast\"\nmodel = \"local-model\"\nurl = \"http://local/v1/chat/completions\"\n",
+        )
+        .expect("local profiles");
+        let resolved = select_profile(
+            Some("fast"),
+            project,
+            local,
+            Path::new("/project/zeta.toml"),
+            Path::new("/home/.zeta/models.toml"),
+        )
+        .expect("profile");
+        assert_eq!(resolved.source, ProfileSource::Project);
+        assert_eq!(resolved.profile.model.as_deref(), Some("project-model"));
     }
 
     #[test]
-    fn resolves_a_named_profile() {
-        let profiles = parse_profiles(
+    fn selects_the_local_profile_after_a_project_miss() {
+        let local = parse_profiles(
             "[[models]]\nname = \"fast-local\"\nmodel = \"qwen\"\nurl = \"http://127.0.0.1/v1/chat/completions\"\n",
         )
         .expect("profiles");
-        let selection = selection_for_profile(&profiles, "fast-local").expect("selection");
-        assert_eq!(selection.name, "qwen");
+        let resolved = select_profile(
+            Some("fast-local"),
+            Vec::new(),
+            local,
+            Path::new("/project/zeta.toml"),
+            Path::new("/home/.zeta/models.toml"),
+        )
+        .expect("profile");
+        assert_eq!(resolved.source, ProfileSource::Local);
     }
 }

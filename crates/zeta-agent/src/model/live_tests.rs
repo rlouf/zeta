@@ -1,8 +1,8 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
@@ -136,10 +136,12 @@ fn find_bytes(bytes: &[u8], needle: &[u8]) -> Option<usize> {
 
 fn input() -> ModelInput {
     ModelInput {
-        messages: vec![json!({"role": "user", "content": "Hello"})
-            .as_object()
-            .unwrap()
-            .clone()],
+        messages: vec![
+            json!({"role": "user", "content": "Hello"})
+                .as_object()
+                .unwrap()
+                .clone(),
+        ],
         tools: Vec::new(),
         tool_choice: json!("auto"),
         max_tokens: 64,
@@ -226,9 +228,11 @@ async fn http_gateway_streams_byte_fragmented_chat_completion() {
     );
     let request = String::from_utf8(server.await.unwrap()).unwrap();
     assert!(request.starts_with("POST /model HTTP/1.1\r\n"));
-    assert!(request
-        .to_ascii_lowercase()
-        .contains("authorization: bearer secret-token"));
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer secret-token")
+    );
     assert!(request.to_ascii_lowercase().contains("x-vector: present"));
     let body = request.split("\r\n\r\n").nth(1).unwrap();
     let body: Value = serde_json::from_str(body).unwrap();
@@ -283,9 +287,8 @@ async fn http_gateway_selects_responses_and_normalizes_usage() {
     let body: Value = serde_json::from_str(body).unwrap();
     assert_eq!(body["stream"], true);
     assert_eq!(body["store"], false);
-    assert_eq!(body["tools"], json!([{"type": "web_search"}]));
-    assert_eq!(body["tool_choice"], "auto");
-    assert_eq!(body["parallel_tool_calls"], true);
+    assert_eq!(body["max_output_tokens"], 64);
+    assert!(body.get("tools").is_none());
 }
 
 #[tokio::test]

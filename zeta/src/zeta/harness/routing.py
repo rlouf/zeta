@@ -376,11 +376,7 @@ def agent_runner(
 
 def config_for_spec(spec: AgentSpec, config: AgentConfig | None) -> AgentConfig:
     """Resolve environment-relative values only when an agent becomes executable."""
-    model_name = None
-    model_url = None
-    if spec.model is not None:
-        model_name = spec.model.name
-        model_url = spec.model.url
+    model_profile = spec.model.profile if spec.model is not None else None
     base_dir = spec.base_dir
     if config is not None and config.base_dir is not None:
         base_dir = config.base_dir
@@ -390,16 +386,14 @@ def config_for_spec(spec: AgentSpec, config: AgentConfig | None) -> AgentConfig:
         return AgentConfig(
             system_prompt=spec.description,
             allowed_capabilities=spec.tools,
-            model_name=model_name,
-            model_url=model_url,
+            model_profile=model_profile,
             base_dir=base_dir,
         )
     return replace(
         config,
         system_prompt=config.system_prompt or spec.description,
         allowed_capabilities=config.allowed_capabilities or spec.tools,
-        model_name=config.model_name or model_name,
-        model_url=config.model_url or model_url,
+        model_profile=config.model_profile or model_profile,
         base_dir=base_dir,
     )
 
